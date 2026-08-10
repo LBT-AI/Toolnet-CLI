@@ -42,13 +42,8 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
     }
   });
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // REQUIREMENT R2 TESTS: Spinner, Non-TTY Fallback, Stdout/Stderr, Signals
-  // ───────────────────────────────────────────────────────────────────────────
-
   describe("Requirement R2: Spinner Mechanics & Robustness", () => {
     test("R2.1: Non-TTY fallback outputs clean string without ANSI sequences", async () => {
-      // In bun test environment, process.stderr.isTTY is false (or undefined)
       let stderrOutput = "";
       const originalWrite = process.stderr.write;
       process.stderr.write = ((chunk: any) => {
@@ -57,11 +52,9 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
       }) as any;
 
       try {
-        // Import withSpinner equivalent logic or directly test stderr behavior in non-TTY mode
         const originalIsTTY = process.stderr.isTTY;
         Object.defineProperty(process.stderr, "isTTY", { value: false, configurable: true });
 
-        // Simulate withSpinner logic as implemented in simple-repl.ts
         const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         async function withSpinner<T>(label: string, fn: () => Promise<T>): Promise<T> {
           const useSpin = process.stderr.isTTY;
@@ -142,7 +135,7 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
         });
 
         expect(res).toBe("DONE");
-        expect(stderrOutput.length).toBeGreaterThanOrEqual(3); // At least 2 frames + 1 cleanup
+        expect(stderrOutput.length).toBeGreaterThanOrEqual(3);
         const joined = stderrOutput.join("");
         expect(joined).toContain("Thinking...");
         expect(joined.endsWith("\r\x1b[K")).toBe(true);
@@ -222,7 +215,6 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
         const originalIsTTY = process.stderr.isTTY;
         Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
 
-        // Simulate event loop with tool execution
         if (process.stderr.isTTY) process.stderr.write("\r\x1b[K");
         process.stdout.write("\x1b[2K\rStarting tool write_file...\n");
 
@@ -237,15 +229,12 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
     });
   });
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // REQUIREMENT R3 TESTS: Mock MCP Protocol, Integration & Edge Cases
-  // ───────────────────────────────────────────────────────────────────────────
-
   describe("Requirement R3: Mock MCP Server Protocol & End-to-End Integration", () => {
     test("R3.1: Raw stdio JSON-RPC 2.0 communication with mock-mcp.ts", async () => {
       const mockMcpPath = path.resolve(__dirname, "../../mock-mcp.ts");
       const proc = spawn("bun", ["run", mockMcpPath], {
         stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, DEBUG_MOCK_MCP: "1" },
       });
 
       let stdoutData = "";
@@ -254,7 +243,6 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
       proc.stdout.on("data", (chunk) => { stdoutData += chunk.toString(); });
       proc.stderr.on("data", (chunk) => { stderrData += chunk.toString(); });
 
-      // Send initialize request
       proc.stdin.write(JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
@@ -273,7 +261,6 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
       expect(initResp.result.serverInfo.name).toBe("mock-mcp-server");
       expect(initResp.result.capabilities.tools).toBeDefined();
 
-      // Send tools/list request
       proc.stdin.write(JSON.stringify({
         jsonrpc: "2.0",
         id: 2,
@@ -289,8 +276,6 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
       expect(listResp.id).toBe(2);
       expect(listResp.result.tools).toHaveLength(1);
       expect(listResp.result.tools[0].name).toBe("get_weather");
-
-      // Verify stderr has diagnostic logs and stdout contains ONLY valid JSON-RPC
       expect(stderrData).toContain("[mock-mcp] Received request");
 
       proc.stdin.end();
@@ -301,13 +286,11 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
       const status = await initMcpClients(tempDir);
       expect(status.connectedServers).toEqual(["mock-weather-server"]);
 
-      // Verify merged agent tools contains get_weather
       const tools = getMergedAgentTools();
       const weatherTool = tools.find((t) => t.function.name === "get_weather");
       expect(weatherTool).toBeDefined();
       expect(weatherTool.function.parameters.properties.location).toBeDefined();
 
-      // Call tool via executeTool
       const rawRes = await executeTool("get_weather", { location: "Tokyo" });
       const parsedRes = JSON.parse(rawRes);
       expect(parsedRes.exitCode).toBe(0);
@@ -341,11 +324,9 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
       await initMcpClients(tempDir);
       expect(getMergedAgentTools().some(t => t.function.name === "get_weather")).toBe(true);
 
-      // Call initMcpClients again
       const status2 = await initMcpClients(tempDir);
       expect(status2.connectedServers).toEqual(["mock-weather-server"]);
 
-      // Should still work without duplicate registered tools or leaks
       const weatherTools = getMergedAgentTools().filter(t => t.function.name === "get_weather");
       expect(weatherTools.length).toBe(1);
 
