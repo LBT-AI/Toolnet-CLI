@@ -1,12 +1,19 @@
 import { Database } from "./sqliteMock";
+import type { DatabaseLike } from "./sqliteMock";
 import path from "path";
 
-export type EventType = 'TaskCreated' | 'TaskStarted' | 'NeedApproval' | 'ArtifactCreated' | 'TaskCompleted' | 'MergeCompleted';
+export type EventType =
+  | "TaskCreated"
+  | "TaskStarted"
+  | "NeedApproval"
+  | "ArtifactCreated"
+  | "TaskCompleted"
+  | "MergeCompleted";
 
 export class EventBus {
-  private db: Database;
+  private db: DatabaseLike;
 
-  constructor(dbPath: string = 'events.db') {
+  constructor(dbPath: string = "events.db") {
     this.db = new Database(path.resolve(process.cwd(), dbPath), { create: true });
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS events (
@@ -20,15 +27,19 @@ export class EventBus {
   }
 
   emit(eventType: EventType | string, payload: any = {}) {
-    const query = this.db.query('INSERT INTO events (eventType, sessionId, payload) VALUES ($eventType, $sessionId, $payload)');
+    const query = this.db.query(
+      "INSERT INTO events (eventType, sessionId, payload) VALUES ($eventType, $sessionId, $payload)"
+    );
     query.run({
       $eventType: eventType,
-      $sessionId: payload.sessionId || 'default',
+      $sessionId: payload.sessionId || "default",
       $payload: JSON.stringify(payload)
     });
   }
 
   getEventsBySession(sessionId: string) {
-    return this.db.query('SELECT * FROM events WHERE sessionId = $sessionId ORDER BY createdAt ASC').all({ $sessionId: sessionId });
+    return this.db
+      .query("SELECT * FROM events WHERE sessionId = $sessionId ORDER BY createdAt ASC")
+      .all({ $sessionId: sessionId });
   }
 }
