@@ -1,0 +1,45 @@
+{
+  "name": "toolnet-api",
+  "version": "1.0.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "ToolNet API CLI — AI coding agent for the terminal",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LBT-AI/toolnetapi.git",
+    "directory": "cli"
+  },
+  "bin": {
+    "toolnet": "./bin/toolnet.js",
+    "toolnetapi": "./bin/toolnet.js",
+    "toolnet-api": "./bin/toolnet.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "package.json"
+  ],
+  "scripts": {
+    "dev": "bun src/index.tsx",
+    "build": "bun build src/index.tsx --target=bun --outdir=dist",
+    "start": "bun dist/index.js",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "pack:cli": "bun run build && npm pack --pack-destination ..",
+    "publish:cli": "bun run build && npm publish"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "opentui-spinner": "0.0.7",
+    "solid-js": "1.9.10",
+    "string-width": "^8.2.2",
+    "strip-ansi": "7.1.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "5.8.2"
+  }
+}
