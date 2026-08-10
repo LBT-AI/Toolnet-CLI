@@ -1,4 +1,5 @@
 import { Database } from "./sqliteMock";
+import type { DatabaseLike } from "./sqliteMock";
 import path from "path";
 
 export interface ContextCacheData {
@@ -9,9 +10,9 @@ export interface ContextCacheData {
 }
 
 export class ContextCache {
-  private db: Database;
+  private db: DatabaseLike;
 
-  constructor(dbPath: string = 'session.db') {
+  constructor(dbPath: string = "session.db") {
     this.db = new Database(path.resolve(process.cwd(), dbPath), { create: true });
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS context_cache (
@@ -24,27 +25,27 @@ export class ContextCache {
     `);
   }
 
-  set(id: string, data: Omit<ContextCacheData, 'timestamp'>) {
+  set(id: string, data: Omit<ContextCacheData, "timestamp">) {
     const query = this.db.query(`
-      INSERT INTO context_cache (id, astHash, dependencyGraph, fileMaps, timestamp) 
+      INSERT INTO context_cache (id, astHash, dependencyGraph, fileMaps, timestamp)
       VALUES ($id, $astHash, $dependencyGraph, $fileMaps, $timestamp)
-      ON CONFLICT(id) DO UPDATE SET 
-        astHash=excluded.astHash, 
-        dependencyGraph=excluded.dependencyGraph, 
-        fileMaps=excluded.fileMaps, 
+      ON CONFLICT(id) DO UPDATE SET
+        astHash=excluded.astHash,
+        dependencyGraph=excluded.dependencyGraph,
+        fileMaps=excluded.fileMaps,
         timestamp=excluded.timestamp
     `);
     query.run({
       $id: id,
-      $astHash: data.astHash || '',
-      $dependencyGraph: data.dependencyGraph || '',
-      $fileMaps: data.fileMaps || '',
+      $astHash: data.astHash || "",
+      $dependencyGraph: data.dependencyGraph || "",
+      $fileMaps: data.fileMaps || "",
       $timestamp: Date.now()
     });
   }
 
   get(id: string): ContextCacheData | null {
-    const row = this.db.query('SELECT * FROM context_cache WHERE id = $id').get({ $id: id }) as any;
+    const row = this.db.query("SELECT * FROM context_cache WHERE id = $id").get({ $id: id }) as any;
     if (!row) return null;
     return {
       astHash: row.astHash,
