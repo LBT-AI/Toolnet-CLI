@@ -1,11 +1,12 @@
 import { Database } from "./sqliteMock";
+import type { DatabaseLike } from "./sqliteMock";
 import path from "path";
 import type { CheckpointSnapshot } from "./types";
 
 export class CheckpointManager {
-  private db: Database;
+  private db: DatabaseLike;
 
-  constructor(dbPath: string = 'session.db') {
+  constructor(dbPath: string = "session.db") {
     this.db = new Database(path.resolve(process.cwd(), dbPath), { create: true });
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS checkpoints (
@@ -20,7 +21,7 @@ export class CheckpointManager {
 
   saveCheckpoint(snapshot: CheckpointSnapshot) {
     const query = this.db.query(`
-      INSERT INTO checkpoints (id, sessionId, milestoneTag, timestamp, data) 
+      INSERT INTO checkpoints (id, sessionId, milestoneTag, timestamp, data)
       VALUES ($id, $sessionId, $milestoneTag, $timestamp, $data)
       ON CONFLICT(id) DO UPDATE SET data=excluded.data, timestamp=excluded.timestamp
     `);
@@ -34,13 +35,15 @@ export class CheckpointManager {
   }
 
   resumeFromCheckpoint(checkpointId: string): CheckpointSnapshot | null {
-    const row = this.db.query('SELECT data FROM checkpoints WHERE id = $id').get({ $id: checkpointId }) as any;
+    const row = this.db.query("SELECT data FROM checkpoints WHERE id = $id").get({ $id: checkpointId }) as any;
     if (!row) return null;
     return JSON.parse(row.data) as CheckpointSnapshot;
   }
-  
+
   getLatestCheckpoint(sessionId: string): CheckpointSnapshot | null {
-    const row = this.db.query('SELECT data FROM checkpoints WHERE sessionId = $sessionId ORDER BY timestamp DESC LIMIT 1').get({ $sessionId: sessionId }) as any;
+    const row = this.db
+      .query("SELECT data FROM checkpoints WHERE sessionId = $sessionId ORDER BY timestamp DESC LIMIT 1")
+      .get({ $sessionId: sessionId }) as any;
     if (!row) return null;
     return JSON.parse(row.data) as CheckpointSnapshot;
   }
