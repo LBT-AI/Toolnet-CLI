@@ -187,8 +187,8 @@ Review the provided diff carefully.`;
 
       await skillsCommand.handler([], ctxMock);
       expect(output).toContain("Skills (");
-      expect(output).toContain("ToolNet API (Entry)");
-      expect(output).toContain("Chat");
+      expect(output).toContain("Built-in Local Tools:");
+      expect(output).toContain("read_file");
     });
   });
 });
