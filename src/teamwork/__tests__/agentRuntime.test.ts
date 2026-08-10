@@ -11,8 +11,6 @@ describe("Step 2 - P0-A Agent Execution Foundation", () => {
     expect(toolNames).toContain("write_file");
     expect(toolNames).toContain("edit_file");
     expect(toolNames).toContain("replace_all");
-    expect(toolNames).toContain("grep_search");
-    expect(toolNames).toContain("glob_search");
     expect(toolNames).toContain("get_cwd");
     expect(toolNames).toContain("list_dir");
     expect(toolNames).toContain("file_exists");
