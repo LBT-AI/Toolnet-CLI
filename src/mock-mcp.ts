@@ -6,8 +6,14 @@ const rl = readline.createInterface({
   terminal: false,
 });
 
+function log(...args: any[]) {
+  if (process.env.DEBUG_MOCK_MCP) {
+    console.error(...args);
+  }
+}
+
 function send(msg: any) {
-  console.error("[mock-mcp] Sending response:", JSON.stringify(msg));
+  log("[mock-mcp] Sending response:", JSON.stringify(msg));
   process.stdout.write(JSON.stringify(msg) + "\n");
 }
 
@@ -19,14 +25,14 @@ rl.on("line", (line: string) => {
     const req = JSON.parse(trimmed);
     if (!req || typeof req !== "object") return;
 
-    console.error("[mock-mcp] Received request:", req);
+    log("[mock-mcp] Received request:", req);
 
     const { id, method, params } = req;
 
     // Handle notifications (no id)
     if (id === undefined || id === null) {
       if (method === "notifications/initialized") {
-        console.error("[mock-mcp] Initialized notification received");
+        log("[mock-mcp] Initialized notification received");
       }
       return;
     }
@@ -126,11 +132,11 @@ rl.on("line", (line: string) => {
         break;
     }
   } catch (err: any) {
-    console.error("[mock-mcp] Error processing line:", err);
+    log("[mock-mcp] Error processing line:", err);
   }
 });
 
 rl.on("close", () => {
-  console.error("[mock-mcp] Stdin closed, exiting.");
+  log("[mock-mcp] Stdin closed, exiting.");
   process.exit(0);
 });
