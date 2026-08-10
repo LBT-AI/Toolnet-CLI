@@ -1,0 +1,56 @@
+name: CLI CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  cli-verification:
+    name: CLI Verification Pipeline
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          cd cli
+          bun install
+
+      - name: 1. CLI Typecheck
+        run: |
+          cd cli
+          bun run typecheck
+
+      - name: 2. Run Bun Unit Tests
+        run: |
+          cd cli
+          bun test
+
+      - name: 3. Build CLI Bundle
+        run: |
+          cd cli
+          bun run build
+
+      - name: 4. NPM Pack Dry-Run
+        run: |
+          cd cli
+          npm pack --dry-run
+
+      - name: 5. Smoke Test
+        run: |
+          cd cli
+          echo "/exit" | bun dist/index.js
