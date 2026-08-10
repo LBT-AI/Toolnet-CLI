@@ -1,8 +1,7 @@
 node_modules/
 dist/
 .logs/
+*.tgz
 *.log
 .env
-.env.*
-!.env.example
 .DS_Store
