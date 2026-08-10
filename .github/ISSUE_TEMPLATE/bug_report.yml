@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a problem with ToolNet CLI
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a ToolNet CLI bug.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Tell us how to reproduce the problem.
+      placeholder: |
+        1. Run ...
+        2. Enter ...
+        3. Error appears ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ToolNet CLI version
+      placeholder: "v1.0.0"
+  - type: input
+    id: os
+    attributes:
+      label: Operating system / architecture
+      placeholder: "Ubuntu 24.04 x86_64"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      render: shell
+  - type: checkboxes
+    id: secrets
+    attributes:
+      label: Security
+      options:
+        - label: I removed API keys, passwords and secrets from the report.
+          required: true

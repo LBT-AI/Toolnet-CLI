@@ -3,14 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
-  "description": "ToolNet CLI — AI coding agent for the terminal",
+  "description": "ToolNet API CLI — AI coding agent for the terminal",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/LBT-AI/Toolnet-CLI.git"
-  },
-  "homepage": "https://github.com/LBT-AI/Toolnet-CLI",
-  "bugs": {
-    "url": "https://github.com/LBT-AI/Toolnet-CLI/issues"
+    "url": "https://github.com/LBT-AI/toolnetapi.git",
+    "directory": "cli"
   },
   "bin": {
     "toolnet": "./bin/toolnet.js",
@@ -20,25 +17,16 @@
   "files": [
     "bin",
     "dist",
-    "package.json",
-    "README.md",
-    "CHANGELOG.md"
+    "package.json"
   ],
   "scripts": {
     "dev": "bun src/index.tsx",
-    "build:bun": "bun build src/index.tsx --target=bun --outdir=dist",
-    "build:node": "bun build src/index.tsx --target=node --outdir=dist/node",
-    "build": "bun run build:bun && bun run build:node",
+    "build": "bun build src/index.tsx --target=bun --outdir=dist",
     "start": "bun dist/index.js",
-    "start:node": "node dist/node/index.js",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "check": "bun run typecheck && bun test && bun run build",
-    "pack:cli": "bun run build && npm pack",
+    "pack:cli": "bun run build && npm pack --pack-destination ..",
     "publish:cli": "bun run build && npm publish"
-  },
-  "engines": {
-    "node": ">=20"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

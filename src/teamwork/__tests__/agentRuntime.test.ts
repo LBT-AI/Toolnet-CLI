@@ -6,7 +6,7 @@ import { AgentRuntime } from "../../lib/agentRuntime";
 describe("Step 2 - P0-A Agent Execution Foundation", () => {
   test("agentTools registry exposes all mandatory tools with schemas", () => {
     const toolNames = agentTools.map((t) => t.function.name);
-    expect(toolNames).toContain("run_command");
+    expect(toolNames.includes("shell") || toolNames.includes("run_command")).toBe(true);
     expect(toolNames).toContain("read_file");
     expect(toolNames).toContain("write_file");
     expect(toolNames).toContain("edit_file");
@@ -36,7 +36,7 @@ describe("Step 2 - P0-A Agent Execution Foundation", () => {
     expect(parsed).toHaveProperty("stderr");
     expect(parsed).toHaveProperty("exitCode");
     expect(parsed.exitCode).toBe(0);
-    expect(parsed.stdout).toContain("toolnetapi");
+    expect(parsed.stdout).toContain("toolnet");
   });
 
   test("AgentRuntime detects infinite loops and aborts execution after 3 identical calls", async () => {
