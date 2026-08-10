@@ -27,7 +27,6 @@ describe("Workspace Management & Path Resolution", () => {
     fs.writeFileSync(path.join(subProj, "sub.txt"), "hello from sub project", "utf8");
     fs.writeFileSync(path.join(testRoot, "root.txt"), "hello from root project", "utf8");
 
-    // Initialize workspace to testRoot
     setWorkspaceRoot(testRoot);
   });
 
@@ -73,10 +72,20 @@ describe("Workspace Management & Path Resolution", () => {
 
   test("path traversal outside workspace is blocked for relative paths", () => {
     setWorkspaceRoot(subProj);
-    // Relative path escaping subProj
-    const res = toolRead("../root.txt");
-    expect(res.success).toBe(false);
-    expect(res.error).toContain("Path traversal blocked");
+    const previousMode = process.env.TOOLNETAPI_SANDBOX_MODE;
+    process.env.TOOLNETAPI_SANDBOX_MODE = "workspace";
+
+    try {
+      const res = toolRead("../root.txt");
+      expect(res.success).toBe(false);
+      expect(res.error).toContain("Path traversal blocked");
+    } finally {
+      if (previousMode === undefined) {
+        delete process.env.TOOLNETAPI_SANDBOX_MODE;
+      } else {
+        process.env.TOOLNETAPI_SANDBOX_MODE = previousMode;
+      }
+    }
   });
 
   test("toolBash runs command with cwd = workspaceRoot", async () => {
