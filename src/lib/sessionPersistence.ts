@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import crypto from "node:crypto";
 
 export interface SessionMessage {
   role: string;
@@ -194,7 +195,8 @@ export function renameSessionFile(sessionId: string, newName: string): boolean {
 }
 
 export function createNewSession(name?: string): SavedSession {
-  const sessionId = `sess_${Date.now()}`;
+  const randomSuffix = crypto.randomBytes(4).toString("hex");
+  const sessionId = `sess_${Date.now()}_${randomSuffix}`;
   const metadata: Record<string, any> = {};
   if (name) metadata.name = name;
   saveSession(sessionId, [], metadata);
