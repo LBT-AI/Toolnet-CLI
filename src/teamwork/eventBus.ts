@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database } from "./sqliteMock";
 import path from "path";
 
 export type EventType = 'TaskCreated' | 'TaskStarted' | 'NeedApproval' | 'ArtifactCreated' | 'TaskCompleted' | 'MergeCompleted';
