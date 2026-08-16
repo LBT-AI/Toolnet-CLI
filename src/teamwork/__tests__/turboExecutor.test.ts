@@ -18,12 +18,6 @@ describe("turboExecutor", () => {
     // We will simulate 2 loops: 
     // Loop 1: Assistant calls a tool
     // Loop 2: Assistant provides final response
-    
-    // Mock the tool execution
-    mock.module("../../lib/agentTools", () => ({
-      ...agentToolsMod,
-      executeTool: async () => "mock tool output",
-    }));
 
     let fetchCount = 0;
     
@@ -42,7 +36,7 @@ describe("turboExecutor", () => {
               tool_calls: [{
                 id: "call_123",
                 type: "function",
-                function: { name: "run_command", arguments: "{}" }
+                function: { name: "get_cwd", arguments: "{}" }
               }]
             }
           }]
@@ -53,7 +47,7 @@ describe("turboExecutor", () => {
         const lastMsg = messages[messages.length - 1];
         expect(lastMsg.role).toBe("tool");
         expect(lastMsg.tool_call_id).toBe("call_123");
-        expect(lastMsg.content).toBe("mock tool output");
+        expect(JSON.parse(lastMsg.content)).toHaveProperty("stdout");
 
         return new Response(JSON.stringify({
           choices: [{

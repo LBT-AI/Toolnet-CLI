@@ -9,6 +9,7 @@ import {
   toolBash,
   resolvePath,
 } from "../../lib/codingAgent";
+import { setSandboxMode } from "../../lib/permissions";
 import { pwdCommand } from "../../commands/pwd";
 import { cdCommand } from "../../commands/cd";
 import { workspaceCommand } from "../../commands/workspace";
@@ -27,6 +28,7 @@ describe("Workspace Management & Path Resolution", () => {
     fs.writeFileSync(path.join(subProj, "sub.txt"), "hello from sub project", "utf8");
     fs.writeFileSync(path.join(testRoot, "root.txt"), "hello from root project", "utf8");
 
+    setSandboxMode("workspace");
     setWorkspaceRoot(testRoot);
   });
 

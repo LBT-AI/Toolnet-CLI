@@ -1,0 +1,31 @@
+# Source & Development
+src/
+*.ts
+*.tsx
+tsconfig.json
+bun.lock
+
+# Tests & Sandboxes
+**/__tests__/**
+*.test.*
+test_sandbox/
+test_extensibility_sandbox/
+test_workspace_sandbox/
+regression-test.ts
+test-format.ts
+test-glob.ts
+
+# Backups & Temporary files
+*.bak
+*.before-*
+*.log
+.logs/
+history.txt
+COMPARISON.md
+CONTRIBUTING.md
+
+# GitHub & IDE
+.git/
+.github/
+.vscode/
+.DS_Store

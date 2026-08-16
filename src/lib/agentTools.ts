@@ -216,8 +216,39 @@ export const agentTools = [
   {
     type: "function",
     function: {
+      name: "grep_search",
+      description: "Search for text/regex pattern recursively across files (alias for grep).",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "Regex or text to search for" },
+          path: { type: "string", description: "Directory or file to search in (default: workspace root)" },
+          include: { type: "string", description: "File filter e.g. '*.ts'" }
+        },
+        required: ["pattern"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "glob",
       description: "Find files by glob pattern (e.g. '*.ts', 'src/**/*.js'). Use find_path for finding directories by name.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "Glob pattern" },
+          path: { type: "string", description: "Directory to search from (default: workspace root)" }
+        },
+        required: ["pattern"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "glob_search",
+      description: "Find files by glob pattern (alias for glob).",
       parameters: {
         type: "object",
         properties: {

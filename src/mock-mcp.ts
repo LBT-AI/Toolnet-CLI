@@ -7,9 +7,7 @@ const rl = readline.createInterface({
 });
 
 function log(...args: any[]) {
-  if (process.env.DEBUG_MOCK_MCP) {
-    console.error(...args);
-  }
+  console.error(...args);
 }
 
 function send(msg: any) {

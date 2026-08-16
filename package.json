@@ -1,6 +1,6 @@
 {
-  "name": "toolnet-api",
-  "version": "1.0.0",
+  "name": "toolnetcli",
+  "version": "1.0.1",
   "type": "module",
   "license": "MIT",
   "description": "ToolNet CLI — AI coding agent for the terminal",
@@ -13,14 +13,11 @@
     "url": "https://github.com/LBT-AI/Toolnet-CLI/issues"
   },
   "bin": {
-    "toolnet": "./bin/toolnet.js",
-    "toolnetapi": "./bin/toolnet.js",
-    "toolnet-api": "./bin/toolnet.js"
+    "toolnet": "bin/toolnet.js"
   },
   "files": [
     "bin",
     "dist",
-    "package.json",
     "README.md",
     "CHANGELOG.md"
   ],
@@ -29,13 +26,14 @@
     "build:bun": "bun build src/index.tsx --target=bun --outdir=dist",
     "build:node": "bun build src/index.tsx --target=node --outdir=dist/node",
     "build": "bun run build:bun && bun run build:node",
+    "prepack": "bun run build",
     "start": "bun dist/index.js",
     "start:node": "node dist/node/index.js",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "check": "bun run typecheck && bun test && bun run build",
-    "pack:cli": "bun run build && npm pack",
-    "publish:cli": "bun run build && npm publish"
+    "pack:cli": "npm pack",
+    "publish:cli": "npm publish"
   },
   "engines": {
     "node": ">=20"

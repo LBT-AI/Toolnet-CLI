@@ -1,4 +1,4 @@
-import { expect, test, describe, beforeEach } from "bun:test";
+import { expect, test, describe, beforeEach, afterEach } from "bun:test";
 import { isDangerousCommand } from "../../lib/agentTools";
 import {
   evaluatePermission,
@@ -16,6 +16,10 @@ describe("Security & Permissions", () => {
 
   beforeEach(() => {
     setSandboxMode("ask");
+  });
+
+  afterEach(() => {
+    setSandboxMode("workspace");
   });
 
   test("P1-6: isDangerousCommand blocks dangerous run_command", () => {

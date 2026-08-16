@@ -10,13 +10,29 @@ interface Skill {
   icon: string;
 }
 
-const BUILTIN_SKILLS: Skill[] = agentTools.map(t => ({
-  id: t.function.name,
-  name: t.function.name,
-  description: t.function.description || "",
-  endpoint: "local tool",
-  icon: "🛠️"
-}));
+const BUILTIN_SKILLS: Skill[] = [
+  {
+    id: "toolnet-api",
+    name: "ToolNet API (Entry)",
+    description: "Access ToolNet distributed tools and orchestrator endpoints.",
+    endpoint: "/api",
+    icon: "🌐"
+  },
+  {
+    id: "chat",
+    name: "Chat",
+    description: "Send prompts and stream conversational completions.",
+    endpoint: "/api/chat",
+    icon: "💬"
+  },
+  ...agentTools.map(t => ({
+    id: t.function.name,
+    name: t.function.name,
+    description: t.function.description || "",
+    endpoint: "local tool",
+    icon: "🛠️"
+  }))
+];
 
 function showSkillsList(ctx: CommandContext) {
   const { addMessage } = ctx;
