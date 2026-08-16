@@ -11,7 +11,7 @@ export function renderHeader(cols: number): string {
     primaryColor = A.fgYellow;
   }
 
-  const bypassLabel = store.bypassMode ? A.fgRed + "[Jailbreak] " + A.reset : "";
+  const bypassLabel = store.bypassMode ? A.fgRed + `[Jailbreak:${store.bypassLevel || "full"}] ` + A.reset : "";
   const modeLabel = A.fgSubtext + "[" + A.fgText + store.agentMode + A.fgSubtext + "] " + bypassLabel + A.reset;
   const modelLabel = A.fgSubtext + "Model: " + A.fgText + truncate(store.currentModel, 30) + A.reset;
   const gwLabel = A.fgSubtext + " │ GW: " + A.fgGreen + "●" + A.reset + " ";

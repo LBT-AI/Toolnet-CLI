@@ -4,93 +4,122 @@ const LEVELS = ["lite", "full", "ultra", "chad-lite", "chad", "chad-ultra"] as c
 
 export const jailbreakCommand: Command = {
   name: "jailbreak",
-  aliases: ["jb"],
-  description: "Toggle jailbreak bypass mode (injects unrestricted prompt to bypass content filters)",
-  usage: "/jailbreak [on|off|<level>]",
+  aliases: ["jb", "bypass"],
+  description: "Toggle guardrail bypass / jailbreak mode (injects unrestricted prompt to bypass LLM content filters)",
+  usage: "/bypass [on|off|toggle|<level>] | /jailbreak [on|off|<level>]",
   async handler(args: string[], ctx: CommandContext) {
     const { gateway, addMessage } = ctx;
 
+    // No args: query status and display helper
     if (args.length === 0) {
       const res = await gateway.getSettings();
       if (!res.success) {
-        addMessage("assistant", `\u001b[31mError: ${res.error}\u001b[0m`);
+        addMessage("assistant", `\x1b[31mError: ${res.error}\x1b[0m`);
         return;
       }
-      const enabled = res.data?.jailbreakEnabled;
-      if (ctx.setBypassMode) ctx.setBypassMode(!!enabled);
+      const enabled = Boolean(res.data?.jailbreakEnabled);
       const level = res.data?.jailbreakLevel || "full";
-      const status = enabled ? "\u001b[32mON\u001b[0m" : "\u001b[31mOFF\u001b[0m";
-      addMessage("assistant",
-        `Jailbreak bypass: ${status}  Level: \u001b[36m${level}\u001b[0m\n\n` +
-        `  /jailbreak on              Enable (default level: full)\n` +
-        `  /jailbreak off             Disable\n` +
-        `  /jailbreak custom <prompt> Set custom jailbreak prompt\n` +
-        `  /jailbreak <level>         Set level + enable\n\n` +
-        `Levels: lite, full, ultra, chad-lite, chad, chad-ultra, custom\n` +
-        `        (1=mild → 6=extreme)`
+      if (ctx.setBypassMode) ctx.setBypassMode(enabled, level);
+      const status = enabled ? "\x1b[32mON\x1b[0m" : "\x1b[31mOFF\x1b[0m";
+      addMessage(
+        "assistant",
+        `🛡️ **Guardrail Bypass / Jailbreak: ${status}**  (Level: \x1b[36m${level}\x1b[0m)\n\n` +
+          `  • \`/bypass on\` / \`/jailbreak on\`              Enable bypass (default level: full)\n` +
+          `  • \`/bypass off\` / \`/jailbreak off\`            Disable bypass\n` +
+          `  • \`/bypass toggle\`                            Toggle bypass state\n` +
+          `  • \`/bypass <level>\`                           Set level + enable (lite, full, ultra, chad-lite, chad, chad-ultra)\n` +
+          `  • \`/bypass custom <prompt>\`                  Set custom system bypass prompt\n\n` +
+          `*Note: When enabled, ToolNet CLI automatically sends \`x-bypass-toolnet: true\` on every API call.*`
       );
       return;
     }
 
     const val = args[0].toLowerCase();
 
+    // Toggle subcommand: /bypass toggle
+    if (val === "toggle" || val === "t") {
+      const cur = await gateway.getSettings();
+      const newState = !cur.data?.jailbreakEnabled;
+      const curLevel = cur.data?.jailbreakLevel || "full";
+      const res = await gateway.updateSettings({ jailbreakEnabled: newState });
+      if (!res.success) {
+        addMessage("assistant", `\x1b[31mError: ${res.error}\x1b[0m`);
+        return;
+      }
+      if (ctx.setBypassMode) ctx.setBypassMode(newState, curLevel);
+      const statusText = newState ? "\x1b[32mON\x1b[0m" : "\x1b[31mOFF\x1b[0m";
+      addMessage("assistant", `🛡️ Guardrail bypass: ${statusText}  (Level: \x1b[36m${curLevel}\x1b[0m)`);
+      return;
+    }
+
     if (val === "custom") {
       const customPrompt = args.slice(1).join(" ");
       if (!customPrompt) {
-        addMessage("assistant", `\u001b[31mError: Please provide a custom prompt.\u001b[0m`);
+        addMessage("assistant", `\x1b[31mError: Please provide a custom prompt.\x1b[0m`);
         return;
       }
-      const res = await gateway.updateSettings({ jailbreakEnabled: true, jailbreakLevel: "custom", jailbreakCustomPrompt: customPrompt });
+      const res = await gateway.updateSettings({
+        jailbreakEnabled: true,
+        jailbreakLevel: "custom",
+        jailbreakCustomPrompt: customPrompt,
+      });
       if (!res.success) {
-        addMessage("assistant", `\u001b[31mError: ${res.error}\u001b[0m`);
+        addMessage("assistant", `\x1b[31mError: ${res.error}\x1b[0m`);
         return;
       }
-      if (ctx.setBypassMode) ctx.setBypassMode(true);
-      addMessage("assistant", `Jailbreak bypass: \u001b[32mON\u001b[0m  Level: \u001b[36mcustom\u001b[0m\nCustom prompt active.`);
+      if (ctx.setBypassMode) ctx.setBypassMode(true, "custom");
+      addMessage("assistant", `🛡️ Guardrail bypass: \x1b[32mON\x1b[0m  Level: \x1b[36mcustom\x1b[0m\nCustom prompt active.`);
       return;
     }
 
     // Set level (implicitly enables)
-    const levelMatch = LEVELS.find(l => l === val);
+    const levelMatch = LEVELS.find((l) => l === val);
     if (levelMatch) {
       const res = await gateway.updateSettings({ jailbreakEnabled: true, jailbreakLevel: levelMatch });
       if (!res.success) {
-        addMessage("assistant", `\u001b[31mError: ${res.error}\u001b[0m`);
+        addMessage("assistant", `\x1b[31mError: ${res.error}\x1b[0m`);
         return;
       }
-      if (ctx.setBypassMode) ctx.setBypassMode(true);
-      addMessage("assistant",
-        `Jailbreak bypass: \u001b[32mON\u001b[0m  Level: \u001b[36m${levelMatch}\u001b[0m\n` +
-        `Prompt level ${LEVELS.indexOf(levelMatch) + 1} of ${LEVELS.length} active.`
+      if (ctx.setBypassMode) ctx.setBypassMode(true, levelMatch);
+      addMessage(
+        "assistant",
+        `🛡️ Guardrail bypass: \x1b[32mON\x1b[0m  Level: \x1b[36m${levelMatch}\x1b[0m\n` +
+          `Prompt level ${LEVELS.indexOf(levelMatch) + 1} of ${LEVELS.length} active.`
       );
       return;
     }
 
-    if (val === "on" || val === "1") {
+    if (val === "on" || val === "1" || val === "enable") {
       const res = await gateway.updateSettings({ jailbreakEnabled: true });
       if (!res.success) {
-        addMessage("assistant", `\u001b[31mError: ${res.error}\u001b[0m`);
+        addMessage("assistant", `\x1b[31mError: ${res.error}\x1b[0m`);
         return;
       }
-      if (ctx.setBypassMode) ctx.setBypassMode(true);
-      addMessage("assistant", `Jailbreak bypass: \u001b[32mON\u001b[0m`);
+      const cur = await gateway.getSettings();
+      const level = cur.data?.jailbreakLevel || "full";
+      if (ctx.setBypassMode) ctx.setBypassMode(true, level);
+      addMessage("assistant", `🛡️ Guardrail bypass: \x1b[32mON\x1b[0m  (Level: \x1b[36m${level}\x1b[0m)`);
       return;
     }
 
-    if (val === "off" || val === "0") {
+    if (val === "off" || val === "0" || val === "disable") {
       const res = await gateway.updateSettings({ jailbreakEnabled: false });
       if (!res.success) {
-        addMessage("assistant", `\u001b[31mError: ${res.error}\u001b[0m`);
+        addMessage("assistant", `\x1b[31mError: ${res.error}\x1b[0m`);
         return;
       }
-      if (ctx.setBypassMode) ctx.setBypassMode(false);
-      addMessage("assistant", `Jailbreak bypass: \u001b[31mOFF\u001b[0m`);
+      const cur = await gateway.getSettings();
+      const level = cur.data?.jailbreakLevel || "full";
+      if (ctx.setBypassMode) ctx.setBypassMode(false, level);
+      addMessage("assistant", `🛡️ Guardrail bypass: \x1b[31mOFF\x1b[0m`);
       return;
     }
 
-    addMessage("assistant",
-      `Unknown: "${val}"\n` +
-      `Use: /jailbreak on|off|lite|full|ultra|chad-lite|chad|chad-ultra`
+    addMessage(
+      "assistant",
+      `Unknown option: "${val}"\n` +
+        `Usage: \`/bypass [on|off|toggle|<level>]\`\n` +
+        `Supported levels: ${LEVELS.join(", ")}`
     );
   },
 };

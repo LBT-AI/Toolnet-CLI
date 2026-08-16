@@ -41,6 +41,7 @@ export const store = {
   currentModel: "openai/gpt-4o",
   agentMode: "Build" as "Build" | "Plan",
   bypassMode: false,
+  bypassLevel: "full",
   gatewayUrl: "http://127.0.0.1:20127",
   showHelp: false,
   showModelPicker: false,

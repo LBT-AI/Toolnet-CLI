@@ -92,6 +92,7 @@ let pendingConfirmation: { prompt: string, onDecision?: (choice: "y" | "a" | "n"
 let currentModel = "openai/gpt-4o";
 let agentMode: "Build" | "Plan" = "Build";
 let bypassMode = false;
+let bypassLevel = "full";
 let gatewayUrl = "http://127.0.0.1:20127";
 let showHelp = false;
 let showModelPicker = false;
@@ -155,7 +156,7 @@ function renderAll() {
   }
 
   // ── Header ──
-  const bypassLabel = bypassMode ? A.fgRed + "[Jailbreak] " + A.reset : "";
+  const bypassLabel = bypassMode ? A.fgRed + `[Jailbreak:${bypassLevel}] ` + A.reset : "";
   const modeLabel = A.fgSubtext + "[" + A.fgText + agentMode + A.fgSubtext + "] " + bypassLabel + A.reset;
   const modelLabel = A.fgSubtext + "Model: " + A.fgText + truncate(currentModel, 30) + A.reset;
   const gwLabel = A.fgSubtext + " │ GW: " + A.fgGreen + "●" + A.reset + " ";
@@ -905,13 +906,6 @@ async function handleCommand(cmd: string) {
       break;
     }
 
-    case "/bypass": {
-      bypassMode = !bypassMode;
-      showToast(bypassMode ? "Jailbreak Mode ENABLED" : "Jailbreak Mode DISABLED");
-      setStatus("Jailbreak Mode: " + (bypassMode ? "ON" : "OFF"));
-      break;
-    }
-
     case "/plan": {
       agentMode = "Plan";
       showToast("Switched to Plan Mode");
@@ -957,9 +951,11 @@ async function handleCommand(cmd: string) {
         setStatusMsg: setStatus,
         exit: exitApp,
         currentModel: () => currentModel,
-        setBypassMode: (enabled: boolean) => {
+        setBypassMode: (enabled: boolean, level?: string) => {
           bypassMode = enabled;
-          setStatus("Jailbreak Mode: " + (enabled ? "ON" : "OFF"));
+          if (level) bypassLevel = level;
+          showToast(enabled ? `Jailbreak Mode ENABLED (${bypassLevel})` : "Jailbreak Mode DISABLED");
+          setStatus(`Jailbreak Mode: ${enabled ? "ON" : "OFF"}${level ? ` (${level})` : ""}`);
         },
         getCurrentSessionId: () => currentSessionId,
         setCurrentSessionId: (id: string) => { currentSessionId = id; },

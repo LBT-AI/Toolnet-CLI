@@ -57,8 +57,13 @@ export function initWorkspace(customPath?: string) {
   }
 }
 
+export function setBypassPolicy(enabled: boolean) {
+  bypassPolicy = enabled;
+}
+
 export function getCwdInfo() {
-  return { currentCwd, workspaceRoot, bypassPolicy };
+  const isFullAccess = getSandboxMode() === "full-access";
+  return { currentCwd, workspaceRoot, bypassPolicy: bypassPolicy || isFullAccess };
 }
 
 export function setWorkspaceRoot(newPath: string): boolean {

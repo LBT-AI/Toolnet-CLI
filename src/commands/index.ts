@@ -39,7 +39,7 @@ export interface CommandContext {
   setStatusMsg: (msg: string) => void;
   exit: () => void;
   currentModel: () => string;
-  setBypassMode?: (enabled: boolean) => void;
+  setBypassMode?: (enabled: boolean, level?: string) => void;
   getCurrentSessionId?: () => string;
   setCurrentSessionId?: (id: string) => void;
   getMessages?: () => any[];
