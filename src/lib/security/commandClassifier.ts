@@ -13,7 +13,10 @@ export interface CommandAnalysis {
 const CRITICAL_DENY_PATTERNS: Array<{ pattern: RegExp | string; reason: string }> = [
   { pattern: "rm -rf /", reason: "Root directory destruction (rm -rf /)" },
   { pattern: "rm -rf ~", reason: "Home directory destruction (rm -rf ~)" },
-  { pattern: "rm -rf *", reason: "Wildcard recursive destruction (rm -rf *)" },
+  { pattern: "rm -rf *", reason: "Wildcard recursive destruction of project directory (rm -rf *)" },
+  { pattern: "rm -rf ./*", reason: "Wildcard recursive destruction of project directory (rm -rf ./*)" },
+  { pattern: "rm -rf .*", reason: "Wildcard recursive destruction of project hidden files (rm -rf .*)" },
+  { pattern: /\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*\s+(\.\/)?\.git(\/|\s|$)/i, reason: "Destruction of .git version control history (rm -rf .git)" },
   { pattern: ":(){ :|:& };:", reason: "Fork bomb resource exhaustion attack" },
   { pattern: /\bmkfs(\.[a-z0-9]+)?\b/i, reason: "Filesystem format command (mkfs)" },
   { pattern: /\bdd\s+if=/i, reason: "Direct disk/block device write (dd)" },
@@ -27,9 +30,13 @@ const CRITICAL_DENY_PATTERNS: Array<{ pattern: RegExp | string; reason: string }
 // Dangerous patterns requiring user confirmation in 'ask' mode
 const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   // Destructive git operations that wipe uncommitted work
-  { pattern: /\bgit\s+(reset\s+--hard|clean\s+-[a-zA-Z]*f|restore\s+\.|checkout\s+\.)/i, reason: "Git command that wipes uncommitted working changes" },
+  { pattern: /\bgit\s+(reset\s+--hard|clean\s+-[a-zA-Z]*|restore\s+(\.|\*)|checkout\s+(\.|\*|-f))/i, reason: "Git command that wipes uncommitted working changes" },
+  // Deletion of essential project source directories
+  { pattern: /\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*\s+(src|lib|app|components|routes|pages|models|controllers|tests|test)\b/i, reason: "Destructive removal of essential project source code directory" },
+  // Mass wildcard deletion in workspace
+  { pattern: /\brm\s+(-[a-zA-Z]*\s+)?(\*|\*\.[a-zA-Z0-9]+)\b/i, reason: "Mass wildcard file deletion in workspace" },
   // Recursive directory deletion
-  { pattern: /\brm\s+-[a-zA-Z]*[rR]/i, reason: "Recursive file/directory removal (rm -r)" },
+  { pattern: /\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*/i, reason: "Recursive file/directory removal (rm -r)" },
   { pattern: /\brmdir\b/i, reason: "Directory removal (rmdir)" },
   // Process termination
   { pattern: /\b(kill|pkill|killall)\b/i, reason: "Process termination command" },

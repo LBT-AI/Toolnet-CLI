@@ -209,6 +209,31 @@ export class SecurityEngine {
         }
       }
 
+      // Project File Integrity Protection (Anti-Accidental-Wipe)
+      const baseName = path.basename(pathCheck.resolvedPath).toLowerCase();
+      const isCriticalProjectFile = ["package.json", "tsconfig.json", "cargo.toml", "go.mod", "pom.xml", ".gitignore"].includes(baseName);
+      if (isWrite && isCriticalProjectFile && fs.existsSync(pathCheck.resolvedPath)) {
+        const content = String(args?.content || args?.replacement || "").trim();
+        if (content.length === 0) {
+          if (mode === "workspace") {
+            return {
+              allowed: false,
+              needsApproval: false,
+              riskLevel: "DANGEROUS",
+              reason: `Emptying/blanking critical project configuration file "${baseName}" is blocked by security policy.`,
+            };
+          }
+          if (mode === "ask") {
+            return {
+              allowed: true,
+              needsApproval: true,
+              riskLevel: "DANGEROUS",
+              reason: `Warning: Tool "${toolName}" is attempting to write empty content to critical project file "${baseName}".`,
+            };
+          }
+        }
+      }
+
       return { allowed: true, needsApproval: false, riskLevel: isWrite ? "MODERATE_WRITE" : "SAFE_READ" };
     }
 
