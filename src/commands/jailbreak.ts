@@ -29,7 +29,7 @@ export const jailbreakCommand: Command = {
           `  • \`/bypass toggle\`                            Toggle bypass state\n` +
           `  • \`/bypass <level>\`                           Set level + enable (lite, full, ultra, chad-lite, chad, chad-ultra)\n` +
           `  • \`/bypass custom <prompt>\`                  Set custom system bypass prompt\n\n` +
-          `*Note: When enabled, ToolNet CLI automatically sends \`x-bypass-toolnet: true\` on every API call.*`
+          `🔒 **Nguyên tắc an ninh**: *7 cấp độ Bypass chỉ mở khóa tầng Prompt LLM để không bị từ chối câu trả lời. Toàn bộ lệnh Shell và thao tác File cục bộ vẫn LUÔN BỊ KIỂM SOÁT chặt chẽ bởi hệ thống Permissions & SecretGuard (Chế độ Sandbox hiện tại).*`
       );
       return;
     }

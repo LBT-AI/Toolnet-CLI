@@ -49,7 +49,7 @@ describe("Unified Guardrail Bypass & Jailbreak Subsystem", () => {
     expect(res).toBe(true);
     expect(messages.length).toBe(1);
     expect(messages[0].content).toContain("Guardrail Bypass / Jailbreak: \x1b[31mOFF\x1b[0m");
-    expect(messages[0].content).toContain("x-bypass-toolnet: true");
+    expect(messages[0].content).toContain("Permissions & SecretGuard");
   });
 
   test("2. /bypass on enables bypass and updates gateway + TUI state", async () => {
