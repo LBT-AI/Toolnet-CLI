@@ -1,10 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { SecurityPolicyConfig } from "./types";
+import type { CapabilityConfig, PermissionCapability, SecurityPolicyConfig } from "./types";
+
+const DEFAULT_CAPABILITIES: Required<CapabilityConfig> = {
+  read: true,      // Auto-allow reading files, grep, git status
+  create: true,    // Auto-allow creating new files & directories
+  modify: true,    // Auto-allow surgical edits & patch within workspace
+  delete: false,   // Locked: requires explicit user confirmation
+  execute: true,   // Auto-allow safe builds & tests
+  reset: false,    // Locked: git reset/clean requires explicit confirmation
+  network: true,   // Auto-allow web fetch & docs lookup
+  system: false,   // Locked: OS admin & system tampering blocked
+};
 
 export class PolicyEngine {
   private workspacePolicy: SecurityPolicyConfig | null = null;
-  private globalPolicy: SecurityPolicyConfig | null = null;
+  private dynamicCapabilities: Partial<CapabilityConfig> = {};
   private loaded = false;
 
   constructor() {}
@@ -32,6 +43,43 @@ export class PolicyEngine {
       }
     }
     return null;
+  }
+
+  isCapabilityAllowed(capability: PermissionCapability): boolean {
+    if (!this.loaded) this.reload();
+
+    const key = capability.toLowerCase() as keyof CapabilityConfig;
+
+    // 1. Check in-memory dynamic override (session)
+    if (this.dynamicCapabilities[key] !== undefined) {
+      return Boolean(this.dynamicCapabilities[key]);
+    }
+
+    // 2. Check project policy file (.toolnet/permissions.json)
+    if (this.workspacePolicy?.capabilities && this.workspacePolicy.capabilities[key] !== undefined) {
+      return Boolean(this.workspacePolicy.capabilities[key]);
+    }
+
+    // 3. Fallback to safe built-in default
+    return DEFAULT_CAPABILITIES[key];
+  }
+
+  setCapability(capability: PermissionCapability, allowed: boolean) {
+    const key = capability.toLowerCase() as keyof CapabilityConfig;
+    this.dynamicCapabilities[key] = allowed;
+  }
+
+  getAllCapabilities(): Record<PermissionCapability, boolean> {
+    return {
+      READ: this.isCapabilityAllowed("READ"),
+      CREATE: this.isCapabilityAllowed("CREATE"),
+      MODIFY: this.isCapabilityAllowed("MODIFY"),
+      DELETE: this.isCapabilityAllowed("DELETE"),
+      EXECUTE: this.isCapabilityAllowed("EXECUTE"),
+      RESET: this.isCapabilityAllowed("RESET"),
+      NETWORK: this.isCapabilityAllowed("NETWORK"),
+      SYSTEM: this.isCapabilityAllowed("SYSTEM"),
+    };
   }
 
   isCommandWhitelisted(command: string): boolean {

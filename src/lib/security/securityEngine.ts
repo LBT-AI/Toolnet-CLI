@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import type {
   ActionCategory,
+  PermissionCapability,
   PermissionResult,
   RiskLevel,
   SandboxMode,
@@ -36,7 +37,7 @@ export class SecurityEngine {
     const baseCwd = cwd || process.cwd();
     const wsRoot = workspaceRoot || process.cwd();
 
-    // 1. Full access bypass
+    // 1. Full access mode (Allows all actions)
     if (mode === "full-access") {
       auditLogger.logEvent({
         timestamp: Date.now(),
@@ -44,11 +45,12 @@ export class SecurityEngine {
         args,
         riskLevel: "SAFE_READ",
         category: this.categorizeTool(toolName),
+        capability: "SYSTEM",
         mode,
         decision: "ALLOWED",
         reason: "Full-access sandbox mode active",
       });
-      return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ" };
+      return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability: "SYSTEM" };
     }
 
     const category = this.categorizeTool(toolName);
@@ -58,12 +60,15 @@ export class SecurityEngine {
       const command = String(args?.command || args?.cmd || "").trim();
       const targetKey = command;
 
+      // Classify command capability
+      const capability = this.determineShellCapability(command);
+
       // Check Session Trust
       if (sessionTrust.isTrustedForSession(toolName, targetKey)) {
-        return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ" };
+        return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability };
       }
       if (sessionTrust.isDeniedForSession(toolName, targetKey)) {
-        return { allowed: false, needsApproval: false, reason: "Command was previously denied for this session." };
+        return { allowed: false, needsApproval: false, reason: "Command was previously denied for this session.", capability };
       }
 
       // Check Policy Whitelist
@@ -74,11 +79,12 @@ export class SecurityEngine {
           args,
           riskLevel: "SAFE_BUILD",
           category,
+          capability,
           mode,
           decision: "ALLOWED",
           reason: "Command is explicitly whitelisted in security policy",
         });
-        return { allowed: true, needsApproval: false, riskLevel: "SAFE_BUILD", matchedRule: "whitelist" };
+        return { allowed: true, needsApproval: false, riskLevel: "SAFE_BUILD", capability, matchedRule: "whitelist" };
       }
 
       // Check Policy Blacklist
@@ -90,11 +96,35 @@ export class SecurityEngine {
           args,
           riskLevel: "CRITICAL_DENY",
           category,
+          capability,
           mode,
           decision: "BLOCKED_BY_POLICY",
           reason: blacklisted.reason,
         });
-        return { allowed: false, needsApproval: false, reason: blacklisted.reason, riskLevel: "CRITICAL_DENY" };
+        return { allowed: false, needsApproval: false, reason: blacklisted.reason, riskLevel: "CRITICAL_DENY", capability };
+      }
+
+      // Check Capability Permissions (e.g. DELETE, RESET, SYSTEM)
+      if (!policyEngine.isCapabilityAllowed(capability)) {
+        const capReason = `Action requires '${capability}' permission which is protected by policy.`;
+        if (mode === "workspace") {
+          return {
+            allowed: false,
+            needsApproval: false,
+            riskLevel: "DANGEROUS",
+            capability,
+            reason: capReason,
+          };
+        }
+        if (mode === "ask") {
+          return {
+            allowed: true,
+            needsApproval: true,
+            riskLevel: "DANGEROUS",
+            capability,
+            reason: capReason,
+          };
+        }
       }
 
       // Classify command semantics & risk
@@ -107,6 +137,7 @@ export class SecurityEngine {
           args,
           riskLevel: analysis.riskLevel,
           category,
+          capability,
           mode,
           decision: "BLOCKED_BY_POLICY",
           reason: analysis.reason,
@@ -115,6 +146,7 @@ export class SecurityEngine {
           allowed: false,
           needsApproval: false,
           riskLevel: analysis.riskLevel,
+          capability,
           reason: `Blocked by Security Policy: ${analysis.reason}`,
         };
       }
@@ -127,6 +159,7 @@ export class SecurityEngine {
             args,
             riskLevel: analysis.riskLevel,
             category,
+            capability,
             mode,
             decision: "BLOCKED_BY_POLICY",
             reason: analysis.reason,
@@ -135,6 +168,7 @@ export class SecurityEngine {
             allowed: false,
             needsApproval: false,
             riskLevel: analysis.riskLevel,
+            capability,
             reason: `Blocked in 'workspace' sandbox mode: ${analysis.reason}`,
           };
         }
@@ -144,24 +178,58 @@ export class SecurityEngine {
           allowed: true,
           needsApproval: true,
           riskLevel: analysis.riskLevel,
+          capability,
           reason: analysis.reason,
           suggestedAction: analysis.suggestedAction,
         };
       }
 
       // Safe commands in workspace or ask mode
-      return { allowed: true, needsApproval: false, riskLevel: analysis.riskLevel };
+      return { allowed: true, needsApproval: false, riskLevel: analysis.riskLevel, capability };
     }
 
     // 3. File & Resource Tool Evaluation
-    if (category === "FILE_READ" || category === "FILE_WRITE") {
+    if (category === "FILE_READ" || category === "FILE_WRITE" || category === "FILE_DELETE") {
       const isWrite = category === "FILE_WRITE";
+      const isDelete = category === "FILE_DELETE" || toolName.includes("delete") || toolName.includes("remove");
       const targetPath = toolName.includes("artifact")
         ? `.artifacts/${args?.name || ""}`
         : (args?.path || args?.root || args?.query || ".");
 
       const pathCheck = this.checkPathInsideWorkspace(targetPath, wsRoot, baseCwd);
       const isSecret = isSensitiveFile(pathCheck.resolvedPath);
+      const fileExists = fs.existsSync(pathCheck.resolvedPath);
+
+      // Determine file capability: READ vs CREATE vs MODIFY vs DELETE
+      let capability: PermissionCapability = "READ";
+      if (isDelete) {
+        capability = "DELETE";
+      } else if (isWrite) {
+        capability = fileExists ? "MODIFY" : "CREATE";
+      }
+
+      // Check Capability Permission for file operations
+      if (!policyEngine.isCapabilityAllowed(capability)) {
+        const capReason = `Action requires '${capability}' permission which is currently locked by policy.`;
+        if (mode === "workspace") {
+          return {
+            allowed: false,
+            needsApproval: false,
+            riskLevel: "DANGEROUS",
+            capability,
+            reason: capReason,
+          };
+        }
+        if (mode === "ask") {
+          return {
+            allowed: true,
+            needsApproval: true,
+            riskLevel: "DANGEROUS",
+            capability,
+            reason: capReason,
+          };
+        }
+      }
 
       // Secret Protection
       if (isSecret.isSensitive) {
@@ -170,17 +238,19 @@ export class SecurityEngine {
             allowed: false,
             needsApproval: false,
             riskLevel: "DANGEROUS",
+            capability,
             reason: `Access to sensitive file blocked by security sandbox: ${isSecret.reason}`,
           };
         }
         if (mode === "ask") {
           if (sessionTrust.isTrustedForSession(toolName, pathCheck.resolvedPath)) {
-            return { allowed: true, needsApproval: false, riskLevel: "MODERATE_WRITE" };
+            return { allowed: true, needsApproval: false, riskLevel: "MODERATE_WRITE", capability };
           }
           return {
             allowed: true,
             needsApproval: true,
             riskLevel: "DANGEROUS",
+            capability,
             reason: `Warning: Tool "${toolName}" targets sensitive secret credentials (${isSecret.reason})`,
           };
         }
@@ -193,17 +263,19 @@ export class SecurityEngine {
             allowed: false,
             needsApproval: false,
             riskLevel: "DANGEROUS",
+            capability,
             reason: `Path traversal blocked: "${targetPath}" resolves outside workspace (${pathCheck.realWorkspaceRoot}). In 'workspace' mode, accessing files outside the workspace is strictly prohibited.`,
           };
         }
         if (mode === "ask") {
           if (sessionTrust.isTrustedForSession(toolName, pathCheck.resolvedPath)) {
-            return { allowed: true, needsApproval: false, riskLevel: "MODERATE_WRITE" };
+            return { allowed: true, needsApproval: false, riskLevel: "MODERATE_WRITE", capability };
           }
           return {
             allowed: true,
             needsApproval: true,
             riskLevel: isWrite ? "DANGEROUS" : "MODERATE_WRITE",
+            capability,
             reason: `Tool "${toolName}" accesses path outside workspace: "${pathCheck.resolvedPath}"`,
           };
         }
@@ -212,7 +284,7 @@ export class SecurityEngine {
       // Project File Integrity Protection (Anti-Accidental-Wipe)
       const baseName = path.basename(pathCheck.resolvedPath).toLowerCase();
       const isCriticalProjectFile = ["package.json", "tsconfig.json", "cargo.toml", "go.mod", "pom.xml", ".gitignore"].includes(baseName);
-      if (isWrite && isCriticalProjectFile && fs.existsSync(pathCheck.resolvedPath)) {
+      if (isWrite && isCriticalProjectFile && fileExists) {
         const content = String(args?.content || args?.replacement || "").trim();
         if (content.length === 0) {
           if (mode === "workspace") {
@@ -220,6 +292,7 @@ export class SecurityEngine {
               allowed: false,
               needsApproval: false,
               riskLevel: "DANGEROUS",
+              capability,
               reason: `Emptying/blanking critical project configuration file "${baseName}" is blocked by security policy.`,
             };
           }
@@ -228,46 +301,70 @@ export class SecurityEngine {
               allowed: true,
               needsApproval: true,
               riskLevel: "DANGEROUS",
+              capability,
               reason: `Warning: Tool "${toolName}" is attempting to write empty content to critical project file "${baseName}".`,
             };
           }
         }
       }
 
-      return { allowed: true, needsApproval: false, riskLevel: isWrite ? "MODERATE_WRITE" : "SAFE_READ" };
+      return { allowed: true, needsApproval: false, riskLevel: isWrite ? "MODERATE_WRITE" : "SAFE_READ", capability };
     }
 
     // 4. Web & Browser Tools
     if (category === "NETWORK_FETCH" || category === "BROWSER_AUTOMATION") {
+      const capability: PermissionCapability = "NETWORK";
       const action = args?.action || "fetch";
       if (mode === "ask" && (action === "click" || action === "fill" || action === "evaluate")) {
         return {
           allowed: true,
           needsApproval: true,
           riskLevel: "MODERATE_WRITE",
+          capability,
           reason: `Browser automation action '${action}' requires user confirmation.`,
         };
       }
-      return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ" };
+      return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability };
     }
 
     // 5. MCP Tools Evaluation
     if (category === "MCP_TOOL") {
+      const capability: PermissionCapability = "EXECUTE";
       if (mode === "ask") {
         if (sessionTrust.isTrustedForSession(toolName)) {
-          return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ" };
+          return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability };
         }
       }
-      return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ" };
+      return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability };
     }
 
-    return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ" };
+    return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability: "READ" };
+  }
+
+  private determineShellCapability(command: string): PermissionCapability {
+    const trimmed = command.trim();
+    if (/\bgit\s+(reset\s+--hard|clean|restore|checkout\s+(\.|-f))/i.test(trimmed)) {
+      return "RESET";
+    }
+    if (/\b(rm\s|rmdir|unlink|drop\s+database)/i.test(trimmed)) {
+      return "DELETE";
+    }
+    if (/\b(sudo|reboot|shutdown|systemctl|iptables|chmod\s+777)/i.test(trimmed)) {
+      return "SYSTEM";
+    }
+    if (/\b(curl|wget|ping|ssh|scp)\b/i.test(trimmed)) {
+      return "NETWORK";
+    }
+    return "EXECUTE";
   }
 
   private categorizeTool(toolName: string): ActionCategory {
     if (toolName === "run_command" || toolName === "shell") return "SHELL_EXECUTE";
     if (["write_file", "edit_file", "replace_all", "apply_patch", "create_artifact", "update_artifact"].includes(toolName)) {
       return "FILE_WRITE";
+    }
+    if (["delete_file", "remove_file", "file_delete"].includes(toolName)) {
+      return "FILE_DELETE";
     }
     if (["read_file", "file_exists", "list_dir", "tree", "grep", "glob", "find_path", "git_status", "git_diff"].includes(toolName)) {
       return "FILE_READ";
