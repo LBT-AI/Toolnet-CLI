@@ -1,6 +1,6 @@
 {
   "name": "toolnetcli",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "license": "MIT",
   "description": "ToolNet CLI — AI coding agent for the terminal",

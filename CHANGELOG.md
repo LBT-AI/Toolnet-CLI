@@ -2,6 +2,13 @@
 All notable changes to ToolNet CLI will be documented here.
 The project follows Semantic Versioning.
 
+## [1.0.3] - 2026-08-17
+### Added
+- **Alibaba Cloud / DashScope / Qwen Support**: Integrated Alibaba Cloud provider key management with auto-routing for `alibaba/*`, `dashscope/*`, and `qwen/*` model families.
+- **Dedicated Key Management Command (`/key`)**: Interactive `/key` command to inspect, set, list (masked), and delete API keys for all supported providers (`alibaba`, `openai`, `anthropic`, `gemini`, `deepseek`, `groq`, `together`, `mistral`, `xai`, `minimax`, `cohere`).
+- **Expanded ProviderPicker**: Added Alibaba, Together AI, Mistral, and xAI directly to the interactive TUI provider picker modal.
+- **Environment Variable Fallback**: Auto-discovery of `DASHSCOPE_API_KEY`, `ALIBABA_API_KEY`, `QWEN_API_KEY`, and provider aliases.
+
 ## [1.0.2] - 2026-08-17
 ### Added
 - **Unified AgentHarness 2.0**: Centralized execution kernel and lifecycle coordinator unifying Context, Security, Tools, Persistence, and Telemetry across Interactive, Headless, Turbo, and Teamwork modes.
@@ -46,6 +53,7 @@ The project follows Semantic Versioning.
 - ToolNet CLI separated from the ToolNet API repository
 - Repository metadata now points to LBT-AI/Toolnet-CLI
 
+[1.0.3]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.3
 [1.0.2]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.2
 [1.0.1]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.1
 [1.0.0]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.0
