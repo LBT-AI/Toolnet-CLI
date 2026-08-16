@@ -31,6 +31,9 @@ export function initWorkspace(customPath?: string) {
       } else if (arg.startsWith("--cwd=") || arg.startsWith("--workspace=")) {
         targetPath = arg.split("=")[1];
         break;
+      } else if (arg === "-p" || arg === "--prompt" || arg === "-m" || arg === "--model" || arg === "--session") {
+        i++;
+        continue;
       } else if (!arg.startsWith("-")) {
         targetPath = arg;
         break;

@@ -2,6 +2,11 @@
 All notable changes to ToolNet CLI will be documented here.
 The project follows Semantic Versioning.
 
+## [1.0.4] - 2026-08-17
+### Added
+- **Dual Binary Aliases**: Added `toolnetcli` alias alongside `toolnet` in package `bin` config for global execution.
+- **Robust Argument Parsing**: Fixed CLI flag value handling in workspace detector (`initWorkspace`) to prevent capturing prompt or model flags as workspace targets.
+
 ## [1.0.3] - 2026-08-17
 ### Added
 - **Alibaba Cloud / DashScope / Qwen Support**: Integrated Alibaba Cloud provider key management with auto-routing for `alibaba/*`, `dashscope/*`, and `qwen/*` model families.
@@ -53,6 +58,7 @@ The project follows Semantic Versioning.
 - ToolNet CLI separated from the ToolNet API repository
 - Repository metadata now points to LBT-AI/Toolnet-CLI
 
+[1.0.4]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.4
 [1.0.3]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.3
 [1.0.2]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.2
 [1.0.1]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.1

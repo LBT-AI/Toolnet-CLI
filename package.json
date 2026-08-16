@@ -1,6 +1,6 @@
 {
   "name": "toolnetcli",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "module",
   "license": "MIT",
   "description": "ToolNet CLI — AI coding agent for the terminal",
@@ -13,7 +13,8 @@
     "url": "https://github.com/LBT-AI/Toolnet-CLI/issues"
   },
   "bin": {
-    "toolnet": "bin/toolnet.js"
+    "toolnet": "bin/toolnet.js",
+    "toolnetcli": "bin/toolnet.js"
   },
   "files": [
     "bin",

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { initWorkspace } from "./lib/codingAgent";
-const CLI_VERSION = "1.0.0";
+const CLI_VERSION = "1.0.4";
 initWorkspace();
 const args = process.argv.slice(2);
 if (args.includes("--version") || args.includes("-v")) {
