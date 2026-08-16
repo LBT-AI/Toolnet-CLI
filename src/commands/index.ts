@@ -30,6 +30,7 @@ import { doctorCommand } from "./doctor";
 import { updateCommand } from "./update";
 import { subagentCommand } from "./subagent";
 import { harnessCommand } from "./harness";
+import { keyCommand } from "./key";
 
 export interface CommandContext {
   gateway: GatewayClient;
@@ -88,6 +89,7 @@ const builtinCommands: Command[] = [
   updateCommand,
   subagentCommand,
   harnessCommand,
+  keyCommand,
 ];
 
 export function getAllCommands(): Command[] {

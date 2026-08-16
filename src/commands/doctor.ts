@@ -52,7 +52,7 @@ export const doctorCommand: Command = {
     const hasToolnetKey = Boolean(getCliKey("toolnet") || getCliKey("default"));
     const hasOpenAiKey = Boolean(getCliKey("openai"));
     const hasAnthropicKey = Boolean(getCliKey("anthropic"));
-    const hasDashscopeKey = Boolean(getCliKey("dashscope") || process.env.DASHSCOPE_API_KEY);
+    const hasDashscopeKey = Boolean(getCliKey("alibaba") || getCliKey("dashscope") || process.env.DASHSCOPE_API_KEY);
 
     const report = [
       `=== ToolNet API CLI Doctor Report ===`,
@@ -72,10 +72,10 @@ export const doctorCommand: Command = {
       `• Gateway URL  : ${ctx.gateway.getBaseUrl()} [${gwStatus}]`,
       ``,
       `Stored API Keys:`,
-      `• ToolNet / Default : ${hasToolnetKey ? "Set ✓" : "Not Set"}`,
-      `• OpenAI Key        : ${hasOpenAiKey ? "Set ✓" : "Not Set"}`,
-      `• Anthropic Key     : ${hasAnthropicKey ? "Set ✓" : "Not Set"}`,
-      `• DashScope Key     : ${hasDashscopeKey ? "Set ✓" : "Not Set"}`,
+      `• ToolNet / Default   : ${hasToolnetKey ? "Set ✓" : "Not Set"}`,
+      `• Alibaba / DashScope : ${hasDashscopeKey ? "Set ✓" : "Not Set"}`,
+      `• OpenAI Key          : ${hasOpenAiKey ? "Set ✓" : "Not Set"}`,
+      `• Anthropic Key       : ${hasAnthropicKey ? "Set ✓" : "Not Set"}`,
       ``,
       `Diagnostics Summary: ${gwStatus.includes("Connected") ? "All core systems operational ✓" : "⚠ Gateway connection check failed"}`
     ].join("\n");

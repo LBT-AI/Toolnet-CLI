@@ -3,7 +3,21 @@ import { A, T, write, getSize } from "../term";
 export class ProviderPickerState {
   show = false;
   idx = 0;
-  list = ["toolnet", "openai", "anthropic", "gemini", "groq", "cohere", "openrouter", "deepseek", "minimax"];
+  list = [
+    "toolnet",
+    "alibaba",
+    "openai",
+    "anthropic",
+    "gemini",
+    "deepseek",
+    "groq",
+    "openrouter",
+    "together",
+    "mistral",
+    "xai",
+    "minimax",
+    "cohere",
+  ];
 
   open(setStatus: (s: string) => void, renderAll: () => void) {
     this.show = true;
