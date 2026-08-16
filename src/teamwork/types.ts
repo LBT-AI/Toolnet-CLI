@@ -16,7 +16,12 @@ export type AgentRole =
   | 'IMPLEMENTER'
   | 'REVIEWER'
   | 'QA_ENGINEER'
-  | 'TURBO_AGENT';
+  | 'TURBO_AGENT'
+  | 'CODER'
+  | 'RESEARCHER'
+  | 'TESTER'
+  | 'ARCHITECT'
+  | 'GENERAL';
 
 export type QualityLevel = 'FAST' | 'BALANCED' | 'THOROUGH' | 'DRAFT' | 'NORMAL' | 'HIGH' | 'MAX';
 
@@ -58,6 +63,7 @@ export interface TaskNode {
   targetFiles?: string[];
   requiresReview?: boolean;
   reviewRequired?: boolean;
+  maxTurns?: number;
   inputContext?: Record<string, unknown>;
   outputResult?: TaskNodeOutput;
   result?: string;

@@ -19,6 +19,8 @@ test-glob.ts
 *.bak
 *.before-*
 *.log
+*.db
+*.sqlite
 .logs/
 history.txt
 COMPARISON.md

@@ -1,9 +1,18 @@
-import { test, expect, describe, mock } from "bun:test";
+import { test, expect, describe, mock, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
 import { agentTools, executeTool } from "../../lib/agentTools";
 import { AgentRuntime } from "../../lib/agentRuntime";
+import { setSandboxMode } from "../../lib/permissions";
 
 describe("Step 2 - P0-A Agent Execution Foundation", () => {
+  beforeEach(() => {
+    setSandboxMode("ask");
+  });
+
+  afterEach(() => {
+    setSandboxMode("ask");
+  });
+
   test("agentTools registry exposes all mandatory tools with schemas", () => {
     const toolNames = agentTools.map((t) => t.function.name);
     expect(toolNames.includes("shell") || toolNames.includes("run_command")).toBe(true);

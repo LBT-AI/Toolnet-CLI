@@ -250,7 +250,7 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
         params: { protocolVersion: "2024-11-05" }
       }) + "\n");
 
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 250));
 
       const lines = stdoutData.trim().split("\n").filter(Boolean);
       expect(lines.length).toBeGreaterThanOrEqual(1);
@@ -267,7 +267,7 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
         method: "tools/list",
       }) + "\n");
 
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 250));
 
       const updatedLines = stdoutData.trim().split("\n").filter(Boolean);
       expect(updatedLines.length).toBeGreaterThanOrEqual(2);

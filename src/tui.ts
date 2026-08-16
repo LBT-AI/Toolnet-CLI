@@ -21,10 +21,11 @@ const ANSI_REGEX = /\x1b\[[^m]*m/g;
 import { providerPicker } from "./components/ProviderPicker";
 import { saveCliKey, getCliKey, loadCliKeys } from "./lib/keys";
 import { agentTools, executeTool, isDangerousCommand, getMergedAgentTools } from "./lib/agentTools";
-import { evaluatePermission, getSandboxMode, setSandboxMode } from "./lib/permissions";
+import { evaluatePermission, getSandboxMode, setSandboxMode, sessionTrust } from "./lib/permissions";
 import { getCwdInfo, initWorkspace } from "./lib/codingAgent";
 import { getAllCommands, dispatchCommand } from "./commands/index";
 import { GatewayClient } from "./lib/gateway";
+import { loadConfig } from "./lib/config";
 import { setupTerminalLifecycle, restoreTerminal, wrapErrorBoundary } from "./lib/terminalLifecycle";
 import { saveSession, loadSession, getLastSessionId, parseSessionArgs } from "./lib/sessionPersistence";
 import { getAgentSystemPrompt } from "./lib/agentRuntime";
@@ -33,7 +34,7 @@ import { getModelTags } from "./lib/modelTags";
 import { activeSchedulers } from "./teamwork/dynamicScheduler";
 import { printToolStart, printToolEnd } from "./lib/tool-format";
 import { backgroundTasks } from "./lib/backgroundTasks";
-import { compactMessages, DEFAULT_COMPACTION_THRESHOLD_CHARS } from "./lib/compaction";
+import { compactMessages, contextEngine } from "./lib/context";
 import { parseAndProcessInput } from "./lib/attachments";
 
 import { A, T, write, getSize } from "./term";
@@ -87,7 +88,7 @@ let statusText = "";
 let isStreaming = false;
 let spinnerIdx = 0;
 let spinnerTimer: ReturnType<typeof setInterval> | null = null;
-let pendingConfirmation: { prompt: string, resolve: (val: boolean) => void } | null = null;
+let pendingConfirmation: { prompt: string, onDecision?: (choice: "y" | "a" | "n") => void, resolve: (val: boolean) => void } | null = null;
 let currentModel = "openai/gpt-4o";
 let agentMode: "Build" | "Plan" = "Build";
 let bypassMode = false;
@@ -429,14 +430,14 @@ function renderAll() {
 
   // ── Confirmation Modal ──
   if (pendingConfirmation) {
-    const boxW = Math.min(60, cols - 4);
+    const boxW = Math.min(64, cols - 4);
     const boxH = 5;
     const startRow = Math.floor((rows - boxH) / 2);
     const startCol = Math.floor((cols - boxW) / 2);
     out.push(T.goto(startRow, startCol));
     out.push(A.bgRed + A.fgText + A.bold + "┌" + "─".repeat(boxW - 2) + "┐" + A.reset);
     out.push(T.goto(startRow + 1, startCol));
-    const titleText = " Security Warning ";
+    const titleText = " 🛡️ Security Approval Required ";
     const titlePad = Math.max(0, boxW - 2 - titleText.length);
     out.push(A.bgRed + A.fgText + A.bold + "│" + titleText + " ".repeat(titlePad) + "│" + A.reset);
     out.push(T.goto(startRow + 2, startCol));
@@ -444,7 +445,7 @@ function renderAll() {
     const descPad = Math.max(0, boxW - 2 - descText.length);
     out.push(A.bgRed + A.fgText + "│" + descText + " ".repeat(descPad) + "│" + A.reset);
     out.push(T.goto(startRow + 3, startCol));
-    const hintText = " Confirm (Y) / Deny (N) ";
+    const hintText = " [Y] Once   [A] Allow for Session   [N] Deny ";
     const hintPad = Math.max(0, boxW - 2 - hintText.length);
     out.push(A.bgRed + A.fgText + A.bold + "│" + hintText + " ".repeat(hintPad) + "│" + A.reset);
     out.push(T.goto(startRow + 4, startCol));
@@ -591,9 +592,9 @@ async function sendMessage(text: string) {
         headers["Authorization"] = `Bearer ${localKey}`;
       }
 
-      const autoCompactRes = compactMessages(messages, { force: false, thresholdChars: DEFAULT_COMPACTION_THRESHOLD_CHARS });
-      if (autoCompactRes.compacted) {
-        messages = autoCompactRes.messages;
+      const autoPrep = contextEngine.prepareMessagesForApi(messages as any, { model: currentModel });
+      if (autoPrep.compacted) {
+        messages = autoPrep.messages;
         saveCurrentSession();
       }
 
@@ -746,9 +747,18 @@ async function sendMessage(text: string) {
           }
 
           if (perm.needsApproval) {
-            const promptMsg = perm.reason ? `Permission needed for ${tc.function.name}: ${perm.reason}. Allow?` : `Tool ${tc.function.name} requires permission. Allow?`;
+            const promptMsg = perm.reason ? `${perm.reason}` : `Tool ${tc.function.name} requires permission`;
+            const targetKey = (parsedArgs as any)?.command || (parsedArgs as any)?.cmd || (parsedArgs as any)?.path || "";
             const confirmed = await new Promise<boolean>((resolve) => {
-              pendingConfirmation = { prompt: promptMsg, resolve };
+              pendingConfirmation = {
+                prompt: promptMsg,
+                onDecision: (choice) => {
+                  if (choice === "a") {
+                    sessionTrust.recordDecision(tc.function.name, targetKey, "SESSION");
+                  }
+                },
+                resolve,
+              };
               renderAll();
             });
             if (!confirmed) {
@@ -1112,14 +1122,22 @@ function handleKey(data: Buffer) {
 
   if (pendingConfirmation) {
     if (hex === "1b") { // esc
+      if (pendingConfirmation.onDecision) pendingConfirmation.onDecision("n");
       pendingConfirmation.resolve(false);
       pendingConfirmation = null;
       renderAll();
     } else if (s.toLowerCase() === "y") {
+      if (pendingConfirmation.onDecision) pendingConfirmation.onDecision("y");
+      pendingConfirmation.resolve(true);
+      pendingConfirmation = null;
+      renderAll();
+    } else if (s.toLowerCase() === "a") {
+      if (pendingConfirmation.onDecision) pendingConfirmation.onDecision("a");
       pendingConfirmation.resolve(true);
       pendingConfirmation = null;
       renderAll();
     } else if (s.toLowerCase() === "n") {
+      if (pendingConfirmation.onDecision) pendingConfirmation.onDecision("n");
       pendingConfirmation.resolve(false);
       pendingConfirmation = null;
       renderAll();
@@ -1385,8 +1403,7 @@ async function main() {
 
   // Load config
   try {
-    const { readFileSync } = await import("node:fs");
-    const cfg = JSON.parse(readFileSync(process.env.HOME + "/.toolnetapi/config.json", "utf8"));
+    const cfg = loadConfig();
     if (cfg.defaultModel) currentModel = cfg.defaultModel;
     if (cfg.baseUrl) gatewayUrl = cfg.baseUrl;
   } catch {}

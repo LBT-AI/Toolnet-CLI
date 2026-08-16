@@ -2,6 +2,7 @@ import { detectGatewayUrl } from "./gateway";
 import { agentTools, getMergedAgentTools, executeTool } from "./agentTools";
 import { workspaceRoot, currentCwd } from "./codingAgent";
 import { loadLocalSkills } from "./skillsLoader";
+import { contextEngine } from "./context";
 
 export interface AgentRuntimeOptions {
   model?: string;
@@ -20,11 +21,14 @@ export interface AgentRuntimeResult {
 }
 
 export function getAgentSystemPrompt(): string {
+  const memorySnippet = contextEngine.getMemoryPromptSnippet();
   return `You are ToolNet Agent — a precise, tool-first AI coding assistant running in Toolnet CLI.
 
 Active Workspace Root: ${workspaceRoot}
 Current Working Directory: ${currentCwd}
 Access: Workspace (GRANTED — full read, write, execute permission in workspace and system)
+
+${memorySnippet}
 
 CORE RULES — follow strictly:
 1. ALWAYS execute tools first. Never answer from memory about files, projects, paths, or system state.
@@ -137,20 +141,13 @@ export class AgentRuntime {
       }
 
       // Filter out temporary TUI placeholders
-      let apiMessages = messages.filter((m) => m.content !== "Thinking...");
+      const rawMessages = messages.filter((m) => m.content !== "Thinking...");
 
-      // Sliding window context truncation
-      const MAX_CONTEXT_CHARS = 32000;
-      let totalLength = apiMessages.reduce((sum, m) => sum + (m.content ? m.content.length : 0), 0);
-      if (totalLength > MAX_CONTEXT_CHARS && apiMessages.length > 2) {
-        const sys = apiMessages[0];
-        const rest = apiMessages.slice(1);
-        while (totalLength > MAX_CONTEXT_CHARS && rest.length > 2) {
-          const removed = rest.shift();
-          totalLength -= (removed?.content?.length || 0);
-        }
-        apiMessages = [sys, ...rest];
-      }
+      // Prepare context via ContextEngine (token budgeting, pruning, atomic compaction)
+      const contextPrep = contextEngine.prepareMessagesForApi(rawMessages as any, {
+        model,
+      });
+      let apiMessages = contextPrep.messages;
 
       // If workspace intent on turn 1, instruct model to call tools if it hasn't yet
       if (isWorkspaceIntent && turnCount === 1) {
@@ -267,6 +264,13 @@ export class AgentRuntime {
         if (onEvent) onEvent("TOOL_START", { toolName, toolArgs, id: call.id });
 
         const resultJson = await executeTool(toolName, toolArgs);
+
+        if (toolArgs?.path) {
+          contextEngine.recordFileAccess(
+            toolArgs.path,
+            toolName.includes("write") || toolName.includes("edit") || toolName.includes("patch") ? "write" : "read"
+          );
+        }
 
         if (onEvent) onEvent("TOOL_END", { toolName, toolArgs, result: resultJson, id: call.id });
 

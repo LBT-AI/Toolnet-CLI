@@ -351,6 +351,26 @@ export const agentTools = [
         required: ["name", "content"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "spawn_subagent",
+      description: "Spawn an autonomous specialized sub-agent (CODER, RESEARCHER, TESTER, REVIEWER, ARCHITECT, GENERAL) to execute a sub-task independently.",
+      parameters: {
+        type: "object",
+        properties: {
+          role: {
+            type: "string",
+            enum: ["CODER", "RESEARCHER", "TESTER", "REVIEWER", "ARCHITECT", "GENERAL"],
+            description: "Specialized role persona for the subagent"
+          },
+          task: { type: "string", description: "Actionable description of the sub-task to execute" },
+          context: { type: "string", description: "Optional background, dependency outputs, or file references" }
+        },
+        required: ["role", "task"]
+      }
+    }
   }
 ];
 
@@ -529,6 +549,26 @@ export async function executeTool(name: string, args: any): Promise<string> {
         stdout: res.success ? `Artifact ${name === "create_artifact" ? "created" : "updated"}: ${artifactName}` : "",
         stderr: res.error || "",
         exitCode: res.success ? 0 : 1
+      });
+    } else if (name === "spawn_subagent" || name === "delegate_task") {
+      const { executeSubagentTask } = await import("../teamwork/subagentRuntime");
+      const role = args.role || "GENERAL";
+      const task = args.task || args.prompt || "";
+      const context = args.context || "";
+      const res = await executeSubagentTask({
+        id: `sub-${Date.now()}`,
+        title: task.slice(0, 50),
+        role: role.toUpperCase() as any,
+        prompt: context ? `${context}\n\nTask: ${task}` : task,
+        status: "PENDING",
+        dependencies: [],
+      });
+      return JSON.stringify({
+        stdout: res.output || "",
+        stderr: res.error || "",
+        exitCode: res.success ? 0 : 1,
+        tokensUsed: res.tokensUsed,
+        toolCallsCount: res.toolCallsCount,
       });
     } else {
       const mcpResult = await executeMcpTool(name, args);

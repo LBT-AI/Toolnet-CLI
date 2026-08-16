@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getConfig, updateConfig } from "./config";
+import { securityEngine } from "./security";
+import type { SandboxMode, PermissionResult } from "./security/types";
 
-export type SandboxMode = "workspace" | "ask" | "full-access";
+export type { SandboxMode, PermissionResult };
 
 let currentSandboxMode: SandboxMode | null = null;
 
@@ -27,6 +29,7 @@ export function getSandboxMode(): SandboxMode {
 
 export function setSandboxMode(mode: SandboxMode): void {
   currentSandboxMode = mode;
+  securityEngine.setMode(mode);
   try {
     updateConfig({ sandboxMode: mode });
   } catch {}
@@ -44,7 +47,7 @@ export function getRealWorkspaceRoot(workspaceRoot?: string): string {
 export function resolveRealPath(targetPath: string, cwd?: string): string {
   const baseCwd = cwd || process.cwd();
   const absPath = path.isAbsolute(targetPath) ? path.normalize(targetPath) : path.resolve(baseCwd, targetPath);
-  
+
   try {
     return fs.realpathSync(absPath);
   } catch {
@@ -59,7 +62,11 @@ export function resolveRealPath(targetPath: string, cwd?: string): string {
   }
 }
 
-export function isPathInsideWorkspace(targetPath: string, workspaceRoot?: string, cwd?: string): {
+export function isPathInsideWorkspace(
+  targetPath: string,
+  workspaceRoot?: string,
+  cwd?: string
+): {
   isInside: boolean;
   resolvedPath: string;
   realWorkspaceRoot: string;
@@ -67,10 +74,10 @@ export function isPathInsideWorkspace(targetPath: string, workspaceRoot?: string
 } {
   const realRoot = getRealWorkspaceRoot(workspaceRoot);
   const realTarget = resolveRealPath(targetPath, cwd);
-  
+
   const rel = path.relative(realRoot, realTarget);
   const isInside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-  
+
   return {
     isInside,
     resolvedPath: realTarget,
@@ -79,7 +86,11 @@ export function isPathInsideWorkspace(targetPath: string, workspaceRoot?: string
   };
 }
 
-export function isDangerousShellCommand(command: string, cwd?: string, workspaceRoot?: string): {
+export function isDangerousShellCommand(
+  command: string,
+  cwd?: string,
+  workspaceRoot?: string
+): {
   isDangerous: boolean;
   reason?: string;
 } {
@@ -87,12 +98,22 @@ export function isDangerousShellCommand(command: string, cwd?: string, workspace
   const cmd = command.trim();
 
   const dangerousPatterns = [
-    "rm -rf /", "rm -rf ~", "rm -rf *",
-    "mkfs", "dd if=", ":(){ :|:& };:",
-    "chmod -R 777", "chown -R root",
-    "shutdown", "reboot",
-    "curl | sh", "curl | bash", "wget | sh", "wget | bash",
-    "| bash", "| sh"
+    "rm -rf /",
+    "rm -rf ~",
+    "rm -rf *",
+    "mkfs",
+    "dd if=",
+    ":(){ :|:& };:",
+    "chmod -R 777",
+    "chown -R root",
+    "shutdown",
+    "reboot",
+    "curl | sh",
+    "curl | bash",
+    "wget | sh",
+    "wget | bash",
+    "| bash",
+    "| sh",
   ];
   for (const pattern of dangerousPatterns) {
     if (cmd.includes(pattern)) {
@@ -122,13 +143,6 @@ export function isDangerousShellCommand(command: string, cwd?: string, workspace
   return { isDangerous: false };
 }
 
-export interface PermissionResult {
-  allowed: boolean;
-  needsApproval: boolean;
-  reason?: string;
-  resolvedPath?: string;
-}
-
 export function evaluatePermission(
   toolName: string,
   args: any,
@@ -136,77 +150,7 @@ export function evaluatePermission(
   cwd?: string,
   workspaceRoot?: string
 ): PermissionResult {
-  if (mode === "full-access") {
-    return { allowed: true, needsApproval: false };
-  }
-
-  const isShell = toolName === "run_command" || toolName === "shell";
-  const isWebTool = ["web_fetch", "browser", "browser_action", "audit_url"].includes(toolName);
-  const isFileTool = [
-    "read_file", "write_file", "edit_file", "replace_all", "file_exists",
-    "list_dir", "tree", "grep", "glob", "find_path", "create_artifact", "update_artifact",
-    "apply_patch", "git_status", "git_diff"
-  ].includes(toolName);
-
-  if (isWebTool) {
-    const action = args?.action || "fetch";
-    const url = args?.url || args?.link || "";
-    if (mode === "ask" && (action === "click" || action === "fill" || action === "evaluate")) {
-      return { allowed: true, needsApproval: true, reason: `Browser action '${action}' requires user approval` };
-    }
-    return { allowed: true, needsApproval: false };
-  }
-
-  if (isShell) {
-    const command = args?.command || args?.cmd || "";
-    const shellCheck = isDangerousShellCommand(command, cwd, workspaceRoot);
-
-    if (mode === "workspace") {
-      if (shellCheck.isDangerous) {
-        return { allowed: false, needsApproval: false, reason: `Blocked in 'workspace' sandbox mode: ${shellCheck.reason}` };
-      }
-      return { allowed: true, needsApproval: false };
-    }
-
-    if (mode === "ask") {
-      if (shellCheck.isDangerous) {
-        return { allowed: true, needsApproval: true, reason: shellCheck.reason };
-      }
-      return { allowed: true, needsApproval: false };
-    }
-  }
-
-  if (isFileTool) {
-    const targetPath = toolName.includes("artifact")
-      ? `.artifacts/${args?.name || ""}`
-      : (args?.path || args?.root || args?.query || ".");
-
-    if (toolName === "grep" || toolName === "glob" || toolName === "find_path") {
-      const searchRoot = args?.path || args?.root || ".";
-      const pathCheck = isPathInsideWorkspace(searchRoot, workspaceRoot, cwd);
-
-      if (!pathCheck.isInside) {
-        if (mode === "workspace") {
-          return { allowed: false, needsApproval: false, reason: `Path traversal blocked: "${searchRoot}" is outside workspace.` };
-        }
-        if (mode === "ask") {
-          return { allowed: true, needsApproval: true, reason: `Tool "${toolName}" accesses path outside workspace: "${pathCheck.resolvedPath}"` };
-        }
-      }
-      return { allowed: true, needsApproval: false };
-    }
-
-    const pathCheck = isPathInsideWorkspace(targetPath, workspaceRoot, cwd);
-    if (!pathCheck.isInside) {
-      if (mode === "workspace") {
-        return { allowed: false, needsApproval: false, reason: `Path traversal blocked: "${targetPath}" resolves outside workspace.` };
-      }
-      if (mode === "ask") {
-        return { allowed: true, needsApproval: true, reason: `Tool "${toolName}" accesses path outside workspace: "${pathCheck.resolvedPath}"` };
-      }
-    }
-    return { allowed: true, needsApproval: false };
-  }
-
-  return { allowed: true, needsApproval: false };
+  return securityEngine.evaluate(toolName, args, mode, cwd, workspaceRoot);
 }
+
+export * from "./security";

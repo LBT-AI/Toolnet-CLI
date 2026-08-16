@@ -20,13 +20,16 @@ export interface SavedSession {
 }
 
 export function getSessionsDir(): string {
+  if (process.env.TOOLNETCLI_SESSIONS_DIR) {
+    return process.env.TOOLNETCLI_SESSIONS_DIR;
+  }
   if (process.env.TOOLNETAPI_SESSIONS_DIR) {
     return process.env.TOOLNETAPI_SESSIONS_DIR;
   }
   if (process.env.DATA_DIR) {
     return path.join(process.env.DATA_DIR, "sessions");
   }
-  return path.join(os.homedir(), ".toolnetapi", "sessions");
+  return path.join(os.homedir(), ".toolnetcli", "sessions");
 }
 
 export function saveSession(sessionId: string, messages: any[], metadata?: any): void {
@@ -65,10 +68,16 @@ export function loadSession(sessionId: string): SavedSession | null {
   if (!sessionId) return null;
   const cleanId = sessionId.endsWith(".json") ? sessionId.slice(0, -5) : sessionId;
   const sessionsDir = getSessionsDir();
-  const filePath = path.join(sessionsDir, `${cleanId}.json`);
+  let filePath = path.join(sessionsDir, `${cleanId}.json`);
 
   if (!fs.existsSync(filePath)) {
-    return null;
+    // Check legacy ~/.toolnetapi/sessions fallback
+    const legacyPath = path.join(os.homedir(), ".toolnetapi", "sessions", `${cleanId}.json`);
+    if (fs.existsSync(legacyPath)) {
+      filePath = legacyPath;
+    } else {
+      return null;
+    }
   }
 
   try {

@@ -28,6 +28,8 @@ import { compactCommand } from "./compact";
 import { attachCommand } from "./attach";
 import { doctorCommand } from "./doctor";
 import { updateCommand } from "./update";
+import { subagentCommand } from "./subagent";
+import { harnessCommand } from "./harness";
 
 export interface CommandContext {
   gateway: GatewayClient;
@@ -84,6 +86,8 @@ const builtinCommands: Command[] = [
   attachCommand,
   doctorCommand,
   updateCommand,
+  subagentCommand,
+  harnessCommand,
 ];
 
 export function getAllCommands(): Command[] {

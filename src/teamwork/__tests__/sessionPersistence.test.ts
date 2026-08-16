@@ -19,18 +19,25 @@ describe("Session Persistence Tests", () => {
 
   beforeEach(() => {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-test-sessions-"));
-    process.env.TOOLNETAPI_SESSIONS_DIR = testDir;
+    process.env.TOOLNETCLI_SESSIONS_DIR = testDir;
   });
 
   afterEach(() => {
+    delete process.env.TOOLNETCLI_SESSIONS_DIR;
     delete process.env.TOOLNETAPI_SESSIONS_DIR;
     if (fs.existsSync(testDir)) {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
   });
 
-  test("getSessionsDir respects TOOLNETAPI_SESSIONS_DIR environment variable", () => {
+  test("getSessionsDir respects TOOLNETCLI_SESSIONS_DIR environment variable and defaults to .toolnetcli", () => {
     expect(getSessionsDir()).toBe(testDir);
+    const savedDataDir = process.env.DATA_DIR;
+    delete process.env.DATA_DIR;
+    delete process.env.TOOLNETCLI_SESSIONS_DIR;
+    expect(getSessionsDir()).toBe(path.join(os.homedir(), ".toolnetcli", "sessions"));
+    if (savedDataDir) process.env.DATA_DIR = savedDataDir;
+    process.env.TOOLNETCLI_SESSIONS_DIR = testDir;
   });
 
   test("saveSession saves session messages and metadata to JSON file", () => {
@@ -119,7 +126,7 @@ describe("Session Persistence Tests", () => {
     const s2 = createNewSession("Second Session");
     saveSession(s2.sessionId, [{ role: "user", content: "World" }], s2.metadata);
 
-    const all = listAllSessions();
+    const all = listAllSessions().filter(s => s.sessionId === s1.sessionId || s.sessionId === s2.sessionId);
     expect(all.length).toBe(2);
 
     const renamed = renameSessionFile(s1.sessionId, "Renamed Session");
@@ -130,6 +137,7 @@ describe("Session Persistence Tests", () => {
     const deleted = deleteSessionFile(s2.sessionId);
     expect(deleted).toBe(true);
     expect(loadSession(s2.sessionId)).toBeNull();
-    expect(listAllSessions().length).toBe(1);
+    const remaining = listAllSessions().filter(s => s.sessionId === s1.sessionId || s.sessionId === s2.sessionId);
+    expect(remaining.length).toBe(1);
   });
 });

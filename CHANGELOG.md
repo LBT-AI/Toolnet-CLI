@@ -1,6 +1,24 @@
 # Changelog
 All notable changes to ToolNet CLI will be documented here.
 The project follows Semantic Versioning.
+
+## [1.0.2] - 2026-08-17
+### Added
+- **Unified AgentHarness 2.0**: Centralized execution kernel and lifecycle coordinator unifying Context, Security, Tools, Persistence, and Telemetry across Interactive, Headless, Turbo, and Teamwork modes.
+- **Unified Context Engine**: Accurate token estimation, model context budgeting, automatic bulky tool pruning, atomic turn compaction preserving `tool_calls` and `role:tool` pairs, and session memory store.
+- **Security & Permissions 2.0**: SecretGuard file protection and token redaction, 5-tier semantic command classifier, smart session trust (`[A] Allow for Session`), workspace policy file `.toolnet/permissions.json`, and structured audit logging.
+- **Real Sub-Agent Execution Engine**: Autonomous child agent runtime with specialized personas (`RESEARCHER`, `CODER`, `TESTER`, `REVIEWER`, `ARCHITECT`, `GENERAL`), role-based tool filtering, infinite loop detection, and dependency context injection.
+- **New Interactive Commands**: `/harness` (system status and telemetry snapshot), `/subagent` (direct specialized subagent dispatch).
+- **Sub-Agent Delegation Tool**: `spawn_subagent` tool allowing Main Agent to delegate tasks autonomously.
+
+### Changed
+- Default sessions directory updated to `~/.toolnetcli/sessions` with backward-compatible fallback to `~/.toolnetapi/sessions`.
+- Replaced mock worker in DynamicScheduler with live subagent execution loop.
+
+## [1.0.1] - 2026-08-17
+### Added
+- Release preparation and npm package distribution.
+
 ## [1.0.0] - 2026-08-11
 ### Added
 - Standalone ToolNet CLI repository
@@ -27,4 +45,7 @@ The project follows Semantic Versioning.
 ### Changed
 - ToolNet CLI separated from the ToolNet API repository
 - Repository metadata now points to LBT-AI/Toolnet-CLI
+
+[1.0.2]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.2
+[1.0.1]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.1
 [1.0.0]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.0

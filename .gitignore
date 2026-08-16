@@ -3,5 +3,7 @@ dist/
 .logs/
 *.tgz
 *.log
+*.db
+*.sqlite
 .env
 .DS_Store
