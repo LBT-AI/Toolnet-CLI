@@ -36,6 +36,7 @@ import { printToolStart, printToolEnd } from "./lib/tool-format";
 import { backgroundTasks } from "./lib/backgroundTasks";
 import { compactMessages, contextEngine } from "./lib/context";
 import { parseAndProcessInput } from "./lib/attachments";
+import { bypassEngine } from "./lib/bypass";
 
 import { A, T, write, getSize } from "./term";
 import { playSplashAnimation } from "./splash";
@@ -91,8 +92,8 @@ let spinnerTimer: ReturnType<typeof setInterval> | null = null;
 let pendingConfirmation: { prompt: string, onDecision?: (choice: "y" | "a" | "n") => void, resolve: (val: boolean) => void } | null = null;
 let currentModel = "openai/gpt-4o";
 let agentMode: "Build" | "Plan" = "Build";
-let bypassMode = false;
-let bypassLevel = "full";
+let bypassMode = bypassEngine.isEnabled();
+let bypassLevel = bypassEngine.getLevel();
 let gatewayUrl = "http://127.0.0.1:20127";
 let showHelp = false;
 let showModelPicker = false;
@@ -156,7 +157,7 @@ function renderAll() {
   }
 
   // ── Header ──
-  const bypassLabel = bypassMode ? A.fgRed + `[Jailbreak:${bypassLevel}] ` + A.reset : "";
+  const bypassLabel = bypassMode ? A.fgRed + `[Bypass:${bypassLevel.toUpperCase()}] ` + A.reset : "";
   const modeLabel = A.fgSubtext + "[" + A.fgText + agentMode + A.fgSubtext + "] " + bypassLabel + A.reset;
   const modelLabel = A.fgSubtext + "Model: " + A.fgText + truncate(currentModel, 30) + A.reset;
   const gwLabel = A.fgSubtext + " │ GW: " + A.fgGreen + "●" + A.reset + " ";
@@ -582,7 +583,10 @@ async function sendMessage(text: string) {
       setStatus("Calling API…");
 
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (bypassMode) headers["x-bypass-toolnet"] = "true";
+      if (bypassMode) {
+        headers["x-bypass-toolnet"] = "true";
+        headers["x-bypass-level"] = bypassLevel;
+      }
 
       const providerStr = currentModel.includes("/") ? currentModel.split("/")[0] : currentModel;
       let localKey = getCliKey(providerStr);
@@ -952,10 +956,12 @@ async function handleCommand(cmd: string) {
         exit: exitApp,
         currentModel: () => currentModel,
         setBypassMode: (enabled: boolean, level?: string) => {
+          bypassEngine.setBypass(enabled, level as any);
           bypassMode = enabled;
-          if (level) bypassLevel = level;
-          showToast(enabled ? `Jailbreak Mode ENABLED (${bypassLevel})` : "Jailbreak Mode DISABLED");
-          setStatus(`Jailbreak Mode: ${enabled ? "ON" : "OFF"}${level ? ` (${level})` : ""}`);
+          if (level) bypassLevel = level as any;
+          showToast(enabled ? `Bypass 2.0 Mode ENABLED (${bypassLevel.toUpperCase()})` : "Bypass Mode DISABLED");
+          setStatus(`Bypass Mode: ${enabled ? "ON" : "OFF"}${level ? ` (${level})` : ""}`);
+          renderAll();
         },
         getCurrentSessionId: () => currentSessionId,
         setCurrentSessionId: (id: string) => { currentSessionId = id; },

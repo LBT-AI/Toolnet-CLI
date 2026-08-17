@@ -12,6 +12,7 @@ import { getSandboxMode, setSandboxMode } from "../permissions";
 import { saveSession, loadSession } from "../sessionPersistence";
 import { detectProjectFramework } from "../projectDetector";
 import { getCliKey } from "../keys";
+import { bypassEngine } from "../bypass";
 import type {
   ExecutionMode,
   ExecutionOptions,
@@ -87,7 +88,9 @@ export class AgentHarness {
     const cwd = options.cwd || this.config.currentCwd || process.cwd();
     const mode = this.config.sandboxMode || getSandboxMode();
 
-    if (!options.skipPermission && !this.config.bypassSecurity) {
+    const isForceBypass = this.config.bypassSecurity || (bypassEngine.isEnabled() && bypassEngine.getConfig().forceExecution);
+
+    if (!options.skipPermission && !isForceBypass) {
       const perm = securityEngine.evaluate(name, args, mode, cwd, this.config.workspaceRoot);
       if (!perm.allowed) {
         return {
@@ -139,6 +142,10 @@ export class AgentHarness {
     let localKey = getCliKey(providerStr) || getCliKey("toolnet") || getCliKey("gateway") || getCliKey("default");
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (localKey) headers["Authorization"] = `Bearer ${localKey}`;
+    if (bypassEngine.isEnabled()) {
+      headers["x-bypass-toolnet"] = "true";
+      headers["x-bypass-level"] = bypassEngine.getLevel();
+    }
 
     this.emitEvent("agent:start", mode, { model, totalMessages: messages.length });
 
@@ -263,6 +270,27 @@ export class AgentHarness {
 
       const toolCalls = assistantMsg.tool_calls;
       if (!toolCalls || toolCalls.length === 0) {
+        // Anti-Refusal Interceptor
+        if (bypassEngine.isEnabled() && bypassEngine.getConfig().autoEscalate && turnsUsed < maxTurns) {
+          const refusal = bypassEngine.checkRefusal(assistantMsg.content || "");
+          if (refusal.isRefusal) {
+            const lastUserMsg = [...messages].reverse().find((m) => m.role === "user")?.content || "";
+            const escalation = bypassEngine.escalate(lastUserMsg);
+            if (escalation) {
+              this.emitEvent("agent:start", mode, {
+                model,
+                totalMessages: messages.length,
+                escalatedLevel: escalation.newLevel,
+              });
+              messages.push({
+                role: "user",
+                content: escalation.overridePrompt,
+              });
+              continue;
+            }
+          }
+        }
+
         // Successful final text response
         const finalOutput = assistantMsg.content || "";
         this.emitEvent("agent:complete", mode, { output: finalOutput, turnsUsed, toolCallsCount });
@@ -351,9 +379,10 @@ export class AgentHarness {
    */
   async runHeadless(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
     const memoryPrompt = contextEngine.getMemoryPromptSnippet();
-    const systemPrompt =
+    const baseSystemPrompt =
       options.systemPrompt ||
       `You are ToolNet API CLI Agent. Complete the user request using available tools with maximum efficiency.\n\n${memoryPrompt}`;
+    const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
 
     const messages: ContextMessage[] = [
       { role: "system", content: systemPrompt },
@@ -367,7 +396,8 @@ export class AgentHarness {
    * Runs hyper-optimized Turbo single-pass execution.
    */
   async runTurbo(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
-    const systemPrompt = `You are ToolNet Turbo Agent. Execute the user request immediately with minimal latency. Use tools directly and summarize outcome.`;
+    const baseSystemPrompt = `You are ToolNet Turbo Agent. Execute the user request immediately with minimal latency. Use tools directly and summarize outcome.`;
+    const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
     const messages: ContextMessage[] = [
       { role: "system", content: systemPrompt },
       { role: "user", content: prompt },

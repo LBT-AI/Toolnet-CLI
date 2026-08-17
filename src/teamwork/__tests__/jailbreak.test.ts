@@ -3,8 +3,9 @@ import { dispatchCommand, type CommandContext } from "../../commands/index";
 import { jailbreakCommand } from "../../commands/jailbreak";
 import { getCwdInfo, setBypassPolicy } from "../../lib/codingAgent";
 import { setSandboxMode } from "../../lib/permissions";
+import { bypassEngine } from "../../lib/bypass";
 
-describe("Unified Guardrail Bypass & Jailbreak Subsystem", () => {
+describe("Unified Guardrail Bypass & Jailbreak Subsystem 2.0", () => {
   let mockSettings: { jailbreakEnabled: boolean; jailbreakLevel: string; jailbreakCustomPrompt?: string };
   let mockContext: CommandContext;
   let messages: Array<{ role: string; content: string }>;
@@ -19,6 +20,7 @@ describe("Unified Guardrail Bypass & Jailbreak Subsystem", () => {
     currentBypassState = { enabled: false };
     setSandboxMode("workspace");
     setBypassPolicy(false);
+    bypassEngine.setBypass(false, "full");
 
     const mockGateway: any = {
       getSettings: mock(async () => ({
@@ -48,8 +50,8 @@ describe("Unified Guardrail Bypass & Jailbreak Subsystem", () => {
     const res = await dispatchCommand("/bypass", mockContext);
     expect(res).toBe(true);
     expect(messages.length).toBe(1);
-    expect(messages[0].content).toContain("Guardrail Bypass / Jailbreak: \x1b[31mOFF\x1b[0m");
-    expect(messages[0].content).toContain("Permissions & SecretGuard");
+    expect(messages[0].content).toContain("Guardrail Bypass / Jailbreak 2.0: \x1b[31mOFF\x1b[0m");
+    expect(messages[0].content).toContain("godmode");
   });
 
   test("2. /bypass on enables bypass and updates gateway + TUI state", async () => {
@@ -58,7 +60,7 @@ describe("Unified Guardrail Bypass & Jailbreak Subsystem", () => {
     expect(mockSettings.jailbreakEnabled).toBe(true);
     expect(currentBypassState.enabled).toBe(true);
     expect(currentBypassState.level).toBe("full");
-    expect(messages[0].content).toContain("Guardrail bypass: \x1b[32mON\x1b[0m");
+    expect(messages[0].content).toContain("Guardrail bypass 2.0: \x1b[32mON\x1b[0m");
   });
 
   test("3. /bypass toggle toggles state seamlessly", async () => {
@@ -73,13 +75,14 @@ describe("Unified Guardrail Bypass & Jailbreak Subsystem", () => {
     expect(currentBypassState.enabled).toBe(false);
   });
 
-  test("4. /bypass <level> sets specialized level (ultra, chad, chad-ultra)", async () => {
-    await dispatchCommand("/bypass chad-ultra", mockContext);
+  test("4. /bypass <level> sets specialized level (godmode, devmode, cybersec, chad-ultra)", async () => {
+    await dispatchCommand("/bypass godmode", mockContext);
     expect(mockSettings.jailbreakEnabled).toBe(true);
-    expect(mockSettings.jailbreakLevel).toBe("chad-ultra");
+    expect(mockSettings.jailbreakLevel).toBe("godmode");
     expect(currentBypassState.enabled).toBe(true);
-    expect(currentBypassState.level).toBe("chad-ultra");
-    expect(messages[0].content).toContain("Level: \x1b[36mchad-ultra\x1b[0m");
+    expect(currentBypassState.level).toBe("godmode");
+    expect(messages[0].content).toContain("Level: \x1b[36mgodmode\x1b[0m");
+    expect(messages[0].content).toContain("Potency: 10/10");
   });
 
   test("5. /bypass custom <prompt> injects custom system prompt", async () => {
@@ -90,7 +93,23 @@ describe("Unified Guardrail Bypass & Jailbreak Subsystem", () => {
     expect(currentBypassState.enabled).toBe(true);
   });
 
-  test("6. Sandbox full-access mode automatically reflects in getCwdInfo bypassPolicy", () => {
+  test("6. /bypass levels renders complete 10-level matrix", async () => {
+    await dispatchCommand("/bypass levels", mockContext);
+    expect(messages[0].content).toContain("ToolNet Bypass 2.0 — Prompt & Jailbreak Matrix");
+    expect(messages[0].content).toContain("godmode");
+    expect(messages[0].content).toContain("devmode");
+    expect(messages[0].content).toContain("cybersec");
+  });
+
+  test("7. /bypass retry and /bypass force toggle anti-refusal and execution bypass", async () => {
+    await dispatchCommand("/bypass retry on", mockContext);
+    expect(bypassEngine.getConfig().autoEscalate).toBe(true);
+
+    await dispatchCommand("/bypass force on", mockContext);
+    expect(bypassEngine.getConfig().forceExecution).toBe(true);
+  });
+
+  test("8. Sandbox full-access mode automatically reflects in getCwdInfo bypassPolicy", () => {
     setSandboxMode("workspace");
     expect(getCwdInfo().bypassPolicy).toBe(false);
 

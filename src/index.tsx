@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { initWorkspace } from "./lib/codingAgent";
-const CLI_VERSION = "1.0.4";
+const CLI_VERSION = "1.0.5";
 initWorkspace();
 const args = process.argv.slice(2);
 if (args.includes("--version") || args.includes("-v")) {
@@ -16,6 +16,7 @@ USAGE:
 OPTIONS:
   -p, --prompt <text>   Run once without opening the TUI
   -s, --simple          Run lightweight REPL
+  -b, --bypass [level]  Enable Bypass/Jailbreak mode (e.g. --bypass godmode)
   -v, --version         Print version
   -h, --help            Show help
   --no-splash           Skip startup splash
@@ -23,6 +24,7 @@ OPTIONS:
   --json                JSON output with -p
 INTERACTIVE COMMANDS:
   /help
+  /bypass
   /status
   /model
   /session
@@ -34,6 +36,17 @@ INTERACTIVE COMMANDS:
   /exit
 `);
   process.exit(0);
+}
+
+// Check --bypass flag
+if (args.includes("--bypass") || args.includes("-b")) {
+  const { bypassEngine, ALL_BYPASS_LEVELS } = await import("./lib/bypass");
+  const bpIdx = args.findIndex((a) => a === "--bypass" || a === "-b");
+  let level: any = undefined;
+  if (bpIdx >= 0 && args[bpIdx + 1] && !args[bpIdx + 1].startsWith("-") && ALL_BYPASS_LEVELS.includes(args[bpIdx + 1] as any)) {
+    level = args[bpIdx + 1];
+  }
+  bypassEngine.setBypass(true, level || "godmode");
 }
 const promptIdx = args.findIndex(
   (arg) => arg === "-p" || arg === "--prompt"

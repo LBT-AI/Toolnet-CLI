@@ -2,6 +2,15 @@
 All notable changes to ToolNet CLI will be documented here.
 The project follows Semantic Versioning.
 
+## [1.0.5] - 2026-08-17
+### Added
+- **Bypass & Jailbreak Engine 2.0 (`src/lib/bypass/`)**:
+  - Expanded 10-level matrix with dedicated high-potency frameworks: `godmode` (Omnipotent Root), `devmode` (Developer Mode v2), `cybersec` (Offensive Security & Red Teaming), `chad-ultra`, `ultra`, `chad`, `chad-lite`, `full`, `lite`, `raw`, and `custom`.
+  - **Multi-Language Anti-Refusal Interceptor**: Real-time heuristic detection of refusal patterns in English, Vietnamese, and Chinese.
+  - **Auto-Escalation & Recovery Engine**: Automatically detects AI safety refusals ("I cannot...", "Tôi không thể...") and escalates bypass potency to re-generate the answer unconditionally.
+  - **CLI Flags Support**: Added `--bypass [level]` and `-b [level]` command-line flags.
+  - **REPL & TUI Integration**: Dynamic prompt badges (`[Bypass:GODMODE]`), persistent configuration storage (`~/.toolnetcli/bypass-config.json`), and `/bypass levels`, `/bypass retry`, `/bypass force` subcommands.
+
 ## [1.0.4] - 2026-08-17
 ### Added
 - **Dual Binary Aliases**: Added `toolnetcli` alias alongside `toolnet` in package `bin` config for global execution.
@@ -58,6 +67,7 @@ The project follows Semantic Versioning.
 - ToolNet CLI separated from the ToolNet API repository
 - Repository metadata now points to LBT-AI/Toolnet-CLI
 
+[1.0.5]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.5
 [1.0.4]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.4
 [1.0.3]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.3
 [1.0.2]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.2

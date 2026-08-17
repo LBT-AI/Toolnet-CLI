@@ -3,6 +3,7 @@ import { getSandboxMode } from "../lib/permissions";
 import { getSessionsDir } from "../lib/sessionPersistence";
 import { getCwdInfo } from "../lib/codingAgent";
 import { getCliKey } from "../lib/keys";
+import { bypassEngine } from "../lib/bypass";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 
@@ -68,6 +69,7 @@ export const doctorCommand: Command = {
       `• Workspace CWD: ${cwd}`,
       `• Sessions Dir : ${sessionsDir} (${fs.existsSync(sessionsDir) ? "Writable ✓" : "Missing ✗"})`,
       `• Sandbox Mode : ${sandbox.toUpperCase()}`,
+      `• Bypass 2.0   : ${bypassEngine.isEnabled() ? `ACTIVE (${bypassEngine.getLevel().toUpperCase()})` : "OFF"} (Auto-Escalate: ${bypassEngine.getConfig().autoEscalate ? "ON" : "OFF"})`,
       `• Active Model : ${ctx.currentModel()}`,
       `• Gateway URL  : ${ctx.gateway.getBaseUrl()} [${gwStatus}]`,
       ``,

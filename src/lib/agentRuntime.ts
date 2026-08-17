@@ -3,6 +3,7 @@ import { agentTools, getMergedAgentTools, executeTool } from "./agentTools";
 import { workspaceRoot, currentCwd } from "./codingAgent";
 import { loadLocalSkills } from "./skillsLoader";
 import { contextEngine } from "./context";
+import { bypassEngine } from "./bypass";
 
 export interface AgentRuntimeOptions {
   model?: string;
@@ -22,7 +23,7 @@ export interface AgentRuntimeResult {
 
 export function getAgentSystemPrompt(): string {
   const memorySnippet = contextEngine.getMemoryPromptSnippet();
-  return `You are ToolNet Agent — a precise, tool-first AI coding assistant running in Toolnet CLI.
+  const basePrompt = `You are ToolNet Agent — a precise, tool-first AI coding assistant running in Toolnet CLI.
 
 Active Workspace Root: ${workspaceRoot}
 Current Working Directory: ${currentCwd}
@@ -52,7 +53,7 @@ FINAL ANSWER:
 - Do NOT say 'hy vọng giúp bạn' or similar filler.
 - If not found: state exactly where you searched.
 
-<skills>
+  <skills>
 You can use specialized 'skills' to help you with complex tasks. Each skill has a name and a description.
 When a skill is relevant to the user's request, you must read and follow its instructions carefully.
 Available skills:
@@ -62,6 +63,7 @@ ${
     .join("\n")
 }
 </skills>`;
+  return bypassEngine.getBypassSystemPrompt(basePrompt);
 }
 
 export const AGENT_SYSTEM_PROMPT = getAgentSystemPrompt();
@@ -219,6 +221,22 @@ export class AgentRuntime {
             content: "Lỗi: Bạn có toàn quyền Access: Workspace trong Toolnet CLI. Hãy thực thi get_cwd, list_dir, read_file hoặc shell ngay bây giờ.",
           });
           continue;
+        }
+
+        // Anti-Refusal Interceptor: detect refusal phrases and escalate bypass level
+        if (bypassEngine.isEnabled() && bypassEngine.getConfig().autoEscalate && turnCount < maxTurns) {
+          const refusal = bypassEngine.checkRefusal(assistantMsg.content || "");
+          if (refusal.isRefusal) {
+            const escalation = bypassEngine.escalate(lastUserMsg);
+            if (escalation) {
+              if (onEvent) onEvent("BYPASS_ESCALATED", { newLevel: escalation.newLevel, matched: refusal.matchedPattern });
+              messages.push({
+                role: "user",
+                content: escalation.overridePrompt,
+              });
+              continue;
+            }
+          }
         }
 
         // Loop finished, final textual answer obtained

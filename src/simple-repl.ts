@@ -6,6 +6,7 @@ import { AgentRuntime } from "./lib/agentRuntime";
 import { printToolStart, printToolEnd } from "./lib/tool-format";
 import * as readline from "node:readline";
 import { playSplashAnimation } from "./splash";
+import { bypassEngine } from "./lib/bypass";
 
 // ─── True color ANSI helpers (Catppuccin Mocha) ──────────────────────────
 
@@ -441,12 +442,21 @@ export async function main() {
 
   const commandNames = getAllCommands().map(c => c.name);
 
+  const getPromptString = () => {
+    const bp = bypassEngine.isEnabled() ? `\x1b[31m[Bypass:${bypassEngine.getLevel()}]\x1b[0m ` : "";
+    return bp + color.teal + "▸ " + C.reset;
+  };
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: color.teal + "▸ " + C.reset,
+    prompt: getPromptString(),
     historySize: 100,
     completer: makeCompleter(commandNames),
+  });
+
+  bypassEngine.onConfigChange(() => {
+    rl.setPrompt(getPromptString());
   });
 
   process.stdin.resume();
@@ -471,6 +481,10 @@ export async function main() {
           process.exit(0);
         },
         currentModel: () => currentModel,
+        setBypassMode: (enabled: boolean, level?: string) => {
+          bypassEngine.setBypass(enabled, level as any);
+          rl.setPrompt(getPromptString());
+        },
       };
 
       await dispatchCommand(v, ctx);
