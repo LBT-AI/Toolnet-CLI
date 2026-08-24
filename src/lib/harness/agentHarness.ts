@@ -94,9 +94,33 @@ export class AgentHarness {
       const perm = securityEngine.evaluate(name, args, mode, cwd, this.config.workspaceRoot);
       if (!perm.allowed) {
         return {
-          result: JSON.stringify({ error: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}` }),
+          result: JSON.stringify({
+            stdout: "",
+            stderr: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}`,
+            exitCode: 1,
+            permissionDenied: true,
+          }),
           allowed: false,
           reason: perm.reason,
+        };
+      }
+
+      // Headless/sub-agent execution has no interactive Y/A/N prompt. Never
+      // silently execute an action that the security policy marked as needing
+      // approval. The interactive TUI handles this before dispatch; harness
+      // callers must either obtain approval first or explicitly use a trusted
+      // / full-access execution policy.
+      if (perm.needsApproval) {
+        const reason = perm.reason || `Tool "${name}" requires user confirmation.`;
+        return {
+          result: JSON.stringify({
+            stdout: "",
+            stderr: `Approval Required: ${reason}`,
+            exitCode: 1,
+            approvalRequired: true,
+          }),
+          allowed: false,
+          reason,
         };
       }
     }
