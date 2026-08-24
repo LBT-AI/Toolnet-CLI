@@ -56,6 +56,22 @@ describe("Unified AgentHarness Architecture", () => {
       expect(blockedRes.allowed).toBe(false);
       expect(blockedRes.result).toContain("Permission Denied");
     });
+
+    test("fails closed when ask mode requires user approval", async () => {
+      const cwd = process.cwd();
+      const harness = new AgentHarness({
+        sandboxMode: "ask",
+        workspaceRoot: cwd,
+        currentCwd: cwd,
+      });
+
+      // Outside-workspace reads are allowed only after an interactive approval
+      // in ask mode. Headless/sub-agent harness execution must not auto-run it.
+      const res = await harness.dispatchTool("read_file", { path: "/etc/hosts" });
+      expect(res.allowed).toBe(false);
+      expect(res.result).toContain("Approval Required");
+      expect(res.result).toContain("approvalRequired");
+    });
   });
 
   describe("3. Headless Execution Strategy", () => {
