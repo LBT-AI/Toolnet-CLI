@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { getModelTags } from "../../lib/modelTags";
+import { shouldRenderToolStart } from "../../lib/tool-format";
 
 describe("Rendering utilities", () => {
   it("should extract capability tags for vision models", () => {
@@ -24,6 +25,13 @@ describe("Rendering utilities", () => {
     
     const claude = getModelTags("cc/claude-sonnet-4-5");
     expect(claude).toContain("[Context: 128k]");
+  });
+
+  it("should suppress pending tool rows only in full-screen raw TUI mode", () => {
+    expect(shouldRenderToolStart([], true)).toBe(false);
+    expect(shouldRenderToolStart(["--simple"], true)).toBe(true);
+    expect(shouldRenderToolStart(["-s"], true)).toBe(true);
+    expect(shouldRenderToolStart([], false)).toBe(true);
   });
 
   it("should format diffs correctly (simulated)", () => {

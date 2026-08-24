@@ -102,11 +102,19 @@ export function renderToolLine(
  * The full-screen TUI re-renders its entire transcript on every state update.
  * Keeping the assistant's pending tool_call row in that transcript causes the
  * same action to appear twice after completion: once as `…` and once as `✓`.
- * While raw mode is active the status bar already shows the running action, so
- * completed tool rows are the single source of truth in chat history.
+ *
+ * The lightweight --simple REPL also uses raw terminal mode, but it has no
+ * persistent status bar and therefore still needs the start row. Keep the
+ * decision explicit and testable instead of treating raw mode alone as proof
+ * that the full-screen transcript renderer is active.
  */
-export function shouldRenderToolStart(): boolean {
-  return process.stdin.isRaw !== true
+export function shouldRenderToolStart(
+  argv: readonly string[] = process.argv.slice(2),
+  isRaw: boolean = process.stdin.isRaw === true,
+): boolean {
+  const isSimpleRepl = argv.includes("--simple") || argv.includes("-s")
+  if (isSimpleRepl) return true
+  return !isRaw
 }
 
 export function printToolStart(toolName: string, args: any): string {
