@@ -98,7 +98,19 @@ export function renderToolLine(
   return `${ANSI.dim}◑${ANSI.reset} ${ANSI.yellow}${action}${ANSI.reset} ${ANSI.cyan}(${target})${ANSI.reset} ${suffix}`
 }
 
+/**
+ * The full-screen TUI re-renders its entire transcript on every state update.
+ * Keeping the assistant's pending tool_call row in that transcript causes the
+ * same action to appear twice after completion: once as `…` and once as `✓`.
+ * While raw mode is active the status bar already shows the running action, so
+ * completed tool rows are the single source of truth in chat history.
+ */
+export function shouldRenderToolStart(): boolean {
+  return process.stdin.isRaw !== true
+}
+
 export function printToolStart(toolName: string, args: any): string {
+  if (!shouldRenderToolStart()) return ""
   return renderToolLine(toolName, args, "running")
 }
 
