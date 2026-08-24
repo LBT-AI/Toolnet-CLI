@@ -8,6 +8,7 @@ import { agentTools, executeTool } from "../lib/agentTools";
 import { workspaceRoot, currentCwd } from "../lib/codingAgent";
 import { contextEngine, type ContextMessage } from "../lib/context";
 import { getCliKey } from "../lib/keys";
+import { evaluatePermission, getSandboxMode } from "../lib/permissions";
 import type { AgentRole, TaskNode } from "./types";
 import type { EventBus } from "./eventBus";
 
@@ -305,7 +306,28 @@ export async function executeSubagentTask(
         onEvent("subagent:tool", { nodeId: node.id, role, toolName, toolArgs, id: call.id });
       }
 
-      const resultJson = await executeTool(toolName, toolArgs);
+      const perm = evaluatePermission(toolName, toolArgs, getSandboxMode(), currentCwd, workspaceRoot);
+      let resultJson: string;
+      if (!perm.allowed) {
+        resultJson = JSON.stringify({
+          stdout: "",
+          stderr: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}`,
+          exitCode: 1,
+          permissionDenied: true,
+        });
+      } else if (perm.needsApproval) {
+        // Child agents cannot grant their own permissions. Any ask-mode action
+        // that requires approval must be surfaced to the parent/user instead of
+        // being executed silently.
+        resultJson = JSON.stringify({
+          stdout: "",
+          stderr: `Approval Required: ${perm.reason || `Tool "${toolName}" requires user confirmation.`}`,
+          exitCode: 1,
+          approvalRequired: true,
+        });
+      } else {
+        resultJson = await executeTool(toolName, toolArgs);
+      }
 
       if (toolArgs?.path) {
         contextEngine.recordFileAccess(

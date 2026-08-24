@@ -4,6 +4,7 @@ import { workspaceRoot, currentCwd } from "./codingAgent";
 import { loadLocalSkills } from "./skillsLoader";
 import { contextEngine } from "./context";
 import { bypassEngine } from "./bypass";
+import { evaluatePermission, getSandboxMode } from "./permissions";
 
 export interface AgentRuntimeOptions {
   model?: string;
@@ -281,7 +282,28 @@ export class AgentRuntime {
         toolCallsCount++;
         if (onEvent) onEvent("TOOL_START", { toolName, toolArgs, id: call.id });
 
-        const resultJson = await executeTool(toolName, toolArgs);
+        const perm = evaluatePermission(toolName, toolArgs, getSandboxMode(), currentCwd, workspaceRoot);
+        let resultJson: string;
+        if (!perm.allowed) {
+          resultJson = JSON.stringify({
+            stdout: "",
+            stderr: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}`,
+            exitCode: 1,
+            permissionDenied: true,
+          });
+        } else if (perm.needsApproval) {
+          // AgentRuntime is used by the lightweight REPL and other paths that do
+          // not own an interactive approval modal. Fail closed instead of
+          // silently executing an ask-mode action.
+          resultJson = JSON.stringify({
+            stdout: "",
+            stderr: `Approval Required: ${perm.reason || `Tool "${toolName}" requires user confirmation.`}`,
+            exitCode: 1,
+            approvalRequired: true,
+          });
+        } else {
+          resultJson = await executeTool(toolName, toolArgs);
+        }
 
         if (toolArgs?.path) {
           contextEngine.recordFileAccess(
