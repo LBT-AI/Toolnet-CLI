@@ -46,6 +46,68 @@ describe("Step 2 - P0-A Agent Execution Foundation", () => {
     expect(parsed.stdout).toContain("toolnet");
   });
 
+  test("AgentRuntime fails closed when ask mode requires approval", async () => {
+    const origFetch = global.fetch;
+    let step = 0;
+
+    global.fetch = (mock as any)(async () => {
+      step++;
+      if (step === 1) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: "",
+                  tool_calls: [
+                    {
+                      id: "approval_call",
+                      type: "function",
+                      function: {
+                        name: "read_file",
+                        arguments: JSON.stringify({ path: "/etc/hosts" }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "Approval is required before reading that file.",
+              },
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+    });
+
+    try {
+      const runtime = new AgentRuntime({ maxTurns: 3, gatewayUrl: "http://127.0.0.1:9999" });
+      const messages: any[] = [{ role: "user", content: "Read /etc/hosts" }];
+      const res = await runtime.runLoop(messages);
+
+      expect(res.success).toBe(true);
+      const toolResult = messages.find((m) => m.role === "tool" && m.tool_call_id === "approval_call");
+      expect(toolResult).toBeDefined();
+      expect(toolResult.content).toContain("Approval Required");
+      expect(toolResult.content).toContain("approvalRequired");
+    } finally {
+      global.fetch = origFetch;
+    }
+  });
+
   test("AgentRuntime detects infinite loops and aborts execution after 3 identical calls", async () => {
     const origFetch = global.fetch;
     let fetchCount = 0;
