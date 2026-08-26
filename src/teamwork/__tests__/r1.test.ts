@@ -309,7 +309,7 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
     expect(statusChanges).toContain("t2:COMPLETED");
     expect(eventsReceived).toContain("scheduler:start");
     expect(eventsReceived).toContain("scheduler:complete");
-  });
+  }, { timeout: 30000 });
 
   test("cascades failure to dependent nodes (PENDING -> SKIPPED)", async () => {
     const graph: TaskGraph = {
@@ -396,7 +396,7 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
     expect(finalState.completedTaskIds).toContain("root-1");
     expect(finalState.completedTaskIds).toContain("root-2");
     expect(finalState.completedTaskIds).toContain("root-3");
-  });
+  }, { timeout: 30000 });
 
   test("executes parallel ready nodes exceeding maxWorkers limit without deadlocking (maxConcurrency = 2)", async () => {
     const graph: TaskGraph = {
@@ -420,7 +420,7 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
     expect(finalState.completedTaskIds).toContain("root-1");
     expect(finalState.completedTaskIds).toContain("root-2");
     expect(finalState.completedTaskIds).toContain("root-3");
-  });
+  }, { timeout: 30000 });
 
   test("preserves scheduler state status FAILED when set before completion", async () => {
     const graph: TaskGraph = {

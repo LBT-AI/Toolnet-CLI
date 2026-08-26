@@ -182,8 +182,6 @@ export class DynamicScheduler {
     this.state.startTime = Date.now();
     this.emitEvent("scheduler:start");
 
-    await this.processQueue();
-
     return new Promise((resolve) => {
       const checkCompletion = () => {
         const totalProcessed =
@@ -210,7 +208,11 @@ export class DynamicScheduler {
         }
       });
 
+      // Check first in case all tasks already completed synchronously
       checkCompletion();
+
+      // Then start processing - tasks complete async and emit events
+      this.processQueue().catch(console.error);
     });
   }
 
