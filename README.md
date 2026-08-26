@@ -8,7 +8,7 @@
 [![license](https://img.shields.io/npm/l/toolnetcli.svg?style=flat-square&color=green)](LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg?style=flat-square)](https://nodejs.org)
 [![bun](https://img.shields.io/badge/bun-%3E%3D1.1.0-orange.svg?style=flat-square)](https://bun.sh)
-[![tests](https://img.shields.io/badge/tests-172%20passing-success.svg?style=flat-square)](https://github.com/LBT-AI/Toolnet-CLI)
+[![tests](https://img.shields.io/badge/tests-271%20passing-success.svg?style=flat-square)](https://github.com/LBT-AI/Toolnet-CLI)
 
 **ToolNet CLI** is a next-generation, high-performance terminal coding assistant engineered for developers, devops, and agentic workflows. Built on the **Unified AgentHarness 2.0** architecture, it unifies interactive terminal streaming, autonomous multi-agent task graphs (DAG), role-based sub-agent delegation, intelligent context compaction, and multi-tier security sandboxing into a single developer tool.
 
@@ -38,14 +38,54 @@
 
 ### Installation
 
-Install globally via npm or bun:
+#### macOS / Linux (recommended)
 
 ```bash
-# Via npm
-npm install -g toolnetcli@latest
+curl -fsSL https://raw.githubusercontent.com/LBT-AI/Toolnet-CLI/main/install.sh | sh
+```
 
-# Via bun
-bun install -g toolnetcli@latest
+This downloads a standalone binary — no Bun or Node.js required.
+
+#### npm
+
+```bash
+npm install -g toolnetcli@latest
+```
+
+#### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/LBT-AI/Toolnet-CLI/main/install.ps1 | iex
+```
+
+#### Homebrew
+
+```bash
+brew install lbt-ai/tap/toolnet
+```
+
+#### Scoop (Windows)
+
+```bash
+scoop install toolnet
+```
+
+> **Note:** Homebrew and Scoop packages are coming soon.
+
+### Uninstall
+
+```bash
+# Binary install
+rm /usr/local/bin/toolnet  # or ~/.local/bin/toolnet
+
+# npm install
+npm uninstall -g toolnetcli
+
+# Homebrew
+brew uninstall toolnet
+
+# Scoop
+scoop uninstall toolnet
 ```
 
 ### Launching Interactive Mode
@@ -196,7 +236,7 @@ bun install
 # Typecheck
 bun run typecheck
 
-# Run comprehensive test suite (172 tests)
+# Run comprehensive test suite (271 tests)
 bun test
 
 # Build production bundles (Bun & Node.js)

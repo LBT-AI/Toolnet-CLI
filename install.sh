@@ -141,16 +141,17 @@ main() {
       *) export PATH="$install_dir:$PATH" ;;
     esac
 
-    local shell_rc=""
-    if [ -f "$HOME/.bashrc" ]; then shell_rc="$HOME/.bashrc"
-    elif [ -f "$HOME/.zshrc" ]; then shell_rc="$HOME/.zshrc"
-    fi
-    if [ -n "$shell_rc" ] && ! grep -q "$install_dir" "$shell_rc" 2>/dev/null; then
-      info "Adding $install_dir to PATH in $shell_rc"
-      echo "" >> "$shell_rc"
-      echo "# ToolNet CLI" >> "$shell_rc"
-      echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$shell_rc"
-    fi
+    # Inform the user if ~/.local/bin is not in PATH (do NOT auto-modify rc files)
+    case ":$PATH:" in
+      *":$install_dir:"*) ;;
+      *)
+        echo ""
+        warn "$install_dir is not in your PATH."
+        echo "  Add this line to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
+        echo "    export PATH=\"$HOME/.local/bin:\$PATH\""
+        echo ""
+        ;;
+    esac
   fi
 
   local target_path="${install_dir}/${BINARY_NAME}${ext}"

@@ -1,0 +1,29 @@
+{
+  "version": "1.0.5",
+  "description": "AI coding agent for the terminal",
+  "homepage": "https://github.com/LBT-AI/Toolnet-CLI",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/LBT-AI/Toolnet-CLI/releases/download/v1.0.5/toolnet-windows-x64.zip",
+      "hash": "SHA256PLACEHOLDER_WINDOWS_X64"
+    }
+  },
+  "bin": "toolnet.exe",
+  "checkver": {
+    "url": "https://api.github.com/repos/LBT-AI/Toolnet-CLI/releases/latest",
+    "jsonpath": "$.tag_name",
+    "regex": "v([\\d.]+)"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/LBT-AI/Toolnet-CLI/releases/download/v$version/toolnet-windows-x64.zip"
+      }
+    },
+    "hash": {
+      "url": "https://github.com/LBT-AI/Toolnet-CLI/releases/download/v$version/checksums.txt",
+      "regex": "([a-fA-F0-9]{64})\\s+toolnet-windows-x64\\.zip"
+    }
+  }
+}

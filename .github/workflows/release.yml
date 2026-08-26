@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # ---------------------------------------------------------------
@@ -35,9 +35,11 @@ jobs:
   #  2. Build native binaries per platform/arch
   # ---------------------------------------------------------------
   build-binaries:
-    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    name: Build ${{ matrix.artifact }}
     needs: ci
     runs-on: ${{ matrix.os-runner }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -48,35 +50,42 @@ jobs:
             os-runner: ubuntu-latest
             artifact: toolnet-linux-x64
             ext: ""
-            tar: ".tar.gz"
+            archive: tar.gz
+            shell: bash
           - os: linux
             arch: arm64
             target: bun-linux-arm64
             os-runner: ubuntu-latest
             artifact: toolnet-linux-arm64
             ext: ""
-            tar: ".tar.gz"
+            archive: tar.gz
+            shell: bash
+            # Cross-compiled on x64 runner; native runtime not verified on ARM.
+            # To verify: run on an actual arm64 runner or QEMU.
           - os: darwin
             arch: x64
             target: bun-darwin-x64
-            os-runner: macos-latest
+            os-runner: macos-13
             artifact: toolnet-darwin-x64
             ext: ""
-            tar: ".tar.gz"
+            archive: tar.gz
+            shell: bash
           - os: darwin
             arch: arm64
             target: bun-darwin-arm64
             os-runner: macos-latest
             artifact: toolnet-darwin-arm64
             ext: ""
-            tar: ".tar.gz"
+            archive: tar.gz
+            shell: bash
           - os: windows
             arch: x64
             target: bun-windows-x64
             os-runner: windows-latest
             artifact: toolnet-windows-x64
             ext: ".exe"
-            tar: ".zip"
+            archive: zip
+            shell: pwsh
 
     steps:
       - uses: actions/checkout@v4
@@ -84,29 +93,59 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
+
       - name: Compile binary
         run: bun build src/index.tsx --compile --target=${{ matrix.target }} --outfile=${{ matrix.artifact }}${{ matrix.ext }}
-      - name: Smoke test
+
+      - name: Smoke test — version
+        shell: ${{ matrix.shell }}
         run: ./${{ matrix.artifact }}${{ matrix.ext }} --version
+
+      - name: Smoke test — help
+        shell: ${{ matrix.shell }}
+        run: ./${{ matrix.artifact }}${{ matrix.ext }} --help
+
+      - name: Smoke test — config path
+        shell: ${{ matrix.shell }}
+        run: ./${{ matrix.artifact }}${{ matrix.ext }} config path
+
+      - name: Smoke test — completion (bash/zsh/fish)
+        if: matrix.os != 'windows'
+        shell: bash
+        run: |
+          ./${{ matrix.artifact }}${{ matrix.ext }} completion bash > /dev/null
+          ./${{ matrix.artifact }}${{ matrix.ext }} completion zsh > /dev/null
+          ./${{ matrix.artifact }}${{ matrix.ext }} completion fish > /dev/null
+
+      - name: Smoke test — completion (PowerShell)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          .\${{ matrix.artifact }}${{ matrix.ext }} completion bash | Out-Null
+          .\${{ matrix.artifact }}${{ matrix.ext }} completion zsh | Out-Null
+          .\${{ matrix.artifact }}${{ matrix.ext }} completion fish | Out-Null
+
       - name: Pack artifact
         shell: bash
         run: |
-          FILENAME="${{ matrix.artifact }}${{ matrix.tar }}"
-          if [[ "${{ matrix.tar }}" == ".tar.gz" ]]; then
+          FILENAME="${{ matrix.artifact }}.${{ matrix.archive }}"
+          if [[ "${{ matrix.archive }}" == "tar.gz" ]]; then
             tar -czf "$FILENAME" -C . "${{ matrix.artifact }}${{ matrix.ext }}"
           else
             7z a "$FILENAME" "./${{ matrix.artifact }}${{ matrix.ext }}"
           fi
-          echo "${{ matrix.artifact }}${{ matrix.tar }} artifacts:" && ls -lh "$FILENAME"
+          echo "Artifacts:" && ls -lh "$FILENAME"
+
       - name: SHA256 checksum
         shell: bash
-        run: sha256sum "${{ matrix.artifact }}${{ matrix.tar }}" > "${{ matrix.artifact }}${{ matrix.tar }}.sha256"
+        run: sha256sum "${{ matrix.artifact }}.${{ matrix.archive }}" > "${{ matrix.artifact }}.${{ matrix.archive }}.sha256"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
-            ${{ matrix.artifact }}${{ matrix.tar }}
-            ${{ matrix.artifact }}${{ matrix.tar }}.sha256
+            ${{ matrix.artifact }}.${{ matrix.archive }}
+            ${{ matrix.artifact }}.${{ matrix.archive }}.sha256
 
   # ---------------------------------------------------------------
   #  3. Create GitHub Release with all artifacts + checksums
@@ -115,6 +154,8 @@ jobs:
     name: Publish Release
     needs: build-binaries
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -127,8 +168,8 @@ jobs:
       - name: Generate checksums.txt
         shell: bash
         run: |
-          cat artifacts/*.sha256 | sed 's|  .*\/||g' > checksums.txt
-          echo "--- checksums.txt ---"
+          cat artifacts/*.sha256 | sed 's|  .*/||g' > checksums.txt
+          echo "=== checksums.txt ==="
           cat checksums.txt
 
       - name: Create GitHub Release
