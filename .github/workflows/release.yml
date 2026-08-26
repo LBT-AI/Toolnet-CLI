@@ -1,0 +1,141 @@
+name: ToolNet CLI Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------
+  #  1. CI gate — typecheck, tests, bundle (fail → no release)
+  # ---------------------------------------------------------------
+  ci:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build
+      - run: bun dist/index.js --help
+      - run: node dist/node/index.js --help
+      - run: node bin/toolnet.js --version
+
+  # ---------------------------------------------------------------
+  #  2. Build native binaries per platform/arch
+  # ---------------------------------------------------------------
+  build-binaries:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    needs: ci
+    runs-on: ${{ matrix.os-runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: x64
+            target: bun-linux-x64
+            os-runner: ubuntu-latest
+            artifact: toolnet-linux-x64
+            ext: ""
+            tar: ".tar.gz"
+          - os: linux
+            arch: arm64
+            target: bun-linux-arm64
+            os-runner: ubuntu-latest
+            artifact: toolnet-linux-arm64
+            ext: ""
+            tar: ".tar.gz"
+          - os: darwin
+            arch: x64
+            target: bun-darwin-x64
+            os-runner: macos-latest
+            artifact: toolnet-darwin-x64
+            ext: ""
+            tar: ".tar.gz"
+          - os: darwin
+            arch: arm64
+            target: bun-darwin-arm64
+            os-runner: macos-latest
+            artifact: toolnet-darwin-arm64
+            ext: ""
+            tar: ".tar.gz"
+          - os: windows
+            arch: x64
+            target: bun-windows-x64
+            os-runner: windows-latest
+            artifact: toolnet-windows-x64
+            ext: ".exe"
+            tar: ".zip"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Compile binary
+        run: bun build src/index.tsx --compile --target=${{ matrix.target }} --outfile=${{ matrix.artifact }}${{ matrix.ext }}
+      - name: Smoke test
+        run: ./${{ matrix.artifact }}${{ matrix.ext }} --version
+      - name: Pack artifact
+        shell: bash
+        run: |
+          FILENAME="${{ matrix.artifact }}${{ matrix.tar }}"
+          if [[ "${{ matrix.tar }}" == ".tar.gz" ]]; then
+            tar -czf "$FILENAME" -C . "${{ matrix.artifact }}${{ matrix.ext }}"
+          else
+            7z a "$FILENAME" "./${{ matrix.artifact }}${{ matrix.ext }}"
+          fi
+          echo "${{ matrix.artifact }}${{ matrix.tar }} artifacts:" && ls -lh "$FILENAME"
+      - name: SHA256 checksum
+        shell: bash
+        run: sha256sum "${{ matrix.artifact }}${{ matrix.tar }}" > "${{ matrix.artifact }}${{ matrix.tar }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}${{ matrix.tar }}
+            ${{ matrix.artifact }}${{ matrix.tar }}.sha256
+
+  # ---------------------------------------------------------------
+  #  3. Create GitHub Release with all artifacts + checksums
+  # ---------------------------------------------------------------
+  create-release:
+    name: Publish Release
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: "toolnet-*"
+          merge-multiple: true
+
+      - name: Generate checksums.txt
+        shell: bash
+        run: |
+          cat artifacts/*.sha256 | sed 's|  .*\/||g' > checksums.txt
+          echo "--- checksums.txt ---"
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/toolnet-*.tar.gz
+            artifacts/toolnet-*.zip
+            checksums.txt
