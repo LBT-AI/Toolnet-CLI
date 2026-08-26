@@ -298,9 +298,21 @@ export async function performUpdate(latestVersion: string): Promise<UpdateResult
 
 export async function handleUpdate(args: string[]): Promise<void> {
   const checkOnly = args.includes("--check");
+  const jsonOutput = args.includes("--json");
 
-  console.log("Checking for updates...");
+  if (!jsonOutput) console.log("Checking for updates...");
   const info = await backgroundCheck();
+
+  if (jsonOutput) {
+    // Always output JSON for --json mode
+    console.log(JSON.stringify({
+      current: getVersion(),
+      latest: info?.latestVersion ?? null,
+      updateAvailable: info?.hasUpdate ?? false,
+    }, null, 2));
+    return;
+  }
+
   if (!info) {
     console.log("Unable to check for updates (offline or cached).");
     return;

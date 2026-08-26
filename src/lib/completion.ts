@@ -7,9 +7,9 @@
  *   toolnet completion fish > ~/.config/fish/completions/toolnet.fish
  */
 
-const SUBCOMMANDS = "config completion update version";
+const SUBCOMMANDS = "config completion update version usage budget doctor";
 
-const TOP_FLAGS = "--help -h --version -v --resume --session --model --json --no-splash --verbose --simple -s --prompt -p -b --bypass";
+const TOP_FLAGS = "--help -h --version -v --resume --session --model --json --no-splash --verbose --simple -s --prompt -p -b --bypass --format";
 
 const CONFIG_SUBCOMMANDS = "init show path";
 
@@ -28,7 +28,7 @@ _toolnet_completions() {
     local subcmd="\${COMP_WORDS[1]}"
     case "\${subcmd}" in
       config)
-        COMPREPLY=( $(compgen -W "init show path" -- "\${cur}") )
+        COMPREPLY=( $(compgen -W "init show path get set" -- "\${cur}") )
         return 0
         ;;
       completion)
@@ -40,6 +40,18 @@ _toolnet_completions() {
         return 0
         ;;
       version)
+        COMPREPLY=( $(compgen -W "--json" -- "\${cur}") )
+        return 0
+        ;;
+      usage)
+        COMPREPLY=( $(compgen -W "--json --session --today" -- "\${cur}") )
+        return 0
+        ;;
+      budget)
+        COMPREPLY=( $(compgen -W "show set clear" -- "\${cur}") )
+        return 0
+        ;;
+      doctor)
         COMPREPLY=( $(compgen -W "--json" -- "\${cur}") )
         return 0
         ;;
@@ -66,13 +78,16 @@ _toolnet() {
     'completion:Generate shell completion scripts'
     'update:Check for and apply updates'
     'version:Show version information'
+    'usage:Show token usage for current session'
+    'budget:Manage spending budget'
+    'doctor:Run diagnostic checks'
   )
 
   subcommands=()
   if (( CURRENT > 1 )); then
     case \${words[2]} in
       config)
-        subcommands=('init:Run the first-run setup wizard' 'show:Display current config' 'path:Print config file path')
+        subcommands=('init:Run the first-run setup wizard' 'show:Display current config' 'path:Print config file path' 'get:Get a config value' 'set:Set a config value')
         ;;
       completion)
         subcommands=('bash:Bash completion script' 'zsh:Zsh completion script' 'fish:Fish completion script')
@@ -89,6 +104,18 @@ _toolnet() {
         ;;
       version)
         _arguments '--json[Output version as JSON]'
+        return
+        ;;
+      usage)
+        _arguments '--json[Output as JSON]' '--session=[Session id]' '--today[Today only]'
+        return
+        ;;
+      budget)
+        _arguments '1:command:(show set clear)'
+        return
+        ;;
+      doctor)
+        _arguments '--json[Output as JSON]'
         return
         ;;
     esac
@@ -108,6 +135,7 @@ _toolnet() {
       '--no-splash[Skip startup splash]' \
       '--verbose[Enable verbose output]' \
       '--json[JSON output format]' \
+      '--format=[Output format: text|markdown|json|jsonl]' \
       '--resume[Resume last session]' \
       '--session=[Specific session id]' \
       '--model=[Default model to use]'
@@ -130,6 +158,7 @@ complete -c toolnet -s b -l bypass -r -d 'Enable bypass mode level'
 complete -c toolnet -l no-splash -d 'Skip startup splash'
 complete -c toolnet -l verbose -d 'Enable verbose output'
 complete -c toolnet -l json -d 'JSON output format'
+complete -c toolnet -l format -r -d 'Output format: text|markdown|json|jsonl'
 complete -c toolnet -l resume -d 'Resume last session'
 complete -c toolnet -l session -r -d 'Specific session id'
 complete -c toolnet -l model -r -d 'Default model to use'
@@ -139,11 +168,16 @@ complete -c toolnet -n '__fish_use_subcommand' -a config -d 'Show or modify conf
 complete -c toolnet -n '__fish_use_subcommand' -a completion -d 'Generate shell completion scripts'
 complete -c toolnet -n '__fish_use_subcommand' -a update -d 'Check for and apply updates'
 complete -c toolnet -n '__fish_use_subcommand' -a version -d 'Show version information'
+complete -c toolnet -n '__fish_use_subcommand' -a usage -d 'Show token usage'
+complete -c toolnet -n '__fish_use_subcommand' -a budget -d 'Manage spending budget'
+complete -c toolnet -n '__fish_use_subcommand' -a doctor -d 'Run diagnostic checks'
 
 # config sub-subcommands
 complete -c toolnet -n '__fish_seen_subcommand_from config' -a init -d 'Run first-run setup wizard'
 complete -c toolnet -n '__fish_seen_subcommand_from config' -a show -d 'Display current config'
 complete -c toolnet -n '__fish_seen_subcommand_from config' -a path -d 'Print config file path'
+complete -c toolnet -n '__fish_seen_subcommand_from config' -a get -d 'Get a config value'
+complete -c toolnet -n '__fish_seen_subcommand_from config' -a set -d 'Set a config value'
 
 # completion sub-subcommands
 complete -c toolnet -n '__fish_seen_subcommand_from completion' -a bash -d 'Bash completion script'
@@ -157,6 +191,19 @@ complete -c toolnet -n '__fish_seen_subcommand_from update' -l force -s f -d 'Fo
 
 # version flags
 complete -c toolnet -n '__fish_seen_subcommand_from version' -l json -d 'Output version as JSON'
+
+# usage flags
+complete -c toolnet -n '__fish_seen_subcommand_from usage' -l json -d 'Output as JSON'
+complete -c toolnet -n '__fish_seen_subcommand_from usage' -l session -r -d 'Session id'
+complete -c toolnet -n '__fish_seen_subcommand_from usage' -l today -d 'Today only'
+
+# budget subcommands
+complete -c toolnet -n '__fish_seen_subcommand_from budget' -a show -d 'Show budget'
+complete -c toolnet -n '__fish_seen_subcommand_from budget' -a set -d 'Set budget'
+complete -c toolnet -n '__fish_seen_subcommand_from budget' -a clear -d 'Clear budget'
+
+# doctor flags
+complete -c toolnet -n '__fish_seen_subcommand_from doctor' -l json -d 'Output as JSON'
 `;
 
 export type ShellName = "bash" | "zsh" | "fish";

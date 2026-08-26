@@ -132,12 +132,17 @@ export async function runSetupWizard(): Promise<WizardResult> {
     const themeInput = await ask(r, "\n\x1b[1m5. Theme (optional)\x1b[0m\n  dark / light [dark]: ");
     const theme = themeInput || "dark";
 
+    // 7. Update check
+    const updateInput = await ask(r, "\n\x1b[1m6. Auto-update check\x1b[0m\n  Check for updates on launch? [Y/n]: ");
+    const updateCheckEnabled = !updateInput || !updateInput.toLowerCase().startsWith("n");
+
     const config = updateAppConfig({
       gatewayUrl: mode === "gateway" ? (gatewayUrl ?? existing.gatewayUrl) : null,
       apiUrl: mode === "direct" ? (apiUrl ?? null) : existing.apiUrl,
       defaultModel,
       sandboxMode,
       theme,
+      updateCheckEnabled,
     });
     result.config = config;
 
