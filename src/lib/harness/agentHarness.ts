@@ -122,14 +122,6 @@ export class AgentHarness {
       }
     }
 
-    // Cache check for read-only tools
-    const cachedResult = this.toolCache.get(name, args);
-    if (cachedResult !== null) {
-      this.metrics.toolCacheHits++;
-      this.metrics.retainedToolOutputChars += cachedResult.length;
-      return { result: cachedResult, allowed: true };
-    }
-
     this.totalToolCalls++;
     this.metrics.toolCallsExecuted++;
     const rawResult = await executeTool(name, args, {
@@ -139,17 +131,10 @@ export class AgentHarness {
     });
 
     this.metrics.rawToolOutputChars += rawResult.length;
+    this.metrics.retainedToolOutputChars += rawResult.length;
 
-    // Invalidate cache on write tools
+    // Track file access for context engine
     const isWriteTool = name === "write_file" || name === "edit_file" || name === "replace_all" || name === "apply_patch";
-    if (isWriteTool && args?.path) {
-      this.toolCache.invalidateByPath(args.path);
-    }
-    // Shell commands can affect anything — invalidate broadly
-    if (name === "shell" || name === "run_command") {
-      this.toolCache.invalidateAll();
-    }
-
     if (args?.path) {
       contextEngine.recordFileAccess(
         args.path,
@@ -157,14 +142,7 @@ export class AgentHarness {
       );
     }
 
-    // Compress output for context
-    const compressed = compressToolResult(rawResult, name);
-    this.metrics.retainedToolOutputChars += compressed.length;
-
-    // Store in cache
-    this.toolCache.set(name, args, compressed);
-
-    const sanitizedResult = redactSecrets(compressed);
+    const sanitizedResult = redactSecrets(rawResult);
     return {
       result: sanitizedResult,
       allowed: true,
