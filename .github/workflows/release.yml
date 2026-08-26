@@ -51,6 +51,7 @@ jobs:
             artifact: toolnet-linux-x64
             ext: ""
             archive: tar.gz
+            smoke: true
           - os: linux
             arch: arm64
             target: bun-linux-arm64
@@ -58,13 +59,15 @@ jobs:
             artifact: toolnet-linux-arm64
             ext: ""
             archive: tar.gz
+            smoke: false  # cross-compiled on x64; cannot run arm64 binary
           - os: darwin
             arch: x64
             target: bun-darwin-x64
-            runner: macos-13
+            runner: macos-latest  # cross-compiled on ARM; native x64 runtime not verified
             artifact: toolnet-darwin-x64
             ext: ""
             archive: tar.gz
+            smoke: false  # cross-compiled: x64 binary cannot run on ARM runner
           - os: darwin
             arch: arm64
             target: bun-darwin-arm64
@@ -72,6 +75,7 @@ jobs:
             artifact: toolnet-darwin-arm64
             ext: ""
             archive: tar.gz
+            smoke: true
           - os: windows
             arch: x64
             target: bun-windows-x64
@@ -79,6 +83,7 @@ jobs:
             artifact: toolnet-windows-x64
             ext: ".exe"
             archive: zip
+            smoke: true
 
     steps:
       - uses: actions/checkout@v4
@@ -92,22 +97,22 @@ jobs:
 
       # --- Smoke tests: Linux/macOS (bash) ---
       - name: Smoke test — version
-        if: matrix.os != 'windows'
+        if: matrix.smoke && matrix.os != 'windows'
         shell: bash
         run: ./${{ matrix.artifact }}${{ matrix.ext }} --version
 
       - name: Smoke test — help
-        if: matrix.os != 'windows'
+        if: matrix.smoke && matrix.os != 'windows'
         shell: bash
         run: ./${{ matrix.artifact }}${{ matrix.ext }} --help
 
       - name: Smoke test — config path
-        if: matrix.os != 'windows'
+        if: matrix.smoke && matrix.os != 'windows'
         shell: bash
         run: ./${{ matrix.artifact }}${{ matrix.ext }} config path
 
       - name: Smoke test — completion
-        if: matrix.os != 'windows'
+        if: matrix.smoke && matrix.os != 'windows'
         shell: bash
         run: |
           ./${{ matrix.artifact }}${{ matrix.ext }} completion bash > /dev/null
@@ -116,22 +121,22 @@ jobs:
 
       # --- Smoke tests: Windows (pwsh) ---
       - name: Smoke test — version (Windows)
-        if: matrix.os == 'windows'
+        if: matrix.smoke && matrix.os == 'windows'
         shell: pwsh
         run: .\${{ matrix.artifact }}${{ matrix.ext }} --version
 
       - name: Smoke test — help (Windows)
-        if: matrix.os == 'windows'
+        if: matrix.smoke && matrix.os == 'windows'
         shell: pwsh
         run: .\${{ matrix.artifact }}${{ matrix.ext }} --help
 
       - name: Smoke test — config path (Windows)
-        if: matrix.os == 'windows'
+        if: matrix.smoke && matrix.os == 'windows'
         shell: pwsh
         run: .\${{ matrix.artifact }}${{ matrix.ext }} config path
 
       - name: Smoke test — completion (Windows)
-        if: matrix.os == 'windows'
+        if: matrix.smoke && matrix.os == 'windows'
         shell: pwsh
         run: |
           .\${{ matrix.artifact }}${{ matrix.ext }} completion bash | Out-Null
