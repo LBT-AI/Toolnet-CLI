@@ -792,7 +792,7 @@ async function sendMessage(text: string) {
               result = JSON.stringify({ error: "User denied the plan." });
             }
           } else {
-            result = await executeTool(tc.function.name, parsedArgs);
+            result = await executeTool(tc.function.name, parsedArgs, { cwd: getCwdInfo().currentCwd, skipPermission: true });
           }
           messages.push({ role: "tool", tool_call_id: tc.id, name: tc.function.name, content: result });
           saveCurrentSession();
@@ -1390,6 +1390,7 @@ function handleResize() {
 // ─── Main ────────────────────────────────────────────────────────────────────
 async function main() {
   initWorkspace();
+
   // Check gateway
   try {
     const res = await fetch(gatewayUrl + "/api/health", { signal: AbortSignal.timeout(3000) });

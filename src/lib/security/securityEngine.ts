@@ -358,7 +358,7 @@ export class SecurityEngine {
     return "EXECUTE";
   }
 
-  private categorizeTool(toolName: string): ActionCategory {
+  categorizeTool(toolName: string): ActionCategory {
     if (toolName === "run_command" || toolName === "shell") return "SHELL_EXECUTE";
     if (["write_file", "edit_file", "replace_all", "apply_patch", "create_artifact", "update_artifact"].includes(toolName)) {
       return "FILE_WRITE";

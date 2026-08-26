@@ -388,9 +388,16 @@ export function isDangerousCommand(name: string, args: any, cwd: string): boolea
 }
 
 
-export async function executeTool(name: string, args: any): Promise<string> {
+export interface ExecuteToolOptions {
+  cwd?: string;
+  workspaceRoot?: string;
+  skipPermission?: boolean;
+}
+
+export async function executeTool(name: string, args: any, options?: ExecuteToolOptions): Promise<string> {
   try {
-    const perm = evaluatePermission(name, args, getSandboxMode());
+    const skipPermission = options?.skipPermission ?? false;
+    const perm = evaluatePermission(name, args, getSandboxMode(), options?.cwd, options?.workspaceRoot);
     if (!perm.allowed) {
       return JSON.stringify({
         stdout: "",
@@ -398,7 +405,6 @@ export async function executeTool(name: string, args: any): Promise<string> {
         exitCode: 1
       });
     }
-
     if (name === "get_cwd") {
       const res = toolGetCwd();
       return JSON.stringify({

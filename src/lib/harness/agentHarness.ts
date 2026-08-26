@@ -89,44 +89,37 @@ export class AgentHarness {
     const mode = this.config.sandboxMode || getSandboxMode();
 
     const isForceBypass = this.config.bypassSecurity || (bypassEngine.isEnabled() && bypassEngine.getConfig().forceExecution);
+    const skipPermission = options.skipPermission || isForceBypass;
 
-    if (!options.skipPermission && !isForceBypass) {
+    if (!skipPermission) {
       const perm = securityEngine.evaluate(name, args, mode, cwd, this.config.workspaceRoot);
       if (!perm.allowed) {
         return {
+          result: JSON.stringify({ error: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}` }),
+          allowed: false,
+          reason: perm.reason,
+        };
+      }
+      if (perm.needsApproval) {
+        return {
           result: JSON.stringify({
             stdout: "",
-            stderr: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}`,
+            stderr: `Approval Required: ${perm.reason || `Tool ${name} requires interactive approval.`}`,
             exitCode: 1,
-            permissionDenied: true,
+            approvalRequired: true,
           }),
           allowed: false,
           reason: perm.reason,
         };
       }
-
-      // Headless/sub-agent execution has no interactive Y/A/N prompt. Never
-      // silently execute an action that the security policy marked as needing
-      // approval. The interactive TUI handles this before dispatch; harness
-      // callers must either obtain approval first or explicitly use a trusted
-      // / full-access execution policy.
-      if (perm.needsApproval) {
-        const reason = perm.reason || `Tool "${name}" requires user confirmation.`;
-        return {
-          result: JSON.stringify({
-            stdout: "",
-            stderr: `Approval Required: ${reason}`,
-            exitCode: 1,
-            approvalRequired: true,
-          }),
-          allowed: false,
-          reason,
-        };
-      }
     }
 
     this.totalToolCalls++;
-    const rawResult = await executeTool(name, args);
+    const rawResult = await executeTool(name, args, {
+      cwd,
+      workspaceRoot: this.config.workspaceRoot,
+      skipPermission,
+    });
 
     if (args?.path) {
       contextEngine.recordFileAccess(
