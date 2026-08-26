@@ -6,7 +6,7 @@
   "architecture": {
     "64bit": {
       "url": "https://github.com/LBT-AI/Toolnet-CLI/releases/download/v1.0.5/toolnet-windows-x64.zip",
-      "hash": "SHA256PLACEHOLDER_WINDOWS_X64"
+      "hash": "6ce8354a9c0db473356464f0e6821ff5094377c6acf89bc1630fab68d4b7594b"
     }
   },
   "bin": "toolnet.exe",
