@@ -49,17 +49,26 @@ describe("P0 — OS / arch mapping", () => {
 // ---------------------------------------------------------------------------
 
 describe("P0 — AppConfig defaults", () => {
+  let dir: string;
   let origDir: string | undefined;
+  let origData: string | undefined;
 
   beforeEach(() => {
     origDir = process.env.TOOLNETCLI_CONFIG_DIR;
-    process.env.TOOLNETCLI_CONFIG_DIR = tmpDir();
+    origData = process.env.DATA_DIR;
+    dir = tmpDir();
+    process.env.TOOLNETCLI_CONFIG_DIR = dir;
+    process.env.DATA_DIR = dir; // isolate legacy config lookup
+    const { resetAppConfigCache } = require("../../lib/appConfig");
+    resetAppConfigCache();
   });
 
   afterEach(() => {
-    cleanDir(process.env.TOOLNETCLI_CONFIG_DIR!);
+    cleanDir(dir);
     if (origDir !== undefined) process.env.TOOLNETCLI_CONFIG_DIR = origDir;
     else delete process.env.TOOLNETCLI_CONFIG_DIR;
+    if (origData !== undefined) process.env.DATA_DIR = origData;
+    else delete process.env.DATA_DIR;
     const { resetAppConfigCache } = require("../../lib/appConfig");
     resetAppConfigCache();
   });
@@ -93,17 +102,24 @@ describe("P0 — AppConfig defaults", () => {
 describe("P0 — Config migration", () => {
   let dir: string;
   let origDir: string | undefined;
+  let origData: string | undefined;
 
   beforeEach(() => {
     origDir = process.env.TOOLNETCLI_CONFIG_DIR;
+    origData = process.env.DATA_DIR;
     dir = tmpDir();
     process.env.TOOLNETCLI_CONFIG_DIR = dir;
+    process.env.DATA_DIR = dir; // isolate legacy config lookup
+    const { resetAppConfigCache } = require("../../lib/appConfig");
+    resetAppConfigCache();
   });
 
   afterEach(() => {
     cleanDir(dir);
     if (origDir !== undefined) process.env.TOOLNETCLI_CONFIG_DIR = origDir;
     else delete process.env.TOOLNETCLI_CONFIG_DIR;
+    if (origData !== undefined) process.env.DATA_DIR = origData;
+    else delete process.env.DATA_DIR;
     const { resetAppConfigCache } = require("../../lib/appConfig");
     resetAppConfigCache();
   });

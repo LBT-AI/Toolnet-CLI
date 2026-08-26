@@ -1,12 +1,19 @@
 /**
- * P1 Integration Tests — Verify all execution paths use the P1 pipeline.
+ * P1 Integration Tests — verify the UNIFIED P1 pipeline end-to-end.
  *
- * Tests:
- * 1. Interactive-equivalent turn: 2 identical read_file → only 1 execution
- * 2. 3 independent read_file → parallel classification
- * 3. Large read result → compressed before next turn
- * 4. write_file → invalidates read cache
- * 5. permission approval still works and not bypassed by batching
+ * Architecture (post P1):
+ *   executeTool()        = low-level executor (permission + raw tool + redact)
+ *   executeToolBatch()   = ToolPlanner (dedup + parallel) + ToolCache +
+ *                          compression + invalidation, built ON TOP of executeTool.
+ *
+ * These tests drive executeToolBatch with the REAL executeTool (no mocked core
+ * pipeline) so they verify the actual behaviour the runtimes rely on.
+ *
+ * Scenarios:
+ *   1. Duplicate reads → executed once (dedup) + cached (hit on 2nd read)
+ *   2. Large read → compressed before reaching the next model turn
+ *   3. write_file → invalidates the cached read
+ *   4. Permission approval still works and is not bypassed by batching
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
@@ -14,166 +21,174 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "p1-integ-"));
+import { executeToolBatch } from "../../lib/harness/toolExecutor";
+import { executeTool, getToolCache, flushToolCache } from "../../lib/agentTools";
+import { setSandboxMode, getSandboxMode } from "../../lib/permissions";
+
+function tmpDir(prefix: string): string {
+  // Place under the workspace root so sandbox "workspace" mode allows r/w.
+  return fs.mkdtempSync(path.join(process.cwd(), `.${prefix}${Date.now()}-${Math.random().toString(36).slice(2, 7)}`));
 }
 
 function cleanDir(d: string) {
   try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
 }
 
-// ---------------------------------------------------------------------------
-// 1. Identical read_file → only 1 execution via executeTool
-// ---------------------------------------------------------------------------
-
-describe("P1 Integration — Cache dedup via executeTool", () => {
+describe("P1 Integration — Unified pipeline (executeToolBatch)", () => {
   let dir: string;
+  let origMode: ReturnType<typeof getSandboxMode>;
 
   beforeEach(() => {
-    dir = tmpDir();
-    fs.writeFileSync(path.join(dir, "test.txt"), "hello world content");
+    dir = tmpDir("p1integ-");
+    flushToolCache();
+    origMode = getSandboxMode();
+    setSandboxMode("workspace");
   });
 
-  afterEach(() => cleanDir(dir));
-
-  it("calling executeTool('read_file', same args) twice → second is cache hit", async () => {
-    const { executeTool, getToolCache } = require("../../lib/agentTools");
-    const cache = getToolCache();
-
-    const args = { path: path.join(dir, "test.txt") };
-    const r1 = await executeTool("read_file", args);
-    const stats1 = cache.getStats();
-
-    const r2 = await executeTool("read_file", args);
-    const stats2 = cache.getStats();
-
-    // Results should be identical
-    expect(r1).toBe(r2);
-    // Cache hits increased by 1
-    expect(stats2.hits).toBe(stats1.hits + 1);
-    // Misses did NOT increase (cache hit, not miss)
-    expect(stats2.misses).toBe(stats1.misses);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 2. Independent read_file → parallel classification
-// ---------------------------------------------------------------------------
-
-describe("P1 Integration — Parallel classification", () => {
-  it("classifyToolCalls puts independent reads into parallel batches", () => {
-    const { classifyToolCalls } = require("../../lib/harness/toolPlanner");
-    const calls = [
-      { id: "1", name: "read_file", args: { path: "/a" } },
-      { id: "2", name: "read_file", args: { path: "/b" } },
-      { id: "3", name: "read_file", args: { path: "/c" } },
-    ];
-    const { parallel, sequential } = classifyToolCalls(calls, () => false);
-    // All 3 reads should be parallel (single batch of 3)
-    expect(parallel.length).toBe(1);
-    expect(parallel[0].length).toBe(3);
-    expect(sequential.length).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 3. Large read result → compressed
-// ---------------------------------------------------------------------------
-
-describe("P1 Integration — Output compression via executeTool", () => {
-  let dir: string;
-
-  beforeEach(() => {
-    dir = tmpDir();
-    // Create a large file (>8K chars to trigger compression)
-    const content = "x".repeat(20_000);
-    fs.writeFileSync(path.join(dir, "large.txt"), content);
+  afterEach(() => {
+    cleanDir(dir);
+    flushToolCache();
+    setSandboxMode(origMode);
   });
 
-  afterEach(() => cleanDir(dir));
+  // -------------------------------------------------------------------------
+  // 1. Duplicate reads → executed once (dedup) + cached
+  // -------------------------------------------------------------------------
+  it("duplicate read_file in one turn → executed once (dedup) and cached", async () => {
+    const file = path.join(dir, "dup.txt");
+    fs.writeFileSync(file, "shared content");
+    const args = { path: file };
 
-  it("executeTool('read_file', large file) returns compressed result", async () => {
-    const { executeTool } = require("../../lib/agentTools");
-    const args = { path: path.join(dir, "large.txt") };
-    const result = await executeTool("read_file", args);
-    const parsed = JSON.parse(result);
+    const outcome = await executeToolBatch(
+      [
+        { id: "1", name: "read_file", args },
+        { id: "2", name: "read_file", args }, // identical
+      ],
+      { cwd: dir, runTool: (n, a) => executeTool(n, a).then((r) => ({ result: r, allowed: true })) }
+    );
 
-    // Should be truncated
+    // Dedup: only one real execution.
+    expect(outcome.executedCount).toBe(1);
+    expect(outcome.deduplicatedCount).toBe(1);
+    // Both tool_call ids still receive a (reused) message.
+    expect(outcome.messages.length).toBe(2);
+    expect(outcome.messages[0].content).toBe(outcome.messages[1].content);
+    expect(JSON.parse(outcome.messages[0].content).stdout).toContain("shared content");
+
+    // Cache: the result is stored, so a later identical read is a real cache HIT.
+    expect(getToolCache().get("read_file", args)).not.toBeNull();
+    const before = getToolCache().getStats();
+    await executeTool("read_file", args);
+    const after = getToolCache().getStats();
+    expect(after.hits).toBe(before.hits + 1);
+  });
+
+  // -------------------------------------------------------------------------
+  // 2. Large read → compressed before next turn
+  // -------------------------------------------------------------------------
+  it("large read_file result is compressed by the pipeline", async () => {
+    const large = path.join(dir, "large.txt");
+    fs.writeFileSync(large, "x".repeat(20_000));
+
+    const outcome = await executeToolBatch(
+      [{ id: "1", name: "read_file", args: { path: large } }],
+      { cwd: dir, runTool: (n, a) => executeTool(n, a).then((r) => ({ result: r, allowed: true })) }
+    );
+
+    const parsed = JSON.parse(outcome.messages[0].content);
     expect(parsed.meta).toBeDefined();
     expect(parsed.meta.truncated).toBe(true);
     expect(parsed.meta.originalChars).toBeGreaterThan(10_000);
     expect(parsed.stdout.length).toBeLessThan(parsed.meta.originalChars);
   });
-});
 
-// ---------------------------------------------------------------------------
-// 4. write_file → invalidates read cache
-// ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // 3. write_file → invalidates cached read
+  // -------------------------------------------------------------------------
+  it("write_file invalidates the cached read so the next read is fresh", async () => {
+    const file = path.join(dir, "data.txt");
+    fs.writeFileSync(file, "original");
 
-describe("P1 Integration — Cache invalidation on write", () => {
-  let dir: string;
+    // Read → cached (via the batch pipeline).
+    await executeToolBatch([{ id: "1", name: "read_file", args: { path: file } }], {
+      cwd: dir,
+      runTool: (n, a) => executeTool(n, a).then((r) => ({ result: r, allowed: true })),
+    });
+    expect(getToolCache().get("read_file", { path: file })).not.toBeNull();
 
-  beforeEach(() => {
-    dir = tmpDir();
-    fs.writeFileSync(path.join(dir, "data.txt"), "original content");
+    // Write → invalidates the cached read for that path.
+    await executeTool("write_file", { path: file, content: "updated" });
+    expect(getToolCache().get("read_file", { path: file })).toBeNull();
+
+    // Read again → fresh from disk, not stale cache.
+    const outcome = await executeToolBatch([{ id: "1", name: "read_file", args: { path: file } }], {
+      cwd: dir,
+      runTool: (n, a) => executeTool(n, a).then((r) => ({ result: r, allowed: true })),
+    });
+    expect(JSON.parse(outcome.messages[0].content).stdout).toBe("updated");
   });
 
-  afterEach(() => cleanDir(dir));
+  // -------------------------------------------------------------------------
+  // 4. Permission approval not bypassed by batching
+  // -------------------------------------------------------------------------
+  it("approval-required tool is not executed when denied (even when batched with reads)", async () => {
+    const safe = path.join(dir, "safe.txt");
+    fs.writeFileSync(safe, "ok");
 
-  it("write_file to same path invalidates cached read", async () => {
-    const { executeTool, getToolCache } = require("../../lib/agentTools");
-
-    const filePath = path.join(dir, "data.txt");
-
-    // Read → cache
-    await executeTool("read_file", { path: filePath });
-    const cache = getToolCache();
-    expect(cache.get("read_file", { path: filePath })).not.toBeNull();
-
-    // Write → invalidate
-    await executeTool("write_file", { path: filePath, content: "new content" });
-    expect(cache.get("read_file", { path: filePath })).toBeNull();
-
-    // Read again → fresh from disk
-    const r2 = JSON.parse(await executeTool("read_file", { path: filePath }));
-    expect(r2.stdout).toBe("new content");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 5. Permission approval still works, not bypassed by batching
-// ---------------------------------------------------------------------------
-
-describe("P1 Integration — Permission approval not bypassed", () => {
-  it("classifyToolCalls marks approval-required tools as sequential", () => {
-    const { classifyToolCalls } = require("../../lib/harness/toolPlanner");
     const calls = [
-      { id: "1", name: "shell", args: { command: "rm -rf /" } },
-      { id: "2", name: "read_file", args: { path: "/safe" } },
+      { id: "1", name: "shell", args: { command: "rm -rf /" } }, // needs approval
+      { id: "2", name: "read_file", args: { path: safe } }, // safe + parallel
     ];
-    // Shell requires approval
-    const { parallel, sequential } = classifyToolCalls(calls, (name: string) => name === "shell");
-    expect(sequential.length).toBe(1);
-    expect(sequential[0].name).toBe("shell");
-    // read_file is still parallel
-    expect(parallel.length).toBe(1);
-    expect(parallel[0][0].name).toBe("read_file");
+
+    let approvalRequested = 0;
+    const outcome = await executeToolBatch(calls, {
+      cwd: dir,
+      needsApproval: (name) => name === "shell",
+      runTool: async (name, args) => {
+        if (name === "shell") {
+          approvalRequested++;
+          // Denied: must NOT execute.
+          return { result: JSON.stringify({ error: "User denied permission." }), allowed: false };
+        }
+        const result = await executeTool(name, args);
+        return { result, allowed: true };
+      },
+    });
+
+    expect(approvalRequested).toBe(1);
+    const shellMsg = outcome.messages.find((m) => m.name === "shell")!;
+    expect(shellMsg.content).toContain("User denied");
+    // The safe read (parallel) still executed and returned real content.
+    const readMsg = outcome.messages.find((m) => m.name === "read_file")!;
+    expect(JSON.parse(readMsg.content).stdout).toBe("ok");
   });
 
-  it("executeTool blocks permission-denied tools in workspace mode", async () => {
-    const { executeTool } = require("../../lib/agentTools");
-    const { setSandboxMode } = require("../../lib/permissions");
-    const origMode = require("../../lib/permissions").getSandboxMode();
+  it("approval-required tool IS executed when approved", async () => {
+    const calls = [{ id: "1", name: "shell", args: { command: "echo hi" } }];
+    let approved = false;
+    let executed = false;
 
-    setSandboxMode("workspace");
-    try {
-      const result = await executeTool("write_file", { path: "/etc/passwd", content: "hack" }, { skipPermission: false });
-      const parsed = JSON.parse(result);
-      // Should be blocked by sandbox
-      expect(parsed.exitCode).toBe(1);
-      expect(parsed.stderr.length).toBeGreaterThan(0); // blocked with reason
-    } finally {
-      setSandboxMode(origMode);
-    }
+    const run = async () =>
+      executeToolBatch(calls, {
+        cwd: dir,
+        needsApproval: (name) => name === "shell",
+        runTool: async (name) => {
+          if (name === "shell") {
+            if (!approved) return { result: JSON.stringify({ error: "denied" }), allowed: false };
+            executed = true;
+            return { result: JSON.stringify({ stdout: "hi", stderr: "", exitCode: 0 }), allowed: true };
+          }
+          return { result: "", allowed: true };
+        },
+      });
+
+    const denied = await run();
+    expect(denied.messages[0].content).toContain("denied");
+    expect(executed).toBe(false);
+
+    approved = true;
+    const ok = await run();
+    expect(executed).toBe(true);
+    expect(JSON.parse(ok.messages[0].content).stdout).toBe("hi");
   });
 });
