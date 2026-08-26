@@ -9,6 +9,7 @@ import { workspaceRoot, currentCwd } from "../lib/codingAgent";
 import { contextEngine, type ContextMessage } from "../lib/context";
 import { getCliKey } from "../lib/keys";
 import { evaluatePermission, getSandboxMode } from "../lib/permissions";
+import { executeToolBatch, type ToolCall } from "../lib/harness/toolExecutor";
 import type { AgentRole, TaskNode } from "./types";
 import type { EventBus } from "./eventBus";
 
@@ -280,68 +281,83 @@ export async function executeSubagentTask(
       };
     }
 
-    // Execute requested tools
-    for (const call of toolCalls) {
-      const toolName = call.function.name;
+    // Execute requested tools through the unified P1 pipeline (dedup + parallel + cache + compress).
+    const parsedCalls: ToolCall[] = toolCalls.map((call: any) => {
       let toolArgs: any = {};
-      try {
-        toolArgs = JSON.parse(call.function.arguments || "{}");
-      } catch {}
+      try { toolArgs = JSON.parse(call.function.arguments || "{}"); } catch {}
+      return { id: call.id, name: call.function.name, args: toolArgs };
+    });
 
-      const callSig = `${toolName}:${JSON.stringify(toolArgs)}`;
-      const repeatCount = toolCallHistory.filter((s) => s === callSig).length;
-      if (repeatCount >= 2) {
+    let loopAborted = false;
+    const outcome = await executeToolBatch(parsedCalls, {
+      cwd: currentCwd,
+      workspaceRoot: workspaceRoot,
+      maxRepeat: 2,
+      needsApproval: (name, args) => {
+        const perm = evaluatePermission(name, args, getSandboxMode(), currentCwd, workspaceRoot);
+        return perm.needsApproval || !perm.allowed;
+      },
+      runTool: async (name, args, id) => {
+        const sig = `${name}:${JSON.stringify(args)}`;
+        if (toolCallHistory.filter((s) => s === sig).length >= 2) {
+          loopAborted = true;
+          return {
+            result: JSON.stringify({ error: `Infinite loop detected on '${name}'. Tool call aborted.` }),
+            allowed: false,
+            reason: "loop",
+          };
+        }
+        toolCallHistory.push(sig);
+
+        toolCallsCount++;
+        if (onEvent) {
+          onEvent("subagent:tool", { nodeId: node.id, role, toolName: name, toolArgs: args, id });
+        }
+
+        const perm = evaluatePermission(name, args, getSandboxMode(), currentCwd, workspaceRoot);
+        let resultJson: string;
+        if (!perm.allowed) {
+          resultJson = JSON.stringify({
+            stdout: "",
+            stderr: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}`,
+            exitCode: 1,
+            permissionDenied: true,
+          });
+        } else if (perm.needsApproval) {
+          // Child agents cannot grant their own permissions. Any ask-mode action
+          // that requires approval must be surfaced to the parent/user instead of
+          // being executed silently.
+          resultJson = JSON.stringify({
+            stdout: "",
+            stderr: `Approval Required: ${perm.reason || `Tool "${name}" requires user confirmation.`}`,
+            exitCode: 1,
+            approvalRequired: true,
+          });
+        } else {
+          resultJson = await executeTool(name, args);
+        }
+
+        if (args?.path) {
+          contextEngine.recordFileAccess(
+            args.path,
+            name.includes("write") || name.includes("edit") || name.includes("patch") ? "write" : "read"
+          );
+        }
+
+        return { result: resultJson, allowed: perm.allowed };
+      },
+      onMessage: (m) => {
         messages.push({
           role: "tool",
-          tool_call_id: call.id,
-          name: toolName,
-          content: JSON.stringify({ error: `Infinite loop detected on '${toolName}'. Tool call aborted.` }),
+          tool_call_id: m.id,
+          name: m.name,
+          content: m.content,
         });
-        continue;
-      }
-      toolCallHistory.push(callSig);
+      },
+    });
 
-      toolCallsCount++;
-      if (onEvent) {
-        onEvent("subagent:tool", { nodeId: node.id, role, toolName, toolArgs, id: call.id });
-      }
-
-      const perm = evaluatePermission(toolName, toolArgs, getSandboxMode(), currentCwd, workspaceRoot);
-      let resultJson: string;
-      if (!perm.allowed) {
-        resultJson = JSON.stringify({
-          stdout: "",
-          stderr: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}`,
-          exitCode: 1,
-          permissionDenied: true,
-        });
-      } else if (perm.needsApproval) {
-        // Child agents cannot grant their own permissions. Any ask-mode action
-        // that requires approval must be surfaced to the parent/user instead of
-        // being executed silently.
-        resultJson = JSON.stringify({
-          stdout: "",
-          stderr: `Approval Required: ${perm.reason || `Tool "${toolName}" requires user confirmation.`}`,
-          exitCode: 1,
-          approvalRequired: true,
-        });
-      } else {
-        resultJson = await executeTool(toolName, toolArgs);
-      }
-
-      if (toolArgs?.path) {
-        contextEngine.recordFileAccess(
-          toolArgs.path,
-          toolName.includes("write") || toolName.includes("edit") || toolName.includes("patch") ? "write" : "read"
-        );
-      }
-
-      messages.push({
-        role: "tool",
-        tool_call_id: call.id,
-        name: toolName,
-        content: resultJson,
-      });
+    if (loopAborted) {
+      break;
     }
   }
 

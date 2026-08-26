@@ -5,6 +5,7 @@ import { loadLocalSkills } from "./skillsLoader";
 import { contextEngine } from "./context";
 import { bypassEngine } from "./bypass";
 import { evaluatePermission, getSandboxMode } from "./permissions";
+import { executeToolBatch, type ToolCall } from "./harness/toolExecutor";
 
 export interface AgentRuntimeOptions {
   model?: string;
@@ -249,77 +250,99 @@ export class AgentRuntime {
         };
       }
 
-      // Execute tool calls
-      for (const call of toolCalls) {
-        const toolName = call.function.name;
-        const toolArgsStr = call.function.arguments || "{}";
+      // Execute tool calls through the unified P1 pipeline (dedup + parallel + cache + compress).
+      const parsedCalls: ToolCall[] = toolCalls.map((call: any) => {
         let toolArgs: any = {};
-        try {
-          toolArgs = JSON.parse(toolArgsStr);
-        } catch {}
+        try { toolArgs = JSON.parse(call.function.arguments || "{}"); } catch {}
+        return { id: call.id, name: call.function.name, args: toolArgs };
+      });
 
-        // Infinite loop detection: trigger abort if the same call signature appears 3 times
-        const callSignature = `${toolName}:${JSON.stringify(toolArgs)}`;
-        const repeatCount = toolCallHistory.filter((sig) => sig === callSignature).length;
-        if (repeatCount >= 2) {
-          const loopErr = `Infinite loop detected: tool '${toolName}' was called 3 times with identical arguments. Aborting loop.`;
+      let loopAborted = false;
+      const outcome = await executeToolBatch(parsedCalls, {
+        cwd: currentCwd,
+        workspaceRoot: workspaceRoot,
+        maxRepeat: 2,
+        needsApproval: (name, args) => {
+          const perm = evaluatePermission(name, args, getSandboxMode(), currentCwd, workspaceRoot);
+          return perm.needsApproval || !perm.allowed;
+        },
+        runTool: async (name, args, id) => {
+          // Infinite loop detection across turns: abort if signature repeats 3×.
+          const sig = `${name}:${JSON.stringify(args)}`;
+          if (toolCallHistory.filter((s) => s === sig).length >= 2) {
+            loopAborted = true;
+            return {
+              result: JSON.stringify({
+                stdout: "",
+                stderr: `Infinite loop detected: tool '${name}' was called 3 times with identical arguments. Aborting loop.`,
+                exitCode: 1,
+              }),
+              allowed: false,
+              reason: "loop",
+            };
+          }
+          toolCallHistory.push(sig);
+
+          toolCallsCount++;
+          if (onEvent) onEvent("TOOL_START", { toolName: name, toolArgs: args, id });
+
+          const perm = evaluatePermission(name, args, getSandboxMode(), currentCwd, workspaceRoot);
+          let resultJson: string;
+          if (!perm.allowed) {
+            resultJson = JSON.stringify({
+              stdout: "",
+              stderr: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}`,
+              exitCode: 1,
+              permissionDenied: true,
+            });
+          } else if (perm.needsApproval) {
+            // AgentRuntime is used by the lightweight REPL and other paths that do
+            // not own an interactive approval modal. Fail closed instead of
+            // silently executing an ask-mode action.
+            resultJson = JSON.stringify({
+              stdout: "",
+              stderr: `Approval Required: ${perm.reason || `Tool "${name}" requires user confirmation.`}`,
+              exitCode: 1,
+              approvalRequired: true,
+            });
+          } else {
+            resultJson = await executeTool(name, args);
+          }
+
+          if (args?.path) {
+            contextEngine.recordFileAccess(
+              args.path,
+              name.includes("write") || name.includes("edit") || name.includes("patch") ? "write" : "read"
+            );
+          }
+
+          if (onEvent) onEvent("TOOL_END", { toolName: name, toolArgs: args, result: resultJson, id });
+
+          return { result: resultJson, allowed: perm.allowed };
+        },
+        onMessage: (m) => {
           messages.push({
             role: "tool",
-            tool_call_id: call.id,
-            name: toolName,
-            content: JSON.stringify({ stdout: "", stderr: loopErr, exitCode: 1 }),
+            tool_call_id: m.id,
+            name: m.name,
+            content: m.content,
           });
-          return {
-            success: false,
-            output: "",
-            toolCallsCount,
-            turnsUsed: turnCount,
-            error: loopErr,
-          };
-        }
-        toolCallHistory.push(callSignature);
+        },
+      });
 
-        toolCallsCount++;
-        if (onEvent) onEvent("TOOL_START", { toolName, toolArgs, id: call.id });
+      if (loopAborted) {
+        const loopErr = `Infinite loop detected: exceeded maximum repetition of identical tool calls.`;
+        return {
+          success: false,
+          output: "",
+          toolCallsCount,
+          turnsUsed: turnCount,
+          error: loopErr,
+        };
+      }
 
-        const perm = evaluatePermission(toolName, toolArgs, getSandboxMode(), currentCwd, workspaceRoot);
-        let resultJson: string;
-        if (!perm.allowed) {
-          resultJson = JSON.stringify({
-            stdout: "",
-            stderr: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}`,
-            exitCode: 1,
-            permissionDenied: true,
-          });
-        } else if (perm.needsApproval) {
-          // AgentRuntime is used by the lightweight REPL and other paths that do
-          // not own an interactive approval modal. Fail closed instead of
-          // silently executing an ask-mode action.
-          resultJson = JSON.stringify({
-            stdout: "",
-            stderr: `Approval Required: ${perm.reason || `Tool "${toolName}" requires user confirmation.`}`,
-            exitCode: 1,
-            approvalRequired: true,
-          });
-        } else {
-          resultJson = await executeTool(toolName, toolArgs);
-        }
-
-        if (toolArgs?.path) {
-          contextEngine.recordFileAccess(
-            toolArgs.path,
-            toolName.includes("write") || toolName.includes("edit") || toolName.includes("patch") ? "write" : "read"
-          );
-        }
-
-        if (onEvent) onEvent("TOOL_END", { toolName, toolArgs, result: resultJson, id: call.id });
-
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          name: toolName,
-          content: resultJson,
-        });
+      if (outcome.executedCount === 0 && toolCalls.length > 0) {
+        // Every call was deduped to an already-executed signature this turn; loop continues.
       }
     }
 

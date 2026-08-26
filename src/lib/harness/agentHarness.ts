@@ -13,8 +13,9 @@ import { saveSession, loadSession } from "../sessionPersistence";
 import { detectProjectFramework } from "../projectDetector";
 import { getCliKey } from "../keys";
 import { bypassEngine } from "../bypass";
-import { ToolCache, classifyToolCalls, deduplicateToolCalls, createMetrics, type ToolCall, type DispatchResult, type ToolPlannerMetrics } from "./toolPlanner";
+import { ToolCache, createMetrics, type ToolCall, type DispatchResult, type ToolPlannerMetrics } from "./toolPlanner";
 import { compressToolResult } from "./toolOutputCompressor";
+import { executeToolBatch } from "./toolExecutor";
 import type {
   ExecutionMode,
   ExecutionOptions,
@@ -167,7 +168,6 @@ export class AgentHarness {
     let toolCallsCount = 0;
     let turnsUsed = 0;
     let accumulatedTokens = 0;
-    const toolCallHistory: string[] = [];
 
     const providerStr = model.includes("/") ? model.split("/")[0] : model;
     let localKey = getCliKey(providerStr) || getCliKey("toolnet") || getCliKey("gateway") || getCliKey("default");
@@ -347,74 +347,41 @@ export class AgentHarness {
         };
       }
 
-      // Execute requested tool calls through Harness Middleware
-      // Step 1: Dedup within this turn's tool calls
+      // Execute requested tool calls through the unified P1 pipeline:
+      //   dedup → parallel-safe classification → cache/compress (via executeTool in dispatchTool).
       const parsedCalls: ToolCall[] = toolCalls.map((call: any) => {
         let toolArgs: any = {};
         try { toolArgs = JSON.parse(call.function.arguments || "{}"); } catch {}
         return { id: call.id, name: call.function.name, args: toolArgs };
       });
 
-      const { kept: dedupedCalls, skipped: dedupSkipped } = deduplicateToolCalls(parsedCalls);
-      this.metrics.toolCallsDeduplicated += dedupSkipped;
-
-      // Step 2: Classify into parallel-safe batches and sequential
       const needsApproval = (name: string, args: any): boolean => {
         const cwd = this.config.currentCwd || process.cwd();
         const mode_ = this.config.sandboxMode || getSandboxMode();
         const perm = securityEngine.evaluate(name, args, mode_, cwd, this.config.workspaceRoot);
         return perm.needsApproval || !perm.allowed;
       };
-      const { parallel: parallelBatches, sequential: seqCalls } = classifyToolCalls(dedupedCalls, needsApproval);
-      this.metrics.toolCallsBatched += parallelBatches.reduce((acc, b) => acc + b.length, 0);
 
-      // Step 3: Execute parallel batches concurrently
-      for (const batch of parallelBatches) {
-        const results = await Promise.all(
-          batch.map(async (call: ToolCall) => {
-            this.emitEvent("agent:tool_start", mode, { toolName: call.name, toolArgs: call.args, id: call.id });
-            const toolRes = await this.dispatchTool(call.name, call.args);
-            this.emitEvent("agent:tool_end", mode, {
-              toolName: call.name, toolArgs: call.args, result: toolRes.result, id: call.id,
-            });
-            return { id: call.id, name: call.name, result: toolRes.result };
-          })
-        );
-        for (const r of results) {
-          messages.push({ role: "tool", tool_call_id: r.id, name: r.name, content: r.result });
-          toolCallsCount++;
-        }
-      }
-
-      // Step 4: Execute sequential calls one by one
-      for (const call of seqCalls) {
-        const callSig = `${call.name}:${JSON.stringify(call.args)}`;
-        const repeatCount = toolCallHistory.filter((s) => s === callSig).length;
-        if (repeatCount >= 2) {
-          messages.push({
-            role: "tool",
-            tool_call_id: call.id,
-            name: call.name,
-            content: JSON.stringify({ error: `Infinite loop detected on '${call.name}'. Call aborted.` }),
+      const outcome = await executeToolBatch(parsedCalls, {
+        cwd: this.config.currentCwd || process.cwd(),
+        needsApproval,
+        maxRepeat: 2,
+        runTool: async (name, args, id) => {
+          this.emitEvent("agent:tool_start", mode, { toolName: name, toolArgs: args, id });
+          const res = await this.dispatchTool(name, args);
+          this.emitEvent("agent:tool_end", mode, {
+            toolName: name, toolArgs: args, result: res.result, id,
           });
-          continue;
-        }
-        toolCallHistory.push(callSig);
+          return res;
+        },
+        onMessage: (m) => {
+          messages.push({ role: "tool", tool_call_id: m.id, name: m.name, content: m.content });
+          toolCallsCount++;
+        },
+      });
 
-        this.emitEvent("agent:tool_start", mode, { toolName: call.name, toolArgs: call.args, id: call.id });
-        const toolRes = await this.dispatchTool(call.name, call.args);
-        this.emitEvent("agent:tool_end", mode, {
-          toolName: call.name, toolArgs: call.args, result: toolRes.result, id: call.id,
-        });
-
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          name: call.name,
-          content: toolRes.result,
-        });
-        toolCallsCount++;
-      }
+      this.metrics.toolCallsDeduplicated += outcome.deduplicatedCount;
+      this.metrics.toolCallsBatched += outcome.parallelCalls;
     }
 
     return {

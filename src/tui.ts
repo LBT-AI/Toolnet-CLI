@@ -37,6 +37,7 @@ import { backgroundTasks } from "./lib/backgroundTasks";
 import { compactMessages, contextEngine } from "./lib/context";
 import { parseAndProcessInput } from "./lib/attachments";
 import { bypassEngine } from "./lib/bypass";
+import { executeToolBatch, type ToolCall, type BatchRunResult } from "./lib/harness/toolExecutor";
 
 import { A, T, write, getSize } from "./term";
 import { playSplashAnimation } from "./splash";
@@ -541,6 +542,40 @@ function wrapText(text: string, width: number): string[] {
   return lines.length ? lines : [""];
 }
 
+// ─── Interactive approval modal (used by the P1 pipeline via TUI) ─────────────
+async function requestApprovalModal(reason: string, args: any): Promise<boolean> {
+  const targetKey = args?.command || args?.cmd || args?.path || "";
+  return new Promise<boolean>((resolve) => {
+    pendingConfirmation = {
+      prompt: reason,
+      onDecision: (choice) => {
+        if (choice === "a") {
+          sessionTrust.recordDecision(targetKey, targetKey, "SESSION");
+        }
+      },
+      resolve,
+    };
+    renderAll();
+  });
+}
+
+async function handleSavePlan(parsedArgs: any): Promise<string> {
+  const cwd = getCwdInfo().currentCwd;
+  const toolnetDir = path.join(cwd, ".toolnet");
+  if (!fs.existsSync(toolnetDir)) fs.mkdirSync(toolnetDir);
+  fs.writeFileSync(path.join(toolnetDir, "plan.md"), parsedArgs?.content || "");
+
+  const confirmed = await new Promise<boolean>((resolve) => {
+    pendingConfirmation = { prompt: "Plan generated. Approve and switch to Build mode?", resolve };
+    renderAll();
+  });
+  if (confirmed) {
+    agentMode = "Build";
+    return JSON.stringify({ stdout: "Plan saved to .toolnet/plan.md. Switched to Build mode.", exitCode: 0 });
+  }
+  return JSON.stringify({ error: "User denied the plan." });
+}
+
 // ─── Streaming chat ─────────────────────────────────────────────────────────
 async function sendMessage(text: string) {
   if (!text.trim()) return;
@@ -737,67 +772,65 @@ async function sendMessage(text: string) {
         };
         renderAll();
         
-        // Execute tools
-        for (const tc of toolCallsArr) {
-          setStatus(`Executing tool: ${tc.function.name}…`);
-          renderAll();
-          let parsedArgs = {};
-          try { parsedArgs = JSON.parse(tc.function.arguments); } catch {}
-          
-          const perm = evaluatePermission(tc.function.name, parsedArgs, getSandboxMode(), getCwdInfo().currentCwd);
-          if (!perm.allowed) {
-            messages.push({ role: "tool", tool_call_id: tc.id, name: tc.function.name, content: JSON.stringify({ error: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}` }) });
-            saveCurrentSession();
-            continue;
-          }
+         // Execute tools through the unified P1 pipeline:
+         //   dedup → parallel-safe dispatch → cache/compress (via executeTool) → ContextEngine.
+         const cwd = getCwdInfo().currentCwd;
+         const parsedCalls: ToolCall[] = toolCallsArr.map((tc: any) => {
+           let a: any = {};
+           try { a = JSON.parse(tc.function.arguments || "{}"); } catch {}
+           return { id: tc.id, name: tc.function.name, args: a };
+         });
 
-          if (perm.needsApproval) {
-            const promptMsg = perm.reason ? `${perm.reason}` : `Tool ${tc.function.name} requires permission`;
-            const targetKey = (parsedArgs as any)?.command || (parsedArgs as any)?.cmd || (parsedArgs as any)?.path || "";
-            const confirmed = await new Promise<boolean>((resolve) => {
-              pendingConfirmation = {
-                prompt: promptMsg,
-                onDecision: (choice) => {
-                  if (choice === "a") {
-                    sessionTrust.recordDecision(tc.function.name, targetKey, "SESSION");
-                  }
-                },
-                resolve,
-              };
-              renderAll();
-            });
-            if (!confirmed) {
-              messages.push({ role: "tool", tool_call_id: tc.id, name: tc.function.name, content: JSON.stringify({ error: "User denied permission." }) });
-              saveCurrentSession();
-              continue;
-            }
-          }
+         const runTool = async (name: string, args: any, id: string): Promise<BatchRunResult> => {
+           if (name === "save_plan") {
+             const r = await handleSavePlan(args);
+             return { result: r, allowed: true };
+           }
+           const perm = evaluatePermission(name, args, getSandboxMode(), cwd);
+           if (!perm.allowed) {
+             return {
+               result: JSON.stringify({ error: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}` }),
+               allowed: false,
+             };
+           }
+           if (perm.needsApproval) {
+             const ok = await requestApprovalModal(
+               perm.reason ? `${perm.reason}` : `Tool ${name} requires permission`,
+               args
+             );
+             if (!ok) {
+               return { result: JSON.stringify({ error: "User denied permission." }), allowed: false };
+             }
+           }
+           const result = await executeTool(name, args, { cwd, skipPermission: true });
+           if (args?.path) {
+             contextEngine.recordFileAccess(
+               args.path,
+               name.includes("write") || name.includes("edit") || name.includes("patch") ? "write" : "read"
+             );
+           }
+           return { result, allowed: true };
+         };
 
-          let result = "";
-          if (tc.function.name === "save_plan") {
-            const cwd = getCwdInfo().currentCwd;
-            const toolnetDir = path.join(cwd, ".toolnet");
-            if (!fs.existsSync(toolnetDir)) fs.mkdirSync(toolnetDir);
-            fs.writeFileSync(path.join(toolnetDir, "plan.md"), (parsedArgs as any).content || "");
-            
-            const confirmed = await new Promise<boolean>((resolve) => {
-              pendingConfirmation = { prompt: "Plan generated. Approve and switch to Build mode?", resolve };
-              renderAll();
-            });
-            if (confirmed) {
-              agentMode = "Build";
-              result = JSON.stringify({ stdout: "Plan saved to .toolnet/plan.md. Switched to Build mode.", exitCode: 0 });
-              messages.push({ role: "system", content: "→ Plan approved. Switched to execution mode." });
-            } else {
-              result = JSON.stringify({ error: "User denied the plan." });
-            }
-          } else {
-            result = await executeTool(tc.function.name, parsedArgs, { cwd: getCwdInfo().currentCwd, skipPermission: true });
-          }
-          messages.push({ role: "tool", tool_call_id: tc.id, name: tc.function.name, content: result });
-          saveCurrentSession();
-        }
-        
+         const outcome = await executeToolBatch(parsedCalls, {
+           cwd,
+           needsApproval: (name, args) => {
+             const p = evaluatePermission(name, args, getSandboxMode(), cwd);
+             return p.needsApproval || !p.allowed;
+           },
+           runTool,
+           onMessage: (m) => {
+             messages.push({ role: "tool", tool_call_id: m.id, name: m.name, content: m.content });
+             saveCurrentSession();
+           },
+         });
+
+         if (outcome.executedCount > 0) {
+           setStatus(
+             `Executed ${toolCallsArr.length} tool call(s) — ${outcome.deduplicatedCount} deduplicated, ${outcome.parallelBatches} parallel batch(es)`
+           );
+         }
+
         // Push a new empty assistant message for the next iteration
         messages.push({ role: "assistant", content: "" });
         assistantIdx = messages.length - 1;
