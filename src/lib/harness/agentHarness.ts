@@ -13,6 +13,8 @@ import { saveSession, loadSession } from "../sessionPersistence";
 import { detectProjectFramework } from "../projectDetector";
 import { getCliKey } from "../keys";
 import { bypassEngine } from "../bypass";
+import { ToolCache, classifyToolCalls, deduplicateToolCalls, createMetrics, type ToolCall, type DispatchResult, type ToolPlannerMetrics } from "./toolPlanner";
+import { compressToolResult } from "./toolOutputCompressor";
 import type {
   ExecutionMode,
   ExecutionOptions,
@@ -31,6 +33,8 @@ export class AgentHarness {
   private totalTokensUsed = 0;
   private totalToolCalls = 0;
   private initializedAt = Date.now();
+  private toolCache = new ToolCache();
+  private metrics = createMetrics();
 
   constructor(config: HarnessConfig = {}) {
     this.config = {
@@ -88,12 +92,15 @@ export class AgentHarness {
     const cwd = options.cwd || this.config.currentCwd || process.cwd();
     const mode = this.config.sandboxMode || getSandboxMode();
 
+    this.metrics.toolCallsRequested++;
+
     const isForceBypass = this.config.bypassSecurity || (bypassEngine.isEnabled() && bypassEngine.getConfig().forceExecution);
     const skipPermission = options.skipPermission || isForceBypass;
 
     if (!skipPermission) {
       const perm = securityEngine.evaluate(name, args, mode, cwd, this.config.workspaceRoot);
       if (!perm.allowed) {
+        this.metrics.toolCallsExecuted++;
         return {
           result: JSON.stringify({ error: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}` }),
           allowed: false,
@@ -101,6 +108,7 @@ export class AgentHarness {
         };
       }
       if (perm.needsApproval) {
+        this.metrics.toolCallsExecuted++;
         return {
           result: JSON.stringify({
             stdout: "",
@@ -114,21 +122,49 @@ export class AgentHarness {
       }
     }
 
+    // Cache check for read-only tools
+    const cachedResult = this.toolCache.get(name, args);
+    if (cachedResult !== null) {
+      this.metrics.toolCacheHits++;
+      this.metrics.retainedToolOutputChars += cachedResult.length;
+      return { result: cachedResult, allowed: true };
+    }
+
     this.totalToolCalls++;
+    this.metrics.toolCallsExecuted++;
     const rawResult = await executeTool(name, args, {
       cwd,
       workspaceRoot: this.config.workspaceRoot,
       skipPermission,
     });
 
+    this.metrics.rawToolOutputChars += rawResult.length;
+
+    // Invalidate cache on write tools
+    const isWriteTool = name === "write_file" || name === "edit_file" || name === "replace_all" || name === "apply_patch";
+    if (isWriteTool && args?.path) {
+      this.toolCache.invalidateByPath(args.path);
+    }
+    // Shell commands can affect anything — invalidate broadly
+    if (name === "shell" || name === "run_command") {
+      this.toolCache.invalidateAll();
+    }
+
     if (args?.path) {
       contextEngine.recordFileAccess(
         args.path,
-        name.includes("write") || name.includes("edit") || name.includes("patch") ? "write" : "read"
+        isWriteTool ? "write" : "read"
       );
     }
 
-    const sanitizedResult = redactSecrets(rawResult);
+    // Compress output for context
+    const compressed = compressToolResult(rawResult, name);
+    this.metrics.retainedToolOutputChars += compressed.length;
+
+    // Store in cache
+    this.toolCache.set(name, args, compressed);
+
+    const sanitizedResult = redactSecrets(compressed);
     return {
       result: sanitizedResult,
       allowed: true,
@@ -334,44 +370,72 @@ export class AgentHarness {
       }
 
       // Execute requested tool calls through Harness Middleware
-      for (const call of toolCalls) {
-        const toolName = call.function.name;
+      // Step 1: Dedup within this turn's tool calls
+      const parsedCalls: ToolCall[] = toolCalls.map((call: any) => {
         let toolArgs: any = {};
-        try {
-          toolArgs = JSON.parse(call.function.arguments || "{}");
-        } catch {}
+        try { toolArgs = JSON.parse(call.function.arguments || "{}"); } catch {}
+        return { id: call.id, name: call.function.name, args: toolArgs };
+      });
 
-        const callSig = `${toolName}:${JSON.stringify(toolArgs)}`;
+      const { kept: dedupedCalls, skipped: dedupSkipped } = deduplicateToolCalls(parsedCalls);
+      this.metrics.toolCallsDeduplicated += dedupSkipped;
+
+      // Step 2: Classify into parallel-safe batches and sequential
+      const needsApproval = (name: string, args: any): boolean => {
+        const cwd = this.config.currentCwd || process.cwd();
+        const mode_ = this.config.sandboxMode || getSandboxMode();
+        const perm = securityEngine.evaluate(name, args, mode_, cwd, this.config.workspaceRoot);
+        return perm.needsApproval || !perm.allowed;
+      };
+      const { parallel: parallelBatches, sequential: seqCalls } = classifyToolCalls(dedupedCalls, needsApproval);
+      this.metrics.toolCallsBatched += parallelBatches.reduce((acc, b) => acc + b.length, 0);
+
+      // Step 3: Execute parallel batches concurrently
+      for (const batch of parallelBatches) {
+        const results = await Promise.all(
+          batch.map(async (call: ToolCall) => {
+            this.emitEvent("agent:tool_start", mode, { toolName: call.name, toolArgs: call.args, id: call.id });
+            const toolRes = await this.dispatchTool(call.name, call.args);
+            this.emitEvent("agent:tool_end", mode, {
+              toolName: call.name, toolArgs: call.args, result: toolRes.result, id: call.id,
+            });
+            return { id: call.id, name: call.name, result: toolRes.result };
+          })
+        );
+        for (const r of results) {
+          messages.push({ role: "tool", tool_call_id: r.id, name: r.name, content: r.result });
+          toolCallsCount++;
+        }
+      }
+
+      // Step 4: Execute sequential calls one by one
+      for (const call of seqCalls) {
+        const callSig = `${call.name}:${JSON.stringify(call.args)}`;
         const repeatCount = toolCallHistory.filter((s) => s === callSig).length;
         if (repeatCount >= 2) {
           messages.push({
             role: "tool",
             tool_call_id: call.id,
-            name: toolName,
-            content: JSON.stringify({ error: `Infinite loop detected on '${toolName}'. Call aborted.` }),
+            name: call.name,
+            content: JSON.stringify({ error: `Infinite loop detected on '${call.name}'. Call aborted.` }),
           });
           continue;
         }
         toolCallHistory.push(callSig);
 
-        toolCallsCount++;
-        this.emitEvent("agent:tool_start", mode, { toolName, toolArgs, id: call.id });
-
-        const toolRes = await this.dispatchTool(toolName, toolArgs);
-
+        this.emitEvent("agent:tool_start", mode, { toolName: call.name, toolArgs: call.args, id: call.id });
+        const toolRes = await this.dispatchTool(call.name, call.args);
         this.emitEvent("agent:tool_end", mode, {
-          toolName,
-          toolArgs,
-          result: toolRes.result,
-          id: call.id,
+          toolName: call.name, toolArgs: call.args, result: toolRes.result, id: call.id,
         });
 
         messages.push({
           role: "tool",
           tool_call_id: call.id,
-          name: toolName,
+          name: call.name,
           content: toolRes.result,
         });
+        toolCallsCount++;
       }
     }
 
@@ -396,9 +460,10 @@ export class AgentHarness {
    */
   async runHeadless(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
     const memoryPrompt = contextEngine.getMemoryPromptSnippet();
+    const toolRules = contextEngine.getToolUsageRulesSnippet();
     const baseSystemPrompt =
       options.systemPrompt ||
-      `You are ToolNet API CLI Agent. Complete the user request using available tools with maximum efficiency.\n\n${memoryPrompt}`;
+      `You are ToolNet API CLI Agent. Complete the user request using available tools with maximum efficiency.\n\n${memoryPrompt}${toolRules}`;
     const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
 
     const messages: ContextMessage[] = [
@@ -495,6 +560,7 @@ export class AgentHarness {
 
   getSnapshot(): HarnessSnapshot {
     const detected = detectProjectFramework(this.config.workspaceRoot || process.cwd());
+    const cacheStats = this.toolCache.getStats();
     return {
       sessionId: this.config.sessionId || "default",
       workspaceRoot: this.config.workspaceRoot || process.cwd(),
@@ -505,7 +571,28 @@ export class AgentHarness {
       totalTokensUsed: this.totalTokensUsed,
       totalToolCalls: this.totalToolCalls,
       initializedAt: this.initializedAt,
+      metrics: {
+        toolCallsRequested: this.metrics.toolCallsRequested,
+        toolCallsExecuted: this.metrics.toolCallsExecuted,
+        toolCallsDeduplicated: this.metrics.toolCallsDeduplicated,
+        toolCacheHits: cacheStats.hits,
+        toolCallsBatched: this.metrics.toolCallsBatched,
+        rawToolOutputChars: this.metrics.rawToolOutputChars,
+        retainedToolOutputChars: this.metrics.retainedToolOutputChars,
+        contextCompactions: contextEngine.getCompactionCount(),
+        workspaceIndexHits: 0,
+      },
     };
+  }
+
+  /** Get the tool cache instance for external inspection. */
+  getToolCache(): ToolCache {
+    return this.toolCache;
+  }
+
+  /** Get planner metrics. */
+  getMetrics(): ToolPlannerMetrics {
+    return { ...this.metrics, ...this.toolCache.getStats() } as any;
   }
 }
 

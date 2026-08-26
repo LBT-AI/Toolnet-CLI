@@ -78,6 +78,18 @@ export interface HarnessResult {
   teamworkState?: SchedulerState;
 }
 
+export interface HarnessMetrics {
+  toolCallsRequested: number;
+  toolCallsExecuted: number;
+  toolCallsDeduplicated: number;
+  toolCacheHits: number;
+  toolCallsBatched: number;
+  rawToolOutputChars: number;
+  retainedToolOutputChars: number;
+  contextCompactions: number;
+  workspaceIndexHits: number;
+}
+
 export interface HarnessSnapshot {
   sessionId: string;
   workspaceRoot: string;
@@ -88,4 +100,5 @@ export interface HarnessSnapshot {
   totalTokensUsed: number;
   totalToolCalls: number;
   initializedAt: number;
+  metrics?: HarnessMetrics;
 }

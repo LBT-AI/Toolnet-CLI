@@ -14,17 +14,24 @@ import { estimateMessageChars, estimateTotalTokens } from "./tokenEstimator";
 
 export class ContextEngine {
   private defaultModel: string;
+  private compactionCount = 0;
 
   constructor(defaultModel = "default") {
     this.defaultModel = defaultModel;
   }
 
   /**
-   * Prepares a message list for LLM API invocation:
-   * 1. Injects active SessionMemory into the system prompt if missing.
-   * 2. Prunes bulky older tool results.
-   * 3. Performs atomic compaction if context size exceeds model threshold.
-   * 4. Returns optimized messages and real-time budget metrics.
+   * Prepares a message list for LLM API invocation.
+   *
+   * Pipeline:
+   *  1. Ingest user goals into session memory.
+   *  2. Auto-prune bulky older tool results (priority: errors > recent > old).
+   *  3. Compress tool outputs if context is growing.
+   *  4. Atomic compaction if context exceeds model threshold.
+   *  5. Return optimized messages and real-time budget metrics.
+   *
+   * The model's context spec determines when to start pruning/compressing.
+   * We begin compressing at ~70% utilization to avoid hitting the ceiling.
    */
   prepareMessagesForApi(
     messages: ContextMessage[],
@@ -51,12 +58,21 @@ export class ContextEngine {
       }
     }
 
-    // 2. Auto-prune bulky older tool outputs
+    // 2. Priority-based pruning: start at 70% utilization
     let prunedCount = 0;
     if (options?.autoPrune !== false) {
-      const pruneResult = pruneOldToolResults(workingMessages);
-      workingMessages = pruneResult.messages;
-      prunedCount = pruneResult.prunedCount;
+      const budgetCheck = calculateContextBudget(workingMessages, model);
+      const utilization = budgetCheck.utilizationPercent;
+
+      // Aggressive pruning at 70% utilization
+      if (utilization >= 70) {
+        const pruneResult = pruneOldToolResults(workingMessages, {
+          maxToolResultChars: utilization >= 85 ? 400 : 600,
+          keepRecentToolsCount: utilization >= 85 ? 2 : 3,
+        });
+        workingMessages = pruneResult.messages;
+        prunedCount = pruneResult.prunedCount;
+      }
     }
 
     // 3. Check if compaction is needed based on model threshold
@@ -73,6 +89,7 @@ export class ContextEngine {
       if (compResult.compacted) {
         workingMessages = compResult.messages;
         compacted = true;
+        this.compactionCount++;
       }
     }
 
@@ -140,6 +157,27 @@ export class ContextEngine {
    */
   getMemoryPromptSnippet(): string {
     return sessionMemory.generateSystemPromptSnippet();
+  }
+
+  /**
+   * Tool usage rules for the agent system prompt.
+   * Kept short — ~120 tokens, no spam.
+   */
+  getToolUsageRulesSnippet(): string {
+    return [
+      "",
+      "## Tool Usage Rules",
+      "- Prefer native read_file/grep over shell sed/grep.",
+      "- Reuse already observed information unless the file changed.",
+      "- Prefer one sufficiently large read over repeated adjacent reads.",
+      "- Batch independent reads/searches.",
+      "- Consult workspace code map before broad exploration.",
+    ].join("\n");
+  }
+
+  /** Returns how many compactions have occurred this session. */
+  getCompactionCount(): number {
+    return this.compactionCount;
   }
 }
 
