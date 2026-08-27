@@ -16,45 +16,67 @@ export interface ToolResult {
 
 export let currentCwd = process.cwd();
 export let workspaceRoot = process.cwd();
+export let workspaceRoots: string[] = [process.cwd()];
 export let bypassPolicy = false;
 
-export function initWorkspace(customPath?: string) {
-  let targetPath = customPath;
+export function getWorkspaceRoots(): string[] {
+  return [...workspaceRoots];
+}
 
-  if (!targetPath) {
+export function setWorkspaceRoots(roots: string[]): void {
+  workspaceRoots = roots.map(r => path.resolve(r)).filter(r => fs.existsSync(r));
+  if (workspaceRoots.length > 0) {
+    workspaceRoot = workspaceRoots[0];
+  }
+}
+
+export function initWorkspace(customPath?: string, customRoots?: string[]) {
+  const detectedRoots: string[] = [];
+
+  if (customRoots && customRoots.length > 0) {
+    detectedRoots.push(...customRoots);
+  } else if (customPath) {
+    detectedRoots.push(customPath);
+  } else {
+    // Check CLI args for multiple --workspace flags
     const args = process.argv.slice(2);
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
       if ((arg === "--cwd" || arg === "--workspace") && i + 1 < args.length) {
-        targetPath = args[i + 1];
-        break;
-      } else if (arg.startsWith("--cwd=") || arg.startsWith("--workspace=")) {
-        targetPath = arg.split("=")[1];
-        break;
-      } else if (arg === "-p" || arg === "--prompt" || arg === "-m" || arg === "--model" || arg === "--session") {
+        detectedRoots.push(args[i + 1]);
         i++;
-        continue;
-      } else if (!arg.startsWith("-")) {
-        targetPath = arg;
-        break;
+      } else if (arg.startsWith("--cwd=") || arg.startsWith("--workspace=")) {
+        detectedRoots.push(arg.split("=")[1]);
       }
+    }
+
+    // Check for toolnet.workspace.json in current directory
+    const workspaceConfigFile = path.join(process.cwd(), "toolnet.workspace.json");
+    if (detectedRoots.length === 0 && fs.existsSync(workspaceConfigFile)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(workspaceConfigFile, "utf8"));
+        if (Array.isArray(parsed.roots)) {
+          for (const r of parsed.roots) {
+            detectedRoots.push(path.resolve(process.cwd(), r));
+          }
+        }
+      } catch {}
     }
   }
 
-  if (targetPath) {
-    const abs = path.resolve(process.cwd(), targetPath);
-    if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) {
-      workspaceRoot = abs;
-      currentCwd = abs;
-      try {
-        process.chdir(abs);
-      } catch {}
-    } else {
-      console.warn(`Warning: Workspace directory does not exist or is not a directory: ${targetPath}`);
-      workspaceRoot = process.cwd();
-      currentCwd = process.cwd();
-    }
+  const validRoots = detectedRoots
+    .map((r) => path.resolve(process.cwd(), r))
+    .filter((abs) => fs.existsSync(abs) && fs.statSync(abs).isDirectory());
+
+  if (validRoots.length > 0) {
+    workspaceRoots = validRoots;
+    workspaceRoot = validRoots[0];
+    currentCwd = validRoots[0];
+    try {
+      process.chdir(validRoots[0]);
+    } catch {}
   } else {
+    workspaceRoots = [process.cwd()];
     workspaceRoot = process.cwd();
     currentCwd = process.cwd();
   }
@@ -66,7 +88,7 @@ export function setBypassPolicy(enabled: boolean) {
 
 export function getCwdInfo() {
   const isFullAccess = getSandboxMode() === "full-access";
-  return { currentCwd, workspaceRoot, bypassPolicy: bypassPolicy || isFullAccess };
+  return { currentCwd, workspaceRoot, workspaceRoots: [...workspaceRoots], bypassPolicy: bypassPolicy || isFullAccess };
 }
 
 export function setWorkspaceRoot(newPath: string): boolean {

@@ -2,7 +2,26 @@
 const ESC = "\x1b";
 const CSI = ESC + "[";
 
-export const A = {
+let noColorOverride: boolean | null = null;
+
+export function isNoColor(): boolean {
+  if (noColorOverride !== null) return noColorOverride;
+  if (typeof process !== "undefined") {
+    if (process.env.NO_COLOR !== undefined && process.env.NO_COLOR !== "" && process.env.NO_COLOR !== "0") {
+      return true;
+    }
+    if (process.argv && process.argv.includes("--no-color")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function setNoColor(val: boolean | null): void {
+  noColorOverride = val;
+}
+
+const RAW_A = {
   reset:     CSI + "0m",
   bold:      CSI + "1m",
   dim:       CSI + "2m",
@@ -27,6 +46,15 @@ export const A = {
   bgRed:     CSI + "48;2;224;108;117m",
 };
 
+export const A: typeof RAW_A = new Proxy(RAW_A, {
+  get(target, prop: keyof typeof RAW_A) {
+    if (isNoColor()) {
+      return "";
+    }
+    return target[prop] ?? "";
+  }
+});
+
 export const T = {
   hide:      CSI + "?25l",
   show:      CSI + "?25h",
@@ -41,8 +69,10 @@ export const T = {
 export function write(s: string) { process.stdout.write(s); }
 
 export function getSize(): { cols: number; rows: number } {
+  const cols = (process.stdout && process.stdout.columns) || 100;
+  const rows = (process.stdout && process.stdout.rows) || 30;
   return {
-    cols: process.stdout.columns || 100,
-    rows: process.stdout.rows || 30,
+    cols: Math.max(20, cols),
+    rows: Math.max(5, rows),
   };
 }

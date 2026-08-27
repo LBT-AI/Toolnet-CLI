@@ -1,13 +1,14 @@
 /**
- * WorkspaceIndex — Lightweight workspace code map.
+ * WorkspaceIndex — Lightweight multi-workspace code map.
  *
  * Provides awareness of entry points, key files, imports/exports,
- * functions/classes/interfaces, and dependency relationships.
+ * functions/classes/interfaces, and cross-workspace dependency relationships.
  *
  * Strategy:
  *  - Regex-based lightweight scanning (no heavy AST deps)
  *  - Cached in .toolnet/index/
  *  - Incremental: only reindex changed files
+ *  - Supports multiple workspace roots and cross-root mapping
  *  - Skips node_modules, dist, build, .git, binary/media
  */
 
@@ -33,6 +34,7 @@ const SKIP_EXTENSIONS = new Set([
 
 export interface FileIndex {
   path: string;
+  root: string;
   hash: string;
   lastModified: number;
   size: number;
@@ -53,15 +55,38 @@ export interface WorkspaceIndexData {
 }
 
 export interface SymbolMatch {
+  root?: string;
   file: string;
   line: number;
   kind: "function" | "class" | "interface" | "export" | "import";
   name: string;
 }
 
-// ─── Index ───────────────────────────────────────────────────────────────────
+export interface CrossWorkspaceDependency {
+  fromRoot: string;
+  toRoot: string;
+  relationship: "package" | "tsconfig" | "import";
+  detail?: string;
+}
+
+export interface CrossWorkspaceMap {
+  roots: string[];
+  packages: Array<{ name: string; root: string; version?: string }>;
+  dependencies: CrossWorkspaceDependency[];
+}
+
+export interface MultiWorkspaceIndexData {
+  roots: string[];
+  indexes: Map<string, WorkspaceIndexData>;
+  crossMap: CrossWorkspaceMap;
+  totalFiles: number;
+  lastBuilt: number;
+}
+
+// ─── Cache ───────────────────────────────────────────────────────────────────
 
 let cachedIndex: WorkspaceIndexData | null = null;
+let cachedMultiIndex: MultiWorkspaceIndexData | null = null;
 
 function getCacheDir(root: string): string {
   return path.join(root, ".toolnet", "index");
@@ -69,15 +94,6 @@ function getCacheDir(root: string): string {
 
 function getCachePath(root: string): string {
   return path.join(getCacheDir(root), "code-map.json");
-}
-
-function hashFile(filePath: string): string {
-  try {
-    const content = fs.readFileSync(filePath, "utf8");
-    return crypto.createHash("md5").update(content).digest("hex");
-  } catch {
-    return "";
-  }
 }
 
 function shouldSkip(dir: string): boolean {
@@ -100,7 +116,7 @@ function isSourceFile(filePath: string): boolean {
 function scanFile(filePath: string, root: string): FileIndex | null {
   try {
     const stat = fs.statSync(filePath);
-    if (stat.size > 500_000) return null; // skip huge files
+    if (stat.size > 500_000) return null;
     const content = fs.readFileSync(filePath, "utf8");
     const hash = crypto.createHash("md5").update(content).digest("hex");
     const relPath = path.relative(root, filePath);
@@ -117,7 +133,7 @@ function scanFile(filePath: string, root: string): FileIndex | null {
 
       // Imports
       const importMatch = trimmed.match(
-        /(?:import|from)\s+["'{]([^"'}]+)["'}]/,
+        /(?:import|from)\s+["'{]([^"'}]+)["']}/,
       );
       if (importMatch) imports.push(importMatch[1]);
 
@@ -127,7 +143,7 @@ function scanFile(filePath: string, root: string): FileIndex | null {
       );
       if (exportMatch) exports.push(exportMatch[1]);
 
-      // Functions (const/let/var arrow, or function keyword)
+      // Functions
       const fnMatch = trimmed.match(
         /(?:(?:export|async)\s+)*function\s+(\w+)/,
       );
@@ -147,7 +163,7 @@ function scanFile(filePath: string, root: string): FileIndex | null {
       if (ifaceMatch && !interfaces.includes(ifaceMatch[1])) interfaces.push(ifaceMatch[1]);
     }
 
-    // Entry point detection
+    // Entry points
     const isEntry =
       relPath === "src/index.tsx" ||
       relPath === "src/index.ts" ||
@@ -160,6 +176,7 @@ function scanFile(filePath: string, root: string): FileIndex | null {
 
     return {
       path: relPath,
+      root,
       hash,
       lastModified: stat.mtimeMs,
       size: stat.size,
@@ -189,11 +206,8 @@ function walkDir(dir: string, root: string, results: string[]): void {
   } catch {}
 }
 
-// ─── Public API ──────────────────────────────────────────────────────────────
+// ─── Single Workspace Index ──────────────────────────────────────────────────
 
-/**
- * Build a fresh workspace index. Scans all source files recursively.
- */
 export function buildWorkspaceIndex(root?: string): WorkspaceIndexData {
   const workspaceRoot = root || process.cwd();
   const files = new Map<string, FileIndex>();
@@ -220,10 +234,9 @@ export function buildWorkspaceIndex(root?: string): WorkspaceIndexData {
 
   cachedIndex = index;
 
-  // Persist to disk
   try {
     const cacheDir = getCacheDir(workspaceRoot);
-    fs.mkdirSync(cacheDir, { recursive: true });
+    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
     const serializable = {
       ...index,
       files: Object.fromEntries(index.files),
@@ -254,28 +267,169 @@ export function updateFileIndex(filePath: string, root?: string): FileIndex | nu
   return idx;
 }
 
-/**
- * Search for symbols (functions, classes, interfaces) by name.
- */
-export function searchSymbols(query: string, root?: string): SymbolMatch[] {
-  const index = cachedIndex || buildWorkspaceIndex(root);
+// ─── Multi-Workspace & Cross-Workspace Mapping ───────────────────────────────
+
+export function buildMultiWorkspaceIndex(roots: string[]): MultiWorkspaceIndexData {
+  const indexes = new Map<string, WorkspaceIndexData>();
+  let totalFiles = 0;
+
+  for (const r of roots) {
+    const absRoot = path.resolve(r);
+    const idx = buildWorkspaceIndex(absRoot);
+    indexes.set(absRoot, idx);
+    totalFiles += idx.totalFiles;
+  }
+
+  const crossMap = analyzeCrossWorkspaceDependencies(roots, indexes);
+
+  const multiIndex: MultiWorkspaceIndexData = {
+    roots,
+    indexes,
+    crossMap,
+    totalFiles,
+    lastBuilt: Date.now(),
+  };
+
+  cachedMultiIndex = multiIndex;
+  return multiIndex;
+}
+
+export function analyzeCrossWorkspaceDependencies(
+  roots: string[],
+  indexes: Map<string, WorkspaceIndexData>
+): CrossWorkspaceMap {
+  const packages: Array<{ name: string; root: string; version?: string }> = [];
+  const dependencies: CrossWorkspaceDependency[] = [];
+
+  // 1. Detect package.json per root
+  for (const root of roots) {
+    const pkgPath = path.join(root, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+        if (pkg.name) {
+          packages.push({ name: pkg.name, root, version: pkg.version });
+        }
+      } catch {}
+    }
+  }
+
+  // 2. Detect package dependencies & tsconfig references across roots
+  for (const fromRoot of roots) {
+    // Package.json dependencies
+    const pkgPath = path.join(fromRoot, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+        const allDeps = {
+          ...(pkg.dependencies || {}),
+          ...(pkg.devDependencies || {}),
+          ...(pkg.peerDependencies || {}),
+        };
+
+        for (const targetPkg of packages) {
+          if (targetPkg.root !== fromRoot && allDeps[targetPkg.name]) {
+            dependencies.push({
+              fromRoot,
+              toRoot: targetPkg.root,
+              relationship: "package",
+              detail: `Dependency on '${targetPkg.name}' (${allDeps[targetPkg.name]})`,
+            });
+          }
+        }
+      } catch {}
+    }
+
+    // tsconfig.json references
+    const tsconfigPath = path.join(fromRoot, "tsconfig.json");
+    if (fs.existsSync(tsconfigPath)) {
+      try {
+        const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, "utf8"));
+        if (Array.isArray(tsconfig.references)) {
+          for (const ref of tsconfig.references) {
+            if (ref.path) {
+              const refAbs = path.resolve(fromRoot, ref.path);
+              for (const toRoot of roots) {
+                if (toRoot !== fromRoot && (refAbs === toRoot || refAbs.startsWith(toRoot))) {
+                  dependencies.push({
+                    fromRoot,
+                    toRoot,
+                    relationship: "tsconfig",
+                    detail: `tsconfig project reference to '${ref.path}'`,
+                  });
+                }
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // 3. Scan imports for cross-root relative paths
+    const idx = indexes.get(fromRoot);
+    if (idx) {
+      for (const [, file] of idx.files) {
+        for (const imp of file.imports) {
+          if (imp.startsWith(".")) {
+            const resolvedImp = path.resolve(fromRoot, path.dirname(file.path), imp);
+            for (const toRoot of roots) {
+              if (toRoot !== fromRoot && resolvedImp.startsWith(toRoot)) {
+                dependencies.push({
+                  fromRoot,
+                  toRoot,
+                  relationship: "import",
+                  detail: `File '${file.path}' imports from '${toRoot}' (${imp})`,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    roots,
+    packages,
+    dependencies,
+  };
+}
+
+export function searchSymbols(query: string, rootOrRoots?: string | string[]): SymbolMatch[] {
+  let roots: string[];
+  if (Array.isArray(rootOrRoots)) {
+    roots = rootOrRoots;
+  } else if (typeof rootOrRoots === "string") {
+    roots = [rootOrRoots];
+  } else {
+    try {
+      const { getWorkspaceRoots } = require("./codingAgent");
+      roots = getWorkspaceRoots();
+    } catch {
+      roots = [process.cwd()];
+    }
+  }
+
   const matches: SymbolMatch[] = [];
   const lower = query.toLowerCase();
 
-  for (const [, file] of index.files) {
-    for (const fn of file.functions) {
-      if (fn.toLowerCase().includes(lower)) {
-        matches.push({ file: file.path, line: 0, kind: "function", name: fn });
+  for (const root of roots) {
+    const idx = (cachedIndex && cachedIndex.root === root) ? cachedIndex : buildWorkspaceIndex(root);
+    for (const [, file] of idx.files) {
+      for (const fn of file.functions) {
+        if (fn.toLowerCase().includes(lower)) {
+          matches.push({ root, file: file.path, line: 0, kind: "function", name: fn });
+        }
       }
-    }
-    for (const cls of file.classes) {
-      if (cls.toLowerCase().includes(lower)) {
-        matches.push({ file: file.path, line: 0, kind: "class", name: cls });
+      for (const cls of file.classes) {
+        if (cls.toLowerCase().includes(lower)) {
+          matches.push({ root, file: file.path, line: 0, kind: "class", name: cls });
+        }
       }
-    }
-    for (const iface of file.interfaces) {
-      if (iface.toLowerCase().includes(lower)) {
-        matches.push({ file: file.path, line: 0, kind: "interface", name: iface });
+      for (const iface of file.interfaces) {
+        if (iface.toLowerCase().includes(lower)) {
+          matches.push({ root, file: file.path, line: 0, kind: "interface", name: iface });
+        }
       }
     }
   }
@@ -283,30 +437,14 @@ export function searchSymbols(query: string, root?: string): SymbolMatch[] {
   return matches;
 }
 
-/**
- * Find where a symbol is defined (exported from).
- */
 export function findDefinition(symbolName: string, root?: string): SymbolMatch | null {
-  const index = cachedIndex || buildWorkspaceIndex(root);
-
-  for (const [, file] of index.files) {
-    if (file.exports.includes(symbolName)) {
-      const kind = file.functions.includes(symbolName)
-        ? "function"
-        : file.classes.includes(symbolName)
-        ? "class"
-        : file.interfaces.includes(symbolName)
-        ? "interface"
-        : "export";
-      return { file: file.path, line: 0, kind, name: symbolName };
-    }
+  const matches = searchSymbols(symbolName, root);
+  for (const m of matches) {
+    if (m.name === symbolName) return m;
   }
   return null;
 }
 
-/**
- * Find files that reference a symbol (via imports).
- */
 export function findReferences(symbolName: string, root?: string): string[] {
   const index = cachedIndex || buildWorkspaceIndex(root);
   const refs: string[] = [];
@@ -319,9 +457,6 @@ export function findReferences(symbolName: string, root?: string): string[] {
   return refs;
 }
 
-/**
- * Get the full code map as a structured object.
- */
 export function getCodeMap(root?: string): {
   entryPoints: string[];
   totalFiles: number;
@@ -340,9 +475,14 @@ export function getCodeMap(root?: string): {
   };
 }
 
-/**
- * Get cached index or build fresh.
- */
+export function getCrossWorkspaceCodeMap(roots?: string[]): CrossWorkspaceMap {
+  const effectiveRoots = roots || (cachedMultiIndex ? cachedMultiIndex.roots : [process.cwd()]);
+  const multi = cachedMultiIndex && cachedMultiIndex.roots === effectiveRoots
+    ? cachedMultiIndex
+    : buildMultiWorkspaceIndex(effectiveRoots);
+  return multi.crossMap;
+}
+
 export function getWorkspaceIndex(root?: string): WorkspaceIndexData {
   if (cachedIndex && cachedIndex.root === (root || process.cwd())) return cachedIndex;
   return buildWorkspaceIndex(root);

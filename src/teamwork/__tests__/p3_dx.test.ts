@@ -51,8 +51,15 @@ function cleanDir(d: string) {
 describe("P3 — Wizard non-TTY guard", () => {
   it("isTty returns false when stdin is not a TTY", () => {
     const { isTty } = require("../../lib/setupWizard");
-    // In test runner, stdin is not a TTY
-    expect(isTty()).toBe(false);
+    const orig = process.stdin.isTTY;
+    try {
+      Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+      expect(isTty()).toBe(false);
+      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+      expect(isTty()).toBe(true);
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: orig, configurable: true });
+    }
   });
 
   it("printSetupHint does not throw", () => {

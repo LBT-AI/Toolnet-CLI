@@ -400,8 +400,30 @@ export class SecurityEngine {
       }
     }
 
-    const rel = path.relative(realRoot, realTarget);
-    const isInside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    let rel = path.relative(realRoot, realTarget);
+    let isInside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+
+    if (!isInside && !workspaceRoot) {
+      try {
+        const { getWorkspaceRoots } = require("../codingAgent");
+        const roots: string[] = getWorkspaceRoots();
+        for (const r of roots) {
+          let rReal = r;
+          try {
+            rReal = fs.realpathSync(r);
+          } catch {
+            rReal = path.resolve(r);
+          }
+          const rRel = path.relative(rReal, realTarget);
+          if (rRel === "" || (!rRel.startsWith("..") && !path.isAbsolute(rRel))) {
+            isInside = true;
+            rel = rRel;
+            realRoot = rReal;
+            break;
+          }
+        }
+      } catch {}
+    }
 
     return {
       isInside,

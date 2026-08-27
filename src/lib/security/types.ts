@@ -71,15 +71,20 @@ export interface SecurityPolicyConfig {
 }
 
 export interface SecurityAuditEvent {
-  timestamp: number;
-  toolName: string;
+  timestamp?: number | string;
+  toolName?: string;
+  action?: string;
   args: any;
-  riskLevel: RiskLevel;
-  category: ActionCategory;
+  riskLevel?: RiskLevel;
+  category?: ActionCategory;
   capability?: PermissionCapability;
   mode: SandboxMode;
-  decision: "ALLOWED" | "APPROVED_BY_USER" | "DENIED_BY_USER" | "BLOCKED_BY_POLICY";
+  decision?: "ALLOWED" | "APPROVED_BY_USER" | "DENIED_BY_USER" | "BLOCKED_BY_POLICY";
+  allowed?: boolean;
+  cwd?: string;
   reason?: string;
   target?: string;
   userSessionId?: string;
+  metadata?: Record<string, unknown>;
 }
+

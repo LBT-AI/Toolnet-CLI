@@ -1,16 +1,73 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import type { SecurityAuditEvent } from "./types";
+import { redactOutputSecrets } from "./outputRedactor";
 import { redactSecrets } from "./secretGuard";
+
+export const GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
+
+export interface AuditEntry {
+  timestamp: string;
+  event: string;
+  data: Record<string, unknown>;
+  previousHash: string;
+  hash: string;
+}
+
+export interface AuditVerificationResult {
+  valid: boolean;
+  totalEntries: number;
+  brokenIndex?: number;
+  reason?: string;
+  lastHash?: string;
+}
+
+export function canonicalizeJson(obj: unknown): string {
+  if (obj === null || typeof obj !== "object") {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return "[" + obj.map(canonicalizeJson).join(",") + "]";
+  }
+  const keys = Object.keys(obj as Record<string, unknown>).sort();
+  const pairs = keys.map((k) => `${JSON.stringify(k)}:${canonicalizeJson((obj as Record<string, unknown>)[k])}`);
+  return "{" + pairs.join(",") + "}";
+}
+
+export function computeAuditHash(previousHash: string, payload: { timestamp: string; event: string; data: Record<string, unknown> }): string {
+  const canonical = canonicalizeJson(payload);
+  return crypto.createHash("sha256").update(previousHash + canonical).digest("hex");
+}
 
 export class SecurityAuditLogger {
   private logFilePath: string;
+  private logsDir: string;
   private enabled: boolean;
+  private lastHash: string;
+  private maxSizeBytes: number;
 
-  constructor(customLogPath?: string) {
-    const logsDir = path.resolve(process.cwd(), ".logs");
-    this.logFilePath = customLogPath || path.join(logsDir, "security-audit.jsonl");
+  constructor(customLogPath?: string, maxSizeBytes = 10 * 1024 * 1024) {
+    this.logsDir = customLogPath ? path.dirname(customLogPath) : path.resolve(process.cwd(), ".logs");
+    this.logFilePath = customLogPath || path.join(this.logsDir, "security-audit.jsonl");
     this.enabled = true;
+    this.maxSizeBytes = maxSizeBytes;
+    this.lastHash = this.recoverLastHash();
+  }
+
+  private recoverLastHash(): string {
+    try {
+      if (!fs.existsSync(this.logFilePath)) return GENESIS_HASH;
+      const content = fs.readFileSync(this.logFilePath, "utf8").trim();
+      if (!content) return GENESIS_HASH;
+      const lines = content.split("\n").filter(Boolean);
+      if (lines.length === 0) return GENESIS_HASH;
+      const lastLine = lines[lines.length - 1];
+      const parsed = JSON.parse(lastLine);
+      return parsed.hash || GENESIS_HASH;
+    } catch {
+      return GENESIS_HASH;
+    }
   }
 
   logEvent(event: SecurityAuditEvent) {
@@ -22,16 +79,144 @@ export class SecurityAuditLogger {
         fs.mkdirSync(dir, { recursive: true });
       }
 
-      const sanitizedEvent = {
-        ...event,
-        args: JSON.parse(redactSecrets(JSON.stringify(event.args || {}))),
-        reason: redactSecrets(event.reason || ""),
+      // Check size rotation
+      if (fs.existsSync(this.logFilePath)) {
+        const stat = fs.statSync(this.logFilePath);
+        if (stat.size >= this.maxSizeBytes) {
+          this.rotateNow();
+        }
+      }
+
+      const timestamp = new Date().toISOString();
+      const actionName = event.action || event.toolName || "unknown";
+      const isAllowed = event.allowed !== undefined ? event.allowed : event.decision === "ALLOWED" || event.decision === "APPROVED_BY_USER";
+      const sanitizedArgs = JSON.parse(redactOutputSecrets(JSON.stringify(event.args || {})));
+      const sanitizedReason = redactOutputSecrets(event.reason || "");
+
+      const data: Record<string, unknown> = {
+        action: actionName,
+        allowed: isAllowed,
+        mode: event.mode,
+        cwd: event.cwd || process.cwd(),
+        args: sanitizedArgs,
+        reason: sanitizedReason,
       };
 
-      const line = JSON.stringify(sanitizedEvent) + "\n";
+      if (event.metadata) {
+        data.metadata = JSON.parse(redactOutputSecrets(JSON.stringify(event.metadata)));
+      }
+
+      const payload = {
+        timestamp,
+        event: actionName,
+        data,
+      };
+
+      const previousHash = this.lastHash;
+      const hash = computeAuditHash(previousHash, payload);
+
+      const entry: AuditEntry = {
+        timestamp,
+        event: actionName,
+        data,
+        previousHash,
+        hash,
+      };
+
+      this.lastHash = hash;
+      const line = JSON.stringify(entry) + "\n";
       fs.appendFileSync(this.logFilePath, line, "utf-8");
     } catch {
-      // Non-fatal if logging fails (e.g. read-only filesystem)
+      // Non-fatal if logging fails
+    }
+  }
+
+  rotateNow(): void {
+    try {
+      if (!fs.existsSync(this.logFilePath)) return;
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const rotatedPath = path.join(this.logsDir, `security-audit-${dateStr}-${Date.now()}.jsonl`);
+      fs.renameSync(this.logFilePath, rotatedPath);
+      this.lastHash = GENESIS_HASH;
+    } catch {}
+  }
+
+  cleanOldLogs(retentionDays = 30): number {
+    let deletedCount = 0;
+    try {
+      if (!fs.existsSync(this.logsDir)) return 0;
+      const files = fs.readdirSync(this.logsDir);
+      const now = Date.now();
+      const maxAgeMs = retentionDays * 24 * 60 * 60 * 1000;
+
+      for (const file of files) {
+        if (file.startsWith("security-audit") && file.endsWith(".jsonl") && file !== "security-audit.jsonl") {
+          const filePath = path.join(this.logsDir, file);
+          const stat = fs.statSync(filePath);
+          if (now - stat.mtimeMs > maxAgeMs) {
+            fs.unlinkSync(filePath);
+            deletedCount++;
+          }
+        }
+      }
+    } catch {}
+    return deletedCount;
+  }
+
+  verifyChain(customFilePath?: string): AuditVerificationResult {
+    const targetFile = customFilePath || this.logFilePath;
+    if (!fs.existsSync(targetFile)) {
+      return { valid: true, totalEntries: 0, lastHash: GENESIS_HASH };
+    }
+
+    try {
+      const content = fs.readFileSync(targetFile, "utf8").trim();
+      if (!content) {
+        return { valid: true, totalEntries: 0, lastHash: GENESIS_HASH };
+      }
+
+      const lines = content.split("\n").filter(Boolean);
+      let expectedPrevHash = GENESIS_HASH;
+
+      for (let i = 0; i < lines.length; i++) {
+        let entry: AuditEntry;
+        try {
+          entry = JSON.parse(lines[i]);
+        } catch (e: any) {
+          return { valid: false, totalEntries: lines.length, brokenIndex: i, reason: `Malformed JSON at line ${i + 1}: ${e.message}` };
+        }
+
+        if (entry.previousHash !== expectedPrevHash) {
+          return {
+            valid: false,
+            totalEntries: lines.length,
+            brokenIndex: i,
+            reason: `Broken chain link at index ${i}: expected previousHash ${expectedPrevHash}, got ${entry.previousHash}`,
+          };
+        }
+
+        const payload = {
+          timestamp: entry.timestamp,
+          event: entry.event,
+          data: entry.data,
+        };
+
+        const recomputed = computeAuditHash(entry.previousHash, payload);
+        if (recomputed !== entry.hash) {
+          return {
+            valid: false,
+            totalEntries: lines.length,
+            brokenIndex: i,
+            reason: `Hash mismatch at index ${i}: stored ${entry.hash}, recomputed ${recomputed}`,
+          };
+        }
+
+        expectedPrevHash = entry.hash;
+      }
+
+      return { valid: true, totalEntries: lines.length, lastHash: expectedPrevHash };
+    } catch (err: any) {
+      return { valid: false, totalEntries: 0, reason: `Verification error: ${err.message}` };
     }
   }
 

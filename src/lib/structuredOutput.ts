@@ -111,6 +111,8 @@ export interface ErrorEvent {
   retryable: boolean;
 }
 
+import { redactOutputSecrets } from "./security/outputRedactor";
+
 /* ------------------------------------------------------------------ */
 /*  Error codes                                                       */
 /* ------------------------------------------------------------------ */
@@ -121,15 +123,21 @@ export type ErrorCode =
   | "GATEWAY_TIMEOUT"
   | "RATE_LIMIT"
   | "MODEL_ERROR"
+  | "MODEL_VISION_UNSUPPORTED"
   | "TOOL_ERROR"
   | "PERMISSION_DENIED"
   | "APPROVAL_REQUIRED"
+  | "SCM_ERROR"
+  | "PLUGIN_ERROR"
   | "INTERNAL_ERROR";
 
 export function classifyError(err: unknown): { code: ErrorCode; message: string; retryable: boolean } {
   const msg = err instanceof Error ? err.message : String(err);
   const lower = msg.toLowerCase();
 
+  if (lower.includes("vision") && (lower.includes("unsupported") || lower.includes("does not support"))) {
+    return { code: "MODEL_VISION_UNSUPPORTED", message: msg, retryable: false };
+  }
   if (lower.includes("timeout") || lower.includes("etimedout")) {
     return { code: "GATEWAY_TIMEOUT", message: msg, retryable: true };
   }
@@ -147,6 +155,12 @@ export function classifyError(err: unknown): { code: ErrorCode; message: string;
   }
   if (lower.includes("approval")) {
     return { code: "APPROVAL_REQUIRED", message: msg, retryable: false };
+  }
+  if (lower.includes("plugin")) {
+    return { code: "PLUGIN_ERROR", message: msg, retryable: false };
+  }
+  if (lower.includes("scm") || lower.includes("github") || lower.includes("gitlab") || lower.includes("pull request") || lower.includes("issue")) {
+    return { code: "SCM_ERROR", message: msg, retryable: false };
   }
   if (lower.includes("tool") || lower.includes("exec")) {
     return { code: "TOOL_ERROR", message: msg, retryable: false };
@@ -176,6 +190,8 @@ export function redactSecretArgs(args: Record<string, unknown>): Record<string, 
     const isSecret = SECRET_PATTERNS.some((p) => p.test(key));
     if (isSecret && typeof value === "string") {
       result[key] = value.slice(0, 4) + "•••" + value.slice(-4);
+    } else if (typeof value === "string") {
+      result[key] = redactOutputSecrets(value);
     } else {
       result[key] = value;
     }
@@ -191,7 +207,9 @@ export class JsonlWriter {
   private buffer: string[] = [];
 
   write(event: JsonlEvent): void {
-    this.buffer.push(JSON.stringify(event));
+    const raw = JSON.stringify(event);
+    const redacted = redactOutputSecrets(raw);
+    this.buffer.push(redacted);
   }
 
   flush(): void {

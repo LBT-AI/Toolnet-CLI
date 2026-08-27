@@ -13,6 +13,14 @@ import { detectInstallMethod } from "./installMethod";
 import { getAppConfigPath, getConfigDir, loadAppConfig } from "./appConfig";
 import { getSessionsDir } from "./sessionPersistence";
 import { getBudgetConfig } from "./usage";
+import { auditLogger } from "./security/auditLogger";
+import { pluginManager } from "./plugins/pluginManager";
+import { getWorkspaceIndex } from "./workspaceIndex";
+import { getWorkspaceRoots } from "./codingAgent";
+import { isNoColor } from "../term";
+import { supportsVision } from "./vision";
+import { getCliKey } from "./keys";
+import { checkPendingRecovery } from "./crashRecovery";
 
 export interface DiagnosticResult {
   name: string;
@@ -58,13 +66,22 @@ export function runDoctor(): DoctorReport {
   // Budget
   const budget = getBudgetConfig();
 
-  // Checks
+  // Baseline P3 Checks
   checks.push(checkFileExists("config file", configPath));
   checks.push(checkDirExists("sessions dir", sessionsDir));
   checks.push(checkDirWritable("sessions dir writable", sessionsDir));
   checks.push(checkBunPresence());
   checks.push(checkNodePresence());
   checks.push(checkMcpConfig());
+
+  // P4 Expanded Checks
+  checks.push(checkAuditChain());
+  checks.push(checkPlugins());
+  checks.push(checkWorkspaceIndex());
+  checks.push(checkTerminal());
+  checks.push(checkVisionCapability(defaultModel));
+  checks.push(checkScmAuth());
+  checks.push(checkRecoveryState());
 
   return {
     version: getVersion(),
@@ -175,4 +192,88 @@ function checkMcpConfig(): DiagnosticResult {
   } catch {
     return { name: "MCP servers", status: "ok", value: "none configured" };
   }
+}
+
+function checkAuditChain(): DiagnosticResult {
+  try {
+    const res = auditLogger.verifyChain();
+    if (res.valid) {
+      return { name: "audit log hash chain", status: "ok", value: `valid (${res.totalEntries} entries)` };
+    }
+    return { name: "audit log hash chain", status: "error", value: `tampered at entry ${res.brokenIndex}: ${res.reason}` };
+  } catch (err: any) {
+    return { name: "audit log hash chain", status: "warn", value: `verification failed: ${err.message}` };
+  }
+}
+
+function checkPlugins(): DiagnosticResult {
+  try {
+    const list = pluginManager.listPlugins();
+    const active = list.filter((p) => p.enabled).length;
+    return { name: "plugins", status: "ok", value: `${active} active (${list.length} installed)` };
+  } catch {
+    return { name: "plugins", status: "ok", value: "0 installed" };
+  }
+}
+
+function checkWorkspaceIndex(): DiagnosticResult {
+  try {
+    const roots = getWorkspaceRoots();
+    const idx = getWorkspaceIndex();
+    return {
+      name: "workspace index",
+      status: "ok",
+      value: `${roots.length} root(s), ${idx.totalFiles} files indexed`,
+    };
+  } catch {
+    return { name: "workspace index", status: "warn", value: "index not built" };
+  }
+}
+
+function checkTerminal(): DiagnosticResult {
+  const isTty = Boolean(process.stdout && process.stdout.isTTY);
+  const cols = process.stdout?.columns || 80;
+  const rows = process.stdout?.rows || 24;
+  const colorMode = isNoColor() ? "no-color" : "true-color/ansi";
+  return {
+    name: "terminal",
+    status: "ok",
+    value: `${isTty ? "TTY" : "non-TTY"} ${cols}x${rows}, ${colorMode}`,
+  };
+}
+
+function checkVisionCapability(modelName: string): DiagnosticResult {
+  const canVision = supportsVision(modelName);
+  return {
+    name: "vision / image input",
+    status: canVision ? "ok" : "warn",
+    value: canVision ? `supported by ${modelName}` : `model '${modelName}' is text-only`,
+  };
+}
+
+function checkScmAuth(): DiagnosticResult {
+  const ghToken = Boolean(process.env.GITHUB_TOKEN || process.env.GH_TOKEN || getCliKey("github"));
+  const glToken = Boolean(process.env.GITLAB_TOKEN || process.env.GL_TOKEN || getCliKey("gitlab"));
+  const statusStr = [ghToken ? "GitHub: configured" : "GitHub: unauthenticated", glToken ? "GitLab: configured" : "GitLab: unauthenticated"].join(", ");
+  return {
+    name: "SCM credentials",
+    status: "ok",
+    value: statusStr,
+  };
+}
+
+function checkRecoveryState(): DiagnosticResult {
+  const pending = checkPendingRecovery();
+  if (pending) {
+    return {
+      name: "crash recovery",
+      status: "warn",
+      value: `pending recovery for session ${pending.sessionId} (from ${new Date(pending.timestamp).toLocaleTimeString()})`,
+    };
+  }
+  return {
+    name: "crash recovery",
+    status: "ok",
+    value: "clean (no crashed sessions)",
+  };
 }

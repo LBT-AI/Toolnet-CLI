@@ -8,9 +8,12 @@ import {
   redactSecretArgs,
 } from "./structuredOutput";
 import { getGlobalTracker } from "./usage";
+import { validateAndLoadImage, isModelVisionSupported, type ValidatedImage, getImageMetadataSummary } from "./vision";
+import { redactOutputSecrets } from "./security/outputRedactor";
 
 export interface NonInteractiveOptions {
   prompt: string;
+  images?: string[];
   json?: boolean;
   format?: OutputFormat;
   verbose?: boolean;
@@ -18,7 +21,7 @@ export interface NonInteractiveOptions {
 }
 
 export async function runNonInteractive(options: NonInteractiveOptions): Promise<void> {
-  const { prompt, json = false, format = json ? "json" : "text", verbose = false } = options;
+  const { prompt, images = [], json = false, format = json ? "json" : "text", verbose = false } = options;
 
   if (verbose) {
     process.env.TOOLNET_DEBUG = "1";
@@ -44,13 +47,37 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
   }
 
   try {
+    // Validate images if provided
+    const validatedImages: ValidatedImage[] = [];
+    if (images && images.length > 0) {
+      const visionCheck = isModelVisionSupported(model);
+      if (!visionCheck.supported) {
+        throw new Error(`MODEL_VISION_UNSUPPORTED: ${visionCheck.reason}`);
+      }
+
+      for (const imgPath of images) {
+        const valRes = validateAndLoadImage(imgPath, process.cwd());
+        if (!valRes.ok || !valRes.image) {
+          throw new Error(`Image validation failed for '${imgPath}': ${valRes.error}`);
+        }
+        validatedImages.push(valRes.image);
+      }
+    }
+
     const harness = getHarness({ model });
 
     // Wire streaming callbacks for JSONL
     let accumulatedOutput = "";
     let toolCallIndex = 0;
 
-    const result = await harness.runHeadless(prompt, {
+    // Compose prompt with image metadata if any (or pass multimodal if harness supports)
+    let finalPrompt = prompt;
+    if (validatedImages.length > 0) {
+      const meta = getImageMetadataSummary(validatedImages);
+      finalPrompt = `${prompt}\n\n[Attached Images: ${meta.map((m) => `${m.filename} (${m.mime}, ${m.size}B)`).join(", ")}]`;
+    }
+
+    const result = await harness.runHeadless(finalPrompt, {
       model,
       sessionId,
       onChunk: (chunk: string) => {
@@ -96,12 +123,13 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
     }
 
     const usage = tracker.getSessionUsage();
+    const cleanOutput = redactOutputSecrets(result.output.trim());
 
     switch (format) {
       case "json": {
         const response: StructuredResponse = {
           ok: result.success,
-          response: result.output.trim(),
+          response: cleanOutput,
           sessionId: result.sessionId,
           model,
           usage: {
@@ -114,8 +142,9 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
           },
           durationMs,
         };
-        if (!result.success) response.error = result.error || "Execution failed";
-        process.stdout.write(JSON.stringify(response, null, 2) + "\n");
+        if (!result.success) response.error = redactOutputSecrets(result.error || "Execution failed");
+        const jsonStr = JSON.stringify(response, null, 2);
+        process.stdout.write(redactOutputSecrets(jsonStr) + "\n");
         break;
       }
       case "jsonl": {
@@ -131,7 +160,7 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
           });
           writer.write({
             type: "final",
-            response: result.output.trim(),
+            response: cleanOutput,
             sessionId: result.sessionId,
             model,
             durationMs,
@@ -141,7 +170,7 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
             writer.write({
               type: "error",
               code: classified.code,
-              message: classified.message,
+              message: redactOutputSecrets(classified.message),
               retryable: classified.retryable,
             });
           }
@@ -150,18 +179,12 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
         break;
       }
       case "markdown":
-        if (result.success) {
-          process.stdout.write(result.output.trim() + "\n");
-        } else {
-          process.stderr.write(`Error: ${result.error || "Execution failed"}\n`);
-        }
-        break;
       case "text":
       default:
         if (result.success) {
-          process.stdout.write(result.output.trim() + "\n");
+          process.stdout.write(cleanOutput + "\n");
         } else {
-          process.stderr.write(`Error: ${result.error || "Execution failed"}\n`);
+          process.stderr.write(`Error: ${redactOutputSecrets(result.error || "Execution failed")}\n`);
         }
         break;
     }
@@ -170,25 +193,27 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
   } catch (err: unknown) {
     const durationMs = Date.now() - startTime;
     const classified = classifyError(err);
+    const safeMessage = redactOutputSecrets(classified.message);
 
     if (format === "json") {
       const response: StructuredResponse = {
         ok: false,
         response: "",
         durationMs,
-        error: classified.message,
+        error: safeMessage,
       };
-      process.stdout.write(JSON.stringify(response, null, 2) + "\n");
+      const jsonStr = JSON.stringify(response, null, 2);
+      process.stdout.write(redactOutputSecrets(jsonStr) + "\n");
     } else if (format === "jsonl" && writer) {
       writer.write({
         type: "error",
         code: classified.code,
-        message: classified.message,
+        message: safeMessage,
         retryable: classified.retryable,
       });
       writer.flush();
     } else {
-      process.stderr.write(`Error [${classified.code}]: ${classified.message}\n`);
+      process.stderr.write(`Error [${classified.code}]: ${safeMessage}\n`);
     }
 
     process.exit(1);

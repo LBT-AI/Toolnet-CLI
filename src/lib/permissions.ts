@@ -75,8 +75,24 @@ export function isPathInsideWorkspace(
   const realRoot = getRealWorkspaceRoot(workspaceRoot);
   const realTarget = resolveRealPath(targetPath, cwd);
 
-  const rel = path.relative(realRoot, realTarget);
-  const isInside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  let rel = path.relative(realRoot, realTarget);
+  let isInside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+
+  if (!isInside && !workspaceRoot) {
+    try {
+      const { getWorkspaceRoots } = require("./codingAgent");
+      const roots: string[] = getWorkspaceRoots();
+      for (const root of roots) {
+        const rootReal = getRealWorkspaceRoot(root);
+        const rootRel = path.relative(rootReal, realTarget);
+        if (rootRel === "" || (!rootRel.startsWith("..") && !path.isAbsolute(rootRel))) {
+          isInside = true;
+          rel = rootRel;
+          break;
+        }
+      }
+    } catch {}
+  }
 
   return {
     isInside,
