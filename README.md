@@ -8,7 +8,7 @@
 [![license](https://img.shields.io/npm/l/toolnetcli.svg?style=flat-square&color=green)](LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg?style=flat-square)](https://nodejs.org)
 [![bun](https://img.shields.io/badge/bun-%3E%3D1.1.0-orange.svg?style=flat-square)](https://bun.sh)
-[![tests](https://img.shields.io/badge/tests-271%20passing-success.svg?style=flat-square)](https://github.com/LBT-AI/Toolnet-CLI)
+[![tests](https://img.shields.io/badge/tests-400%2B%20passing-success.svg?style=flat-square)](https://github.com/LBT-AI/Toolnet-CLI/actions)
 
 **ToolNet CLI** is a next-generation, high-performance terminal coding assistant engineered for developers, devops, and agentic workflows. Built on the **Unified AgentHarness 2.0** architecture, it unifies interactive terminal streaming, autonomous multi-agent task graphs (DAG), role-based sub-agent delegation, intelligent context compaction, and multi-tier security sandboxing into a single developer tool.
 
@@ -58,19 +58,9 @@ npm install -g toolnetcli@latest
 irm https://raw.githubusercontent.com/LBT-AI/Toolnet-CLI/main/install.ps1 | iex
 ```
 
-#### Homebrew
+#### Homebrew / Scoop
 
-```bash
-brew install lbt-ai/tap/toolnet
-```
-
-#### Scoop (Windows)
-
-```bash
-scoop install toolnet
-```
-
-> **Note:** Homebrew and Scoop packages are coming soon.
+Homebrew and Scoop manifests are maintained in this repository, but the public tap/bucket has not been published yet. Until registry publication is complete, use the standalone installer or npm methods above.
 
 ### Uninstall
 
@@ -80,12 +70,6 @@ rm /usr/local/bin/toolnet  # or ~/.local/bin/toolnet
 
 # npm install
 npm uninstall -g toolnetcli
-
-# Homebrew
-brew uninstall toolnet
-
-# Scoop
-scoop uninstall toolnet
 ```
 
 ### Launching Interactive Mode
@@ -211,8 +195,8 @@ ToolNet CLI includes an enterprise-grade, multi-layered security engine to keep 
 
 | Path | Purpose |
 | :--- | :--- |
+| `~/.toolnetcli/config.json` | Canonical CLI configuration (gateway/API mode, default model, sandbox, theme, update checks) |
 | `~/.toolnetcli/sessions/` | Saved JSON session histories and message turns |
-| `~/.toolnetapi/config.json` | Global CLI preferences (default model, base URL, theme) |
 | `.toolnet/permissions.json` | Project-specific workspace security policy |
 | `.logs/security-audit.jsonl` | Structured security evaluation audit log |
 
@@ -233,15 +217,16 @@ cd Toolnet-CLI
 # Install dependencies
 bun install
 
-# Typecheck
+# Full production verification: typecheck + 400+ tests + Bun/Node builds
+bun run check
+
+# Or run individual stages
 bun run typecheck
-
-# Run comprehensive test suite (271 tests)
 bun test
-
-# Build production bundles (Bun & Node.js)
 bun run build
 ```
+
+CI additionally smoke-tests the CLI and Teamwork persistence on Node 22 and the minimum supported Node 20 runtime.
 
 ---
 
