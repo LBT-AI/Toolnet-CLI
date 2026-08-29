@@ -2,22 +2,23 @@
 All notable changes to ToolNet CLI will be documented here.
 The project follows Semantic Versioning.
 
-## [Unreleased]
+## [1.1.0] - 2026-08-30
 ### Added
-- Production distribution pipeline for standalone Linux, macOS, and Windows binaries, including release checksums, installer scripts, Homebrew/Scoop manifests, and release smoke tests.
-- First-run setup wizard, canonical `~/.toolnetcli/config.json`, shell completion, update checks, `version --json`, usage tracking, budget controls, diagnostics, and structured `text|markdown|json|jsonl` output.
-- Tool planner improvements including read-only caching, duplicate-call elimination, parallel read dispatch, output compression, and workspace symbol indexing.
-- Modular TUI improvements, multimodal image input, SCM integrations, plugin capability gating, tamper-resistant audit logging, multi-project workspaces, crash recovery, and opt-in telemetry.
-- Node runtime persistence smoke coverage in CI for both Node 22 native SQLite and the minimum supported Node 20 fallback path.
+- **Native Anthropic Messages API Adapter (`src/providers/anthropic.ts`)**: Direct integration with `/v1/messages`, multi-turn tool calling, SSE streaming (`content_block_delta`), and `x-api-key` header handling.
+- **Native Google Gemini REST & SSE Adapter (`src/providers/gemini.ts`)**: Direct integration with Gemini `/v1beta/models` endpoint, function declarations, and streaming chunk translation.
+- **Multi-Provider Factory & Event Bus**: Hot provider switching with event bus listeners without process restarts or circular dependency hacks.
+- **Interactive TUI Overlays**:
+  - Model Picker (`/model`) interactive keyboard navigation.
+  - Dedicated API Key Manager (`/key`) with masked key visualization, safe in-memory credential update, and confirmation dialogs.
+- **Terminal Resize Lifecycle Engine**: Debounced `SIGWINCH` resize handler for smooth, flicker-free terminal reflows.
+- **Interactive Commands**: `/search` (grep through conversation history), `/policy` (inspect & initialize workspace security policies), `/export` (export to markdown, HTML, or JSON).
+- **Subagent Custom Personas**: Support for loading user-defined roles from `.toolnet/personas.json`.
+- **Automated Multi-Platform Release CI/CD**: GitHub Actions release workflow for Linux, macOS, and Windows standalone executables.
 
 ### Changed
-- Agent execution paths now share the unified cache/compression pipeline so TUI, runtime, sub-agent, and scheduler calls receive the same behavior.
-- Teamwork persistence now selects `bun:sqlite` on Bun, built-in `node:sqlite` on supported Node releases, and a durable JSON-backed adapter when native SQLite is unavailable.
-
-### Fixed
-- Fixed Teamwork checkpoint and context-cache persistence silently becoming a no-op on Node runtimes.
-- Fixed cross-instance fallback database writes so checkpoint and context-cache tables do not overwrite each other.
-- Unsupported fallback SQL now fails explicitly instead of reporting success while discarding data.
+- Refactored slash command dispatcher with `buildTuiCommandContext()` factory and strict guard clauses.
+- Added exponential backoff retry on HTTP `429` (Rate Limited) and `503` (Service Unavailable).
+- Comprehensive unit test coverage expanded to 491 tests across 51 test suites (100% pass).
 
 ## [1.0.5] - 2026-08-17
 ### Added

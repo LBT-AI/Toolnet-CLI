@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "command": "toolnet-memory session:copilot-hook",
+        "env": {
+          "TOOLNET_HOOK_EVENT": "sessionStart"
+        },
+        "timeoutSec": 10
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "command": "toolnet-memory session:copilot-hook",
+        "env": {
+          "TOOLNET_HOOK_EVENT": "userPromptSubmitted"
+        },
+        "timeoutSec": 10
+      }
+    ],
+    "userPromptTransformed": [
+      {
+        "type": "command",
+        "command": "toolnet-memory session:copilot-hook",
+        "env": {
+          "TOOLNET_HOOK_EVENT": "userPromptTransformed"
+        },
+        "timeoutSec": 10
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "command": "toolnet-memory session:copilot-hook",
+        "env": {
+          "TOOLNET_HOOK_EVENT": "preToolUse"
+        },
+        "timeoutSec": 10,
+        "matcher": ".*"
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "command": "toolnet-memory session:copilot-hook",
+        "env": {
+          "TOOLNET_HOOK_EVENT": "postToolUse"
+        },
+        "timeoutSec": 15
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "command": "toolnet-memory session:copilot-hook",
+        "env": {
+          "TOOLNET_HOOK_EVENT": "agentStop"
+        },
+        "timeoutSec": 30
+      }
+    ]
+  }
+}

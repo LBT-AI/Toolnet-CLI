@@ -76,11 +76,12 @@ describe("P0 — AppConfig defaults", () => {
   it("loads sensible defaults when no config file exists", () => {
     const { loadAppConfig } = require("../../lib/appConfig");
     const { config, created } = loadAppConfig();
-    expect(config.schemaVersion).toBe(1);
+    expect(config.schemaVersion).toBe(2);
     expect(config.sandboxMode).toBe("ask");
     expect(config.theme).toBe("dark");
     expect(config.updateCheckEnabled).toBe(true);
-    expect(typeof config.gatewayUrl).toBe("string");
+    expect(config.gatewayUrl).toBeNull();
+    expect(config.provider).toBeNull();
   });
 
   it("saves and reloads a config", () => {
@@ -135,8 +136,8 @@ describe("P0 — Config migration", () => {
 
     const { loadAppConfig } = require("../../lib/appConfig");
     const { config } = loadAppConfig();
-    expect(config.schemaVersion).toBe(1);
-    expect(config.gatewayUrl).toBe("http://legacy:9999");
+    expect(config.schemaVersion).toBe(2);
+    expect(config.baseUrl).toBe("http://legacy:9999");
     expect(config.defaultModel).toBe("openai/gpt-4");
     expect(config.theme).toBe("light");
     expect(config.sandboxMode).toBe("workspace");

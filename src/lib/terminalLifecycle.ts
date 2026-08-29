@@ -61,14 +61,24 @@ ${stack || "No stack trace available"}
     fs.writeFileSync(logPath, logContent, "utf-8");
     return logPath;
   } catch (err) {
-    console.error("Failed to write crash log:", err);
+    // Error log writing failed - silent fallback
     return "";
   }
 }
 
+const resizeListeners: Array<() => void> = [];
+let resizeTimer: any = null;
+
+export function onTerminalResize(listener: () => void): () => void {
+  resizeListeners.push(listener);
+  return () => {
+    const idx = resizeListeners.indexOf(listener);
+    if (idx !== -1) resizeListeners.splice(idx, 1);
+  };
+}
+
 /**
- * Registers handlers for SIGINT, SIGTERM, uncaughtException, unhandledRejection, and exit.
- * Writes crash details to .logs/crash-<timestamp>.log cleanly on errors without crashing node.
+ * Registers handlers for SIGINT, SIGTERM, SIGWINCH, uncaughtException, unhandledRejection, and exit.
  */
 export function setupTerminalLifecycle(): void {
   if (isLifecycleSetup) return;
@@ -86,6 +96,17 @@ export function setupTerminalLifecycle(): void {
   process.on("SIGTERM", () => {
     restoreTerminal();
     process.exit(0);
+  });
+
+  process.on("SIGWINCH", () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      for (const listener of resizeListeners) {
+        try {
+          listener();
+        } catch {}
+      }
+    }, 50);
   });
 
   process.on("uncaughtException", (error) => {

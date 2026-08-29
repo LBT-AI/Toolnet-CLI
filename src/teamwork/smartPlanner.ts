@@ -3,7 +3,7 @@
  * Target File: cli/src/teamwork/smartPlanner.ts
  */
 
-import { detectGatewayUrl } from "../lib/gateway";
+import { getActiveProvider, OpenAICompatibleProvider, getActiveDefaultModel } from "../providers";
 import type { TaskGraph, TaskNode, IntentAnalysisResult, SmartPlannerOptions, AgentRole } from "./types";
 
 const SMART_PLANNER_SYSTEM_PROMPT = `You are ToolNet Smart Planner, a principal multi-agent software architect.
@@ -229,7 +229,13 @@ export async function generateTaskGraph(
   options: SmartPlannerOptions = {}
 ): Promise<TaskGraph> {
   const sessionId = options.sessionId || `plan-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-  const gatewayUrl = options.gatewayUrl || detectGatewayUrl();
+  const provider = options.gatewayUrl || (options as any).baseUrl
+    ? new OpenAICompatibleProvider({ id: "custom", name: "Custom", baseUrl: options.gatewayUrl || (options as any).baseUrl! })
+    : getActiveProvider();
+
+  if (!provider) {
+    throw new Error("No active AI provider configured. Use /provider add or toolnet provider add.");
+  }
   const eventBus = options.eventBus;
 
   if (eventBus) {
@@ -239,29 +245,20 @@ export async function generateTaskGraph(
   }
 
   try {
-    const response = await fetch(`${gatewayUrl}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: options.model || "default",
-        messages: [
-          { role: "system", content: SMART_PLANNER_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `User Prompt: "${userPrompt}"\nComplexity Score: ${analysisResult?.score ?? 50}\nMode: ${analysisResult?.mode ?? "STANDARD"}`,
-          },
-        ],
-        temperature: 0.2,
-      }),
+    const response = await provider.chat({
+      model: options.model || getActiveDefaultModel() || "default",
+      messages: [
+        { role: "system", content: SMART_PLANNER_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `User Prompt: "${userPrompt}"\nComplexity Score: ${analysisResult?.score ?? 50}\nMode: ${analysisResult?.mode ?? "STANDARD"}`,
+        },
+      ],
+      temperature: 0.2,
       signal: AbortSignal.timeout(10000),
     });
 
-    if (!response.ok) {
-      throw new Error(`Gateway returned HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-    const rawContent = data.choices?.[0]?.message?.content || "";
+    const rawContent = response.choices?.[0]?.message?.content || "";
 
     const cleanedJson = rawContent
       .replace(/^```json\s*/i, "")

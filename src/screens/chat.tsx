@@ -1,7 +1,7 @@
 import { createSignal, For, Show, createMemo, onCleanup } from "solid-js";
 import { TextAttributes } from "@opentui/core";
 import { exitTui } from "../exit";
-import { getGateway } from "../lib/gateway";
+import { getActiveProviderConfig, getActiveProvider } from "../providers";
 import { dispatchCommand, getAllCommands } from "../commands";
 import {
   getSessions,
@@ -283,7 +283,7 @@ function CommandPalette(props: { onClose: () => void; onRun: (cmd: string) => vo
 // ─── Sidebar ─────────────────────────────────────────────────────────────
 
 function Sidebar() {
-  const gateway = getGateway();
+  const providerConfig = getActiveProviderConfig();
   const session = createMemo(() => getCurrentSession());
   const msgs = createMemo(() => session().messages);
 
@@ -310,8 +310,8 @@ function Sidebar() {
         <text fg={T.text}>{msgs().length}</text>
       </box>
       <box flexDirection="column" paddingBottom={1}>
-        <text fg={T.peach} attributes={B}>Gateway</text>
-        <text fg={T.green}>Connected</text>
+        <text fg={T.peach} attributes={B}>Provider</text>
+        <text fg={providerConfig ? T.green : T.yellow}>{providerConfig?.name || "Not configured"}</text>
       </box>
       <box flexDirection="column" paddingBottom={1}>
         <text fg={T.peach} attributes={B}>Keys</text>
@@ -421,7 +421,7 @@ let lastCtrlC = 0;
 let abortController: AbortController | null = null;
 
 export function ChatScreen() {
-  const gateway = getGateway();
+  const providerConfig = getActiveProviderConfig();
   initSessions();
 
   const [messages, setMessages] = createSignal(getCurrentSession().messages);
@@ -493,7 +493,21 @@ export function ChatScreen() {
     if (v.startsWith("/")) {
       addMessage("user", v);
       setStatusMsg(`▶ Running command: ${v}`);
-      const commandCtx = { gateway, addMessage, setModel, setStatusMsg, exit, currentModel: selectedModel };
+      const commandCtx = {
+        gateway: null,
+        addMessage,
+        setModel,
+        setStatusMsg,
+        exit,
+        currentModel: selectedModel,
+        openModelPicker: () => {
+          setShowModels(true);
+        },
+        openKeyManager: () => {
+          // Open models / keys panel
+          setShowModels(true);
+        },
+      };
       try {
         await dispatchCommand(v, commandCtx);
         const duration = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -515,63 +529,47 @@ export function ChatScreen() {
       setSpinnerIdx((i) => (i + 1) % SPINNER_FRAMES.length);
     }, 80);
 
+    const provider = getActiveProvider();
+    if (!provider) {
+      addMessage("assistant", "Error: No provider configured. Use /provider add to set one up.");
+      setIsStreaming(false);
+      setStatusMsg("No provider configured");
+      if (currentSpinnerTimer) clearInterval(currentSpinnerTimer);
+      return;
+    }
+    const msgs = [...getCurrentSession().messages];
+
+    setStatusMsg("Streaming response...");
+    let fullText = "";
+
     try {
-      const url = gateway.getBaseUrl() + "/v1/chat/completions";
-      const msgs = [...getCurrentSession().messages];
+      if (typeof provider.stream === "function") {
+        const streamIter = provider.stream({
+          model: selectedModel(),
+          messages: msgs as any,
+          signal: abortController.signal,
+        });
 
-      setStatusMsg("Reading request...");
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: selectedModel(), messages: msgs, stream: true }),
-        signal: abortController.signal,
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        addMessage("assistant", `Error: HTTP ${res.status} — ${errText.slice(0, 200)}`);
-        setIsStreaming(false);
-        setStatusMsg("Error response from API");
-        return;
-      }
-
-      if (!res.body) {
-        addMessage("assistant", "Error: No response body");
-        setIsStreaming(false);
-        setStatusMsg("Error: Empty body");
-        return;
-      }
-
-      setStatusMsg("Streaming response...");
-      let fullText = "";
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split("\n");
-        buffer = parts.pop() || "";
-
-        for (const part of parts) {
-          const trimmed = part.trim();
-          if (!trimmed || trimmed.startsWith(":")) continue;
-          if (trimmed === "data: [DONE]") break;
-          if (trimmed.startsWith("data: ")) {
-            try {
-              const json = JSON.parse(trimmed.slice(6));
-              const delta = json.choices?.[0]?.delta?.content;
-              if (delta) fullText += delta;
-            } catch {}
+        for await (const chunk of streamIter) {
+          const delta = chunk.choices?.[0]?.delta;
+          if (delta?.content) {
+            fullText += delta.content;
+            const sess = getCurrentSession();
+            if (sess.messages.length > 0 && sess.messages[sess.messages.length - 1].role === "assistant") {
+              sess.messages[sess.messages.length - 1].content = fullText + "▊";
+            } else {
+              sessionAddMessage("assistant", fullText + "▊");
+            }
+            setMessages([...sess.messages]);
           }
         }
-
-        if (fullText && fullText.length > 5) {
-          sessionAddMessage("assistant", fullText + "▊");
-          setMessages([...getCurrentSession().messages]);
-        }
+      } else {
+        const chatRes = await provider.chat({
+          model: selectedModel(),
+          messages: msgs as any,
+          signal: abortController.signal,
+        });
+        fullText = chatRes.choices?.[0]?.message?.content || "";
       }
 
       const sess = getCurrentSession();
@@ -716,8 +714,14 @@ export function ChatScreen() {
   };
 
   const loadModels = async () => {
-    const res = await gateway.getAvailableModels();
-    if (res.success && res.data?.data) setModels(res.data.data.filter((m: any) => m.object === "model" || m.id));
+    const provider = getActiveProvider();
+    if (!provider) return;
+    try {
+      const list = await provider.listModels();
+      if (list && list.length > 0) {
+        setModels(list.map((m) => ({ id: m.id, name: m.name || m.id, object: m.object })));
+      }
+    } catch {}
   };
 
   const parseMsgSegments = createMemo(() =>

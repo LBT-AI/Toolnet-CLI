@@ -2,10 +2,11 @@ import { getSize, A } from "../term";
 
 export const ANSI_REGEX = /\x1b\[[^m]*m/g;
 
-export const HEADER_ROWS = 1;
-export const STATUS_ROWS = 1;
-export const INPUT_ROWS = 2; // border + input line
-export const RESERVED = HEADER_ROWS + STATUS_ROWS + INPUT_ROWS;
+export const HEADER_ROWS = 2;        // Header text + divider
+export const WORKING_STATUS_ROWS = 2; // Divider + working status text
+export const INPUT_ROWS = 2;         // Divider + input line
+export const FOOTER_ROWS = 2;        // Divider + footer bar
+export const RESERVED = HEADER_ROWS + WORKING_STATUS_ROWS + INPUT_ROWS + FOOTER_ROWS;
 
 export function stripAnsi(text: string): string {
   return text.replace(ANSI_REGEX, "");
@@ -62,14 +63,15 @@ export interface LayoutInfo {
   cursorCol: number;
 }
 
-export function computeLayout(activeSuggestsCount = 0, inputPromptLen = 3, cursorPos = 0): LayoutInfo {
+export function computeLayout(activeSuggestsCount = 0, inputPromptLen = 2, cursorPos = 0): LayoutInfo {
   const { cols, rows } = getSize();
-  const hasPanel = cols > 100;
-  const panelWidth = hasPanel ? 40 : 0;
+  // Sidebar panel is only shown on very wide screens (>= 120 cols)
+  const hasPanel = cols >= 120;
+  const panelWidth = hasPanel ? 36 : 0;
   const chatCols = hasPanel ? cols - panelWidth : cols;
-  const popupRows = activeSuggestsCount > 0 ? Math.min(activeSuggestsCount, 8) + 1 : 0;
+  const popupRows = activeSuggestsCount > 0 ? Math.min(activeSuggestsCount, 7) + 3 : 0;
   const chatRows = Math.max(1, rows - RESERVED - popupRows);
-  const cursorRow = rows - INPUT_ROWS + 1;
+  const cursorRow = rows - FOOTER_ROWS; // Input prompt line
   const cursorCol = Math.min(inputPromptLen + 1 + cursorPos, cols - 1) + 1;
 
   return {

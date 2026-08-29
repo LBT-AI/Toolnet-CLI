@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { getActiveBaseUrl } from "../providers";
 
 const CONFIG_DIR = path.join(os.homedir(), ".toolnet");
 const TOKEN_FILE = path.join(CONFIG_DIR, "auth_token");
@@ -26,16 +27,21 @@ export function clearToken() {
 
 export async function login(
   password: string,
-  baseUrl = "http://localhost:20127"
+  baseUrl?: string
 ): Promise<{ success: boolean; error?: string; token?: string }> {
+  const targetUrl = baseUrl || getActiveBaseUrl();
+  if (!targetUrl) {
+    return { success: false, error: "No gateway URL configured for authentication." };
+  }
+
   try {
-    const res = await fetch(`${baseUrl}/api/auth/login`, {
+    const res = await fetch(`${targetUrl.replace(/\/+$/, "")}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password }),
     });
 
-    const data = await res.json();
+    const data = (await res.json()) as any;
 
     if (!res.ok) {
       return { success: false, error: data.error || "Login failed" };
@@ -58,17 +64,19 @@ export async function login(
 }
 
 export async function checkAuth(
-  baseUrl = "http://localhost:20127"
+  baseUrl?: string
 ): Promise<boolean> {
   const token = getStoredToken();
   if (!token) return false;
+  const targetUrl = baseUrl || getActiveBaseUrl();
+  if (!targetUrl) return false;
 
   try {
-    const res = await fetch(`${baseUrl}/api/auth/status`, {
+    const res = await fetch(`${targetUrl.replace(/\/+$/, "")}/api/auth/status`, {
       headers: { Cookie: `auth_token=${token}` },
     });
     if (!res.ok) return false;
-    const data = await res.json();
+    const data = (await res.json()) as any;
     return data.requireLogin !== true;
   } catch {
     return false;

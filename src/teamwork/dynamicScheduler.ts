@@ -18,6 +18,7 @@ import type {
 
 export interface SchedulerOptions {
   gatewayUrl?: string;
+  baseUrl?: string;
   model?: string;
   maxConcurrencyOverride?: number;
   executorFn?: (node: TaskNode, prompt: string) => Promise<string>;
@@ -212,7 +213,7 @@ export class DynamicScheduler {
       checkCompletion();
 
       // Then start processing - tasks complete async and emit events
-      this.processQueue().catch(console.error);
+      this.processQueue().catch(() => { /* scheduler errors handled via task status */ });
     });
   }
 
@@ -255,7 +256,7 @@ export class DynamicScheduler {
         this.executeWorkerTask(nextNode).finally(() => {
           this.state.activeWorkers = Math.max(0, (this.state.activeWorkers || 1) - 1);
           this.state.runningTaskIds = (this.state.runningTaskIds || []).filter(id => id !== nextNode.id);
-          this.processQueue().catch(console.error);
+          this.processQueue().catch(() => { /* scheduler errors handled via task status */ });
         });
       }
     } finally {

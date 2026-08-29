@@ -44,6 +44,7 @@ export interface HarnessConfig {
   model?: string;
   sandboxMode?: SandboxMode;
   gatewayUrl?: string;
+  baseUrl?: string;
   maxTurns?: number;
   timeoutMs?: number;
   bypassSecurity?: boolean;
@@ -52,6 +53,7 @@ export interface HarnessConfig {
 export interface ExecutionOptions {
   model?: string;
   gatewayUrl?: string;
+  baseUrl?: string;
   maxTurns?: number;
   timeoutMs?: number;
   sessionId?: string;

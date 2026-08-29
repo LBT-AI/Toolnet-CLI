@@ -1,12 +1,12 @@
 {
-  "version": "1.0.5",
+  "version": "1.1.0",
   "description": "AI coding agent for the terminal",
   "homepage": "https://github.com/LBT-AI/Toolnet-CLI",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/LBT-AI/Toolnet-CLI/releases/download/v1.0.5/toolnet-windows-x64.zip",
-      "hash": "6ce8354a9c0db473356464f0e6821ff5094377c6acf89bc1630fab68d4b7594b"
+      "url": "https://github.com/LBT-AI/Toolnet-CLI/releases/download/v1.1.0/toolnet-windows-x64.zip",
+      "hash": "1e5b3ab6870ab48cb3a54fe5169f63ceb1c551542707a13321c7af175a4f8fe7"
     }
   },
   "bin": "toolnet.exe",

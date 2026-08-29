@@ -197,12 +197,13 @@ ToolNet CLI includes an enterprise-grade, multi-layered security engine to keep 
 | :--- | :--- |
 | `~/.toolnetcli/config.json` | Canonical CLI configuration (gateway/API mode, default model, sandbox, theme, update checks) |
 | `~/.toolnetcli/sessions/` | Saved JSON session histories and message turns |
+| `~/.toolnetcli/config.json` | Global CLI preferences (default model, base URL, provider, theme) |
 | `.toolnet/permissions.json` | Project-specific workspace security policy |
 | `.logs/security-audit.jsonl` | Structured security evaluation audit log |
 
 ### Environment Variables
 - `TOOLNETCLI_SESSIONS_DIR`: Custom path for session storage.
-- `TOOLNET_API_URL`: Custom Gateway endpoint URL (default: `http://127.0.0.1:20127`).
+- `TOOLNET_API_URL`: Optional custom ToolNet Gateway endpoint URL.
 - `TOOLNET_DEBUG`: Set to `1` to enable verbose debugging logs.
 
 ---

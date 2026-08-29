@@ -21,12 +21,13 @@ export const COMMANDS = [
   { name: "/bypass",    desc: "Toggle bypass mode on/off" },
   { name: "/plan",      desc: "Switch to Plan mode" },
   { name: "/build",     desc: "Switch to Build mode" },
+  { name: "/provider",  desc: "Manage providers (add/use/list)" },
   { name: "/providers", desc: "Show providers (open Web UI)" },
   { name: "/combos",    desc: "Manage AI combos (open Web UI)" },
   { name: "/keys",      desc: "Manage API keys (open Web UI)" },
   { name: "/key ",      desc: "/key <provider> <apikey> to add key directly" },
-  { name: "/settings",  desc: "Open gateway settings" },
-  { name: "/status",    desc: "Show gateway connection status" },
+  { name: "/settings",  desc: "Open settings" },
+  { name: "/status",    desc: "Show connection status" },
 ];
 
 export const store = {
@@ -38,11 +39,14 @@ export const store = {
   isStreaming: false,
   spinnerIdx: 0,
   spinnerTimer: null as ReturnType<typeof setInterval> | null,
-  currentModel: "openai/gpt-4o",
+  currentModel: "",
   agentMode: "Build" as "Build" | "Plan",
   bypassMode: false,
   bypassLevel: "full",
-  gatewayUrl: "http://127.0.0.1:20127",
+  /** Provider base URL — null means no provider configured */
+  gatewayUrl: null as string | null,
+  /** Active provider display name */
+  providerName: "",
   showHelp: false,
   showModelPicker: false,
   modelPickerIdx: 0,

@@ -63,7 +63,25 @@ export const keyCommand: Command = {
       return;
     }
 
-    // Default: /key or /key list
+    if (args[0] === "--help") {
+      addMessage("assistant",
+        "/key — API Key Management\n\n" +
+        "  /key                           Open interactive API Keys manager\n" +
+        "  /key <provider> <api-key>      Set API key directly\n" +
+        "  /key delete <provider>         Delete API key for provider\n" +
+        "  /key list                      List configured keys\n" +
+        "  /key --help                    Show this help"
+      );
+      return;
+    }
+
+    // If in interactive TUI, open the Key Manager modal
+    if (typeof ctx.openKeyManager === "function" && args.length === 0) {
+      await ctx.openKeyManager();
+      return;
+    }
+
+    // Default for non-interactive / headless CLI or /key list
     const activeKeys = listAllCliKeys();
     const lines: string[] = [
       `🔑 **ToolNet CLI — API Key Management**`,

@@ -3,25 +3,57 @@ import { computeLayout, stripAnsi } from "./layout";
 import { renderHeader } from "./renderers/headerRenderer";
 import { renderChatMessages } from "./renderers/chatRenderer";
 import { renderSidebar } from "./renderers/sidebarRenderer";
-import { renderStatusBar, renderInputArea } from "./renderers/statusRenderer";
+import { renderWorkingStatus, renderInputArea, renderFooter } from "./renderers/statusRenderer";
 import { renderConfirmationModal, renderToast } from "./renderers/modalRenderer";
 import { renderModelPickerBox } from "./renderers/modelPickerRenderer";
+import { renderKeyManagerBox } from "./renderers/keyManagerRenderer";
 import { renderSuggestionsPopup } from "./renderers/suggestRenderer";
 import { handleKey, getSuggestions, getInputState, setInputState, resetInputState } from "./input/inputHandler";
 import { sendMessage } from "./events/agentWiring";
 import { A, T, write, getSize } from "../term";
 import { BracketedPasteParser, ENABLE_BRACKETED_PASTE } from "../lib/bracketedPaste";
-import { setupTerminalLifecycle, restoreTerminal, wrapErrorBoundary } from "../lib/terminalLifecycle";
+import { setupTerminalLifecycle, restoreTerminal, wrapErrorBoundary, onTerminalResize } from "../lib/terminalLifecycle";
 import { initWorkspace } from "../lib/codingAgent";
 import { playSplashAnimation } from "../splash";
 import { loadConfig } from "../lib/config";
 import { parseSessionArgs, loadSession, getLastSessionId } from "../lib/sessionPersistence";
 import { providerPicker } from "../components/ProviderPicker";
-import { loadCliKeys } from "../lib/keys";
 import { checkPendingRecovery, clearPendingRecovery, markCleanExit } from "../lib/crashRecovery";
 import { pluginManager } from "../lib/plugins/pluginManager";
+import { getActiveProviderConfig, getActiveProvider } from "../providers";
+import { onProviderSwitch } from "../commands/provider";
 
 setupTerminalLifecycle();
+onTerminalResize(() => {
+  if (tuiState.showHelp) tuiState.showHelp = false;
+  renderAll();
+});
+
+onProviderSwitch((id, config) => {
+  const providerName = config?.name || id;
+  const defaultModel = config?.defaultModel || "";
+  tuiState.providerName = providerName;
+  tuiState.gatewayUrl = config?.baseUrl || null;
+  if (defaultModel) {
+    tuiState.currentModel = defaultModel;
+  }
+  tuiState.setStatus(`Active Provider: ${providerName} │ Model: ${tuiState.currentModel || "none"}`);
+  tuiState.requestRender();
+
+  const prov = getActiveProvider();
+  if (prov && typeof prov.listModels === "function") {
+    prov.listModels().then((models: any[]) => {
+      if (models && models.length > 0) {
+        tuiState.availableModels = models.map((m: any) => m.id);
+        tuiState.filteredModels = [...tuiState.availableModels];
+        if (!defaultModel && !tuiState.availableModels.includes(tuiState.currentModel)) {
+          tuiState.currentModel = tuiState.availableModels[0] || "";
+        }
+        tuiState.requestRender();
+      }
+    }).catch(() => {});
+  }
+});
 
 export function renderAll(): void {
   wrapErrorBoundary(() => {
@@ -39,13 +71,14 @@ export function renderAll(): void {
       primaryColor = A.fgYellow;
     }
 
-    // 1. Header
+    // 1. Header (Minimalist branding + live system status badge)
     out.push(renderHeader(cols, {
-      currentModel: tuiState.currentModel,
       agentMode: tuiState.agentMode,
       bypassMode: tuiState.bypassMode,
       bypassLevel: tuiState.bypassLevel,
-      lastTokens: tuiState.lastTokens,
+      isStreaming: tuiState.isStreaming,
+      spinnerIdx: tuiState.spinnerIdx,
+      statusText: tuiState.statusText,
     }));
 
     // 2. Chat Lines
@@ -77,7 +110,7 @@ export function renderAll(): void {
       }
     }
 
-    // 5. Suggestions Popup
+    // 5. Suggestions Popup (Command palette)
     if (activeSuggests.length > 0) {
       const popup = renderSuggestionsPopup(cols, popupRows, activeSuggests, tuiState.cmdSuggestIdx, primaryColor);
       out.push(...popup);
@@ -93,11 +126,8 @@ export function renderAll(): void {
       out.push(...renderConfirmationModal(cols, rows, tuiState.pendingConfirmation));
     }
 
-    // 8. Input Area
-    out.push(renderInputArea(cols, tuiState.inputBuffer, primaryColor));
-
-    // 9. Status Bar
-    out.push(renderStatusBar(cols, {
+    // 8. Working / Activity Status Line
+    out.push(renderWorkingStatus(cols, {
       showHelp: tuiState.showHelp,
       isStreaming: tuiState.isStreaming,
       spinnerIdx: tuiState.spinnerIdx,
@@ -106,8 +136,18 @@ export function renderAll(): void {
       primaryColor,
     }));
 
+    // 9. Input Area (Enter a coding task or / for commands)
+    out.push(renderInputArea(cols, tuiState.inputBuffer, primaryColor));
+
+    // 10. Persistent Footer Bar (Provider: X │ Model: Y │ Workspace: Z)
+    out.push(renderFooter(cols, {
+      providerName: tuiState.providerName,
+      currentModel: tuiState.currentModel,
+      lastTokens: tuiState.lastTokens,
+    }));
+
     // Cursor position
-    if (!tuiState.showHelp && !tuiState.showModelPicker && !providerPicker.show) {
+    if (!tuiState.showHelp && !tuiState.showModelPicker && !tuiState.showKeyManager && !providerPicker.show) {
       out.push(T.goto(layout.cursorRow, layout.cursorCol) + T.show);
     } else {
       out.push(T.hide);
@@ -126,6 +166,16 @@ export function renderAll(): void {
       write(box);
     }
 
+    // 11. Key Manager Modal Popup
+    if (tuiState.showKeyManager) {
+      const keyBox = renderKeyManagerBox(cols, rows, {
+        keyManagerIdx: tuiState.keyManagerIdx,
+        keyManagerInput: tuiState.keyManagerInput,
+        keyManagerConfirmDelete: tuiState.keyManagerConfirmDelete,
+      });
+      write(keyBox);
+    }
+
     if (providerPicker.show) {
       providerPicker.render();
     }
@@ -135,38 +185,11 @@ export function renderAll(): void {
 tuiState.renderCallback = renderAll;
 
 export async function openModelPicker(): Promise<void> {
-  tuiState.showModelPicker = true;
-  tuiState.modelSearchQuery = "";
-  if (tuiState.availableModels.length === 0 || tuiState.availableModels[0] === "Gateway offline") {
-    tuiState.availableModels = ["Loading..."];
-    tuiState.filteredModels = tuiState.availableModels;
-    tuiState.modelPickerIdx = 0;
-    tuiState.setStatus("Fetching models...");
-    renderAll();
-    try {
-      const localKeys = loadCliKeys();
-      const masterKey = localKeys["toolnet"] || localKeys["gateway"] || localKeys["default"];
-      const fetchHeaders: Record<string, string> = {};
-      if (masterKey) fetchHeaders["Authorization"] = `Bearer ${masterKey}`;
+  await tuiState.openModelPicker();
+}
 
-      const res = await fetch(tuiState.gatewayUrl + "/v1/models", { headers: fetchHeaders });
-      if (res.ok) {
-        const data = (await res.json()) as any;
-        const allModels = (data.data || []).map((m: any) => m.id as string);
-        tuiState.availableModels = allModels.length > 0 ? allModels : ["No models available"];
-      } else {
-        tuiState.availableModels = ["Error loading models"];
-      }
-    } catch {
-      tuiState.availableModels = ["Gateway offline"];
-    }
-  }
-
-  tuiState.filteredModels = [...tuiState.availableModels];
-  tuiState.modelPickerIdx = tuiState.filteredModels.indexOf(tuiState.currentModel);
-  if (tuiState.modelPickerIdx < 0) tuiState.modelPickerIdx = 0;
-  tuiState.setStatus("Type to search  ↑↓ navigate  Enter select  Esc cancel");
-  renderAll();
+export function openKeyManager(): void {
+  tuiState.openKeyManager();
 }
 
 function exitApp(): void {
@@ -195,23 +218,38 @@ export async function main(): Promise<void> {
     if (pendingRecovery.agentMode) tuiState.agentMode = pendingRecovery.agentMode;
   }
 
+  // Resolve provider configuration from app config and provider registry
+  const providerConfig = getActiveProviderConfig();
+  if (providerConfig) {
+    tuiState.gatewayUrl = providerConfig.baseUrl;
+    tuiState.providerName = providerConfig.name;
+    tuiState.currentModel = providerConfig.defaultModel || "";
+  } else {
+    tuiState.gatewayUrl = null;
+    tuiState.providerName = "";
+  }
+
+  // Load model from legacy config as fallback
   try {
-    const res = await fetch(tuiState.gatewayUrl + "/api/health", { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) throw new Error("not ok");
-    tuiState.setStatus("● Connected to " + tuiState.gatewayUrl);
-  } catch {
-    tuiState.setStatus("✖ Cannot reach gateway at " + tuiState.gatewayUrl + " — start with ./start-all.sh");
+    const cfg = loadConfig();
+    if (cfg.defaultModel && !tuiState.currentModel) {
+      tuiState.currentModel = cfg.defaultModel;
+    }
+    if (cfg.baseUrl && !tuiState.gatewayUrl) {
+      tuiState.gatewayUrl = cfg.baseUrl;
+    }
+  } catch {}
+
+  // Set status based on provider state
+  if (providerConfig) {
+    tuiState.setStatus(`Provider: ${providerConfig.name} | Model: ${tuiState.currentModel || "none"}`);
+  } else {
+    tuiState.setStatus("No provider configured — use /provider add to set one up");
   }
 
   if (!process.argv.includes("--no-splash")) {
     await playSplashAnimation();
   }
-
-  try {
-    const cfg = loadConfig();
-    if (cfg.defaultModel) tuiState.currentModel = cfg.defaultModel;
-    if (cfg.baseUrl) tuiState.gatewayUrl = cfg.baseUrl;
-  } catch {}
 
   const { resume, sessionId: requestedSessionId } = parseSessionArgs(process.argv.slice(2));
   if (requestedSessionId) {

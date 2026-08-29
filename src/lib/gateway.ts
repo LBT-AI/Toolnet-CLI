@@ -3,21 +3,30 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 
-const APP_NAME = "toolnetapi";
+/**
+ * Legacy ToolNet Gateway client.
+ *
+ * Kept for backward compatibility and for the optional ToolNet provider.
+ * Core agent/TUI code should prefer src/providers/ abstraction.
+ */
+
+// --- Legacy auth helpers (only used by GatewayClient when connecting to ToolNet gateway) ---
+
+const LEGACY_APP_NAME = "toolnetapi";
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
 const CLI_TOKEN_SALT = "9r-cli-auth";
 
-function getDataDir() {
+function getLegacyDataDir() {
   if (process.env.DATA_DIR) return process.env.DATA_DIR;
   if (process.platform === "win32") {
-    return path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), APP_NAME);
+    return path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), LEGACY_APP_NAME);
   }
-  return path.join(os.homedir(), `.${APP_NAME}`);
+  return path.join(os.homedir(), `.${LEGACY_APP_NAME}`);
 }
 
-const DATA_DIR = getDataDir();
-const MACHINE_ID_FILE = path.join(DATA_DIR, "machine-id");
-const AUTH_DIR = path.join(DATA_DIR, "auth");
+const LEGACY_DATA_DIR = getLegacyDataDir();
+const MACHINE_ID_FILE = path.join(LEGACY_DATA_DIR, "machine-id");
+const AUTH_DIR = path.join(LEGACY_DATA_DIR, "auth");
 const CLI_SECRET_FILE = path.join(AUTH_DIR, "cli-secret");
 const MACHINE_ID_SALT = "9r-cli-auth";
 
@@ -133,7 +142,7 @@ export interface ModelsResponse {
 export class GatewayClient {
   private baseUrl: string;
 
-  constructor(baseUrl = "http://127.0.0.1:20127") {
+  constructor(baseUrl: string) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
   }
 
@@ -322,28 +331,39 @@ export class GatewayClient {
   }
 }
 
-export function detectGatewayUrl(): string {
-  const urlFile = path.join(DATA_DIR, "gateway-url");
-  try {
-    let url = fs.readFileSync(urlFile, "utf8").trim();
-    if (url) {
-      if (url.includes("20128")) url = url.replace("20128", "20127");
-      return url;
-    }
-  } catch {}
+/**
+ * Detect gateway URL from environment or legacy config.
+ * Returns null if no gateway is configured (no hard-coded default).
+ *
+ * This is used by backward-compatible code paths only.
+ * New code should use src/providers/registry.
+ */
+export function detectGatewayUrl(): string | null {
+  // Check environment variable
   if (process.env.TOOLNET_API_URL) return process.env.TOOLNET_API_URL;
-  return "http://127.0.0.1:20127";
+
+  // Check legacy gateway-url file
+  const urlFile = path.join(LEGACY_DATA_DIR, "gateway-url");
+  try {
+    const url = fs.readFileSync(urlFile, "utf8").trim();
+    if (url) return url;
+  } catch {}
+
+  return null;
 }
 
 let _globalGateway: GatewayClient | null = null;
 
-export function createGateway(baseUrl?: string): GatewayClient {
-  const gw = new GatewayClient(baseUrl || detectGatewayUrl());
+/**
+ * Create a GatewayClient instance. Only call when user has explicitly
+ * configured a ToolNet gateway URL.
+ */
+export function createGateway(baseUrl: string): GatewayClient {
+  const gw = new GatewayClient(baseUrl);
   _globalGateway = gw;
   return gw;
 }
 
-export function getGateway(): GatewayClient {
-  if (!_globalGateway) throw new Error("Gateway not initialized. Call createGateway() first.");
+export function getGateway(): GatewayClient | null {
   return _globalGateway;
 }

@@ -287,7 +287,7 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
       createdAt: Date.now(),
     };
 
-    const scheduler = new DynamicScheduler(graph);
+    const scheduler = new DynamicScheduler(graph, { gatewayUrl: "http://mock:9999" });
     const statusChanges: string[] = [];
     const eventsReceived: string[] = [];
 
@@ -388,7 +388,7 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
       createdAt: Date.now(),
     };
 
-    const scheduler = new DynamicScheduler(graph, { maxConcurrencyOverride: 1 });
+    const scheduler = new DynamicScheduler(graph, { maxConcurrencyOverride: 1, gatewayUrl: "http://mock:9999" });
     const finalState = await scheduler.start();
 
     expect(finalState.status).toBe("COMPLETED");
@@ -412,7 +412,7 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
       createdAt: Date.now(),
     };
 
-    const scheduler = new DynamicScheduler(graph, { maxConcurrencyOverride: 2 });
+    const scheduler = new DynamicScheduler(graph, { maxConcurrencyOverride: 2, gatewayUrl: "http://mock:9999" });
     const finalState = await scheduler.start();
 
     expect(finalState.status).toBe("COMPLETED");

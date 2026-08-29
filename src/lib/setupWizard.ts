@@ -6,9 +6,9 @@
  *   (or auto-detected on first interactive launch when no config exists)
  *
  * Questions:
- *  1. Gateway / API mode
- *  2. Gateway URL (if gateway mode) or API URL (if direct mode)
- *  3. API key / provider (stored via key-manager, not plaintext config)
+ *  1. Provider mode (direct API / ToolNet gateway / skip)
+ *  2. Base URL
+ *  3. API key / provider
  *  4. Default model
  *  5. Sandbox mode
  *  6. Theme (optional)
@@ -17,6 +17,7 @@
 import * as rl from "node:readline";
 import { updateAppConfig, type AppConfig, type SandboxMode, SANDBOX_MODES, loadAppConfig } from "./appConfig";
 import { saveCliKey, getCliKey, maskApiKey, type StoredKeyInfo, listAllCliKeys } from "./keys";
+import { addProvider, setActiveProvider, type ProviderConfig } from "../providers";
 
 function createPrompt(): rl.Interface {
   return rl.createInterface({ input: process.stdin, output: process.stdout });
@@ -31,7 +32,7 @@ function ask(r: rl.Interface, question: string): Promise<string> {
 const PROVIDERS = ["openai", "anthropic", "gemini", "deepseek", "openrouter", "groq", "together", "mistral", "alibaba"] as const;
 
 export interface WizardResult {
-  mode: "gateway" | "direct" | "skip";
+  mode: "direct" | "skip";
   config: AppConfig;
   keySet: boolean;
 }
@@ -67,31 +68,24 @@ export async function runSetupWizard(): Promise<WizardResult> {
 
     // 1. Mode
     console.log("\n\x1b[1m1. Connection Mode\x1b[0m");
-    console.log("   gateway — local ToolNet gateway (default)");
-    console.log("   direct  — direct API calls to a provider");
+    console.log("   direct  — connect directly to an AI provider API");
     console.log("   skip    — keep current settings");
-    const modeInput = await ask(r, "\n  Choose mode [gateway/direct/skip]: ");
-    const mode = modeInput === "direct" ? "direct" : modeInput === "skip" ? "skip" : "gateway";
+    const modeInput = await ask(r, "\n  Choose mode [direct/skip]: ");
+    const mode = modeInput === "skip" ? "skip" : "direct";
     result.mode = mode;
 
     if (mode === "skip") return result;
 
     // 2. URL
-    let gatewayUrl: string | null = existing.gatewayUrl;
-    let apiUrl: string | null = existing.apiUrl;
-    if (mode === "gateway") {
-      const urlInput = await ask(r, `\n  Gateway URL [${existing.gatewayUrl || "http://127.0.0.1:20127"}]: `);
-      if (urlInput) gatewayUrl = urlInput;
-    } else {
-      console.log("\n  Enter the provider API endpoint (e.g. https://api.openai.com/v1)");
-      const urlInput = await ask(r, `  API URL [${existing.apiUrl || "none"}]: `);
-      if (urlInput) apiUrl = urlInput;
-    }
+    console.log("\n\x1b[1m2. API Base URL\x1b[0m");
+    console.log("   Enter the provider API endpoint (e.g. https://api.openai.com/v1)");
+    const urlInput = await ask(r, `  Base URL [${existing.baseUrl || existing.apiUrl || "none"}]: `);
+    const baseUrl = urlInput || existing.baseUrl || existing.apiUrl || "";
 
     // 3. API key
     const existingKeys = listAllCliKeys();
     if (existingKeys.length) {
-      console.log("\n\x1b[1m2. API Key\x1b[0m");
+      console.log("\n\x1b[1m3. API Key\x1b[0m");
       console.log("  Existing keys:");
       for (const k of existingKeys) {
         console.log(`    ${k.provider}: ${k.maskedKey} (${k.source === "env" ? "env: " + k.envVar : "stored"})`);
@@ -101,25 +95,25 @@ export async function runSetupWizard(): Promise<WizardResult> {
         await promptAndSaveKey(r, result);
       }
     } else {
-      console.log("\n\x1b[1m2. API Key\x1b[0m");
+      console.log("\n\x1b[1m3. API Key\x1b[0m");
       console.log(`  Providers: ${PROVIDERS.join(", ")}`);
       await promptAndSaveKey(r, result);
     }
 
     // 4. Default model
     const defaultModels: Record<string, string> = {
-      openai: "openai/gpt-4o",
-      anthropic: "anthropic/claude-sonnet-4-20250514",
-      gemini: "google/gemini-2.0-flash",
-      deepseek: "deepseek/deepseek-chat",
-      openrouter: "openai/gpt-4o",
+      openai: "gpt-4o",
+      anthropic: "claude-sonnet-4-20250514",
+      gemini: "gemini-2.0-flash",
+      deepseek: "deepseek-chat",
+      openrouter: "gpt-4o",
     };
-    const suggested = defaultModels[existing.keyProvider || "openai"] || "openai/gpt-4o";
-    const modelInput = await ask(r, `\n\x1b[1m3. Default Model\x1b[0m\n  Enter a model identifier\n  Default [${suggested}]: `);
+    const suggested = defaultModels[existing.keyProvider || "openai"] || "";
+    const modelInput = await ask(r, `\n\x1b[1m4. Default Model\x1b[0m\n  Enter a model identifier\n  Default [${suggested || "none"}]: `);
     const defaultModel = modelInput || suggested;
 
     // 5. Sandbox mode
-    console.log("\n\x1b[1m4. Sandbox Mode\x1b[0m");
+    console.log("\n\x1b[1m5. Sandbox Mode\x1b[0m");
     console.log("   workspace  — restrict to workspace directory (default)");
     console.log("   ask        — prompt before file access outside workspace");
     console.log("   full-access — no sandbox restrictions");
@@ -129,16 +123,33 @@ export async function runSetupWizard(): Promise<WizardResult> {
       : existing.sandboxMode || "ask";
 
     // 6. Theme
-    const themeInput = await ask(r, "\n\x1b[1m5. Theme (optional)\x1b[0m\n  dark / light [dark]: ");
+    const themeInput = await ask(r, "\n\x1b[1m6. Theme (optional)\x1b[0m\n  dark / light [dark]: ");
     const theme = themeInput || "dark";
 
     // 7. Update check
-    const updateInput = await ask(r, "\n\x1b[1m6. Auto-update check\x1b[0m\n  Check for updates on launch? [Y/n]: ");
+    const updateInput = await ask(r, "\n\x1b[1m7. Auto-update check\x1b[0m\n  Check for updates on launch? [Y/n]: ");
     const updateCheckEnabled = !updateInput || !updateInput.toLowerCase().startsWith("n");
 
+    // Save provider to provider registry
+    if (baseUrl) {
+      const providerId = (existing.keyProvider || result.config.keyProvider || "openai-compatible").toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+      const providerConfig: ProviderConfig = {
+        id: providerId,
+        name: existing.keyProvider || result.config.keyProvider || providerId,
+        baseUrl: baseUrl,
+        apiKeyEnv: result.config.keyProvider ? `${result.config.keyProvider.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY` : undefined,
+        defaultModel: defaultModel || undefined,
+      };
+      addProvider(providerConfig);
+      setActiveProvider(providerId);
+    }
+
+    const providerId = baseUrl ? (existing.keyProvider || result.config.keyProvider || "openai-compatible").toLowerCase().replace(/[^a-z0-9_-]/g, "-") : null;
     const config = updateAppConfig({
-      gatewayUrl: mode === "gateway" ? (gatewayUrl ?? existing.gatewayUrl) : null,
-      apiUrl: mode === "direct" ? (apiUrl ?? null) : existing.apiUrl,
+      gatewayUrl: null,
+      apiUrl: null,
+      baseUrl: baseUrl || null,
+      provider: providerId,
       defaultModel,
       sandboxMode,
       theme,

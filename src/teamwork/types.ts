@@ -246,6 +246,7 @@ export interface TurboExecutionOptions {
   sessionId?: string;
   model?: string;
   gatewayUrl?: string;
+  baseUrl?: string;
   maxIterations?: number;
   timeoutMs?: number;
   eventBus?: any;

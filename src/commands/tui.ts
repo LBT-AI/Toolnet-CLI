@@ -9,9 +9,9 @@ export const tuiCommand: Command = {
     ctx.addMessage("assistant", [
       "To launch TUI mode, exit this session and run:",
       "",
-      "  " + ctx.gateway.getBaseUrl().replace(/https?:\/\//, "").includes("20128") ? "toolnet --tui" : "toolnet --tui",
+      "  toolnet",
       "",
-      "Or for the full OpenCode-style experience on a compatible terminal.",
+      "Or for the full experience on a compatible terminal.",
     ].join("\n"));
   },
 };

@@ -1,34 +1,32 @@
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
+/**
+ * Compatibility adapter over appConfig.ts.
+ *
+ * Prevents dual-schema conflict and file overwrite of ~/.toolnetcli/config.json.
+ * All reads and writes are safely routed through appConfig.ts (source of truth).
+ */
 
-const APP_NAME = "toolnetapi";
-
-function getDataDir(): string {
-  if (process.env.DATA_DIR) return process.env.DATA_DIR;
-  if (process.platform === "win32") {
-    return path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), APP_NAME);
-  }
-  return path.join(os.homedir(), `.${APP_NAME}`);
-}
-
-const DATA_DIR = getDataDir();
-const CONFIG_FILE = path.join(DATA_DIR, "config.json");
+import {
+  getAppConfig,
+  updateAppConfig,
+  getAppConfigPath,
+  type AppConfig,
+  type SandboxMode,
+} from "./appConfig";
 
 export interface CliConfig {
-  baseUrl: string;
+  baseUrl: string | null;
   defaultModel: string;
   theme: string;
   rtkEnabled: boolean;
-  sandboxMode: "workspace" | "ask" | "full-access";
+  sandboxMode: SandboxMode;
   sessionNames: Record<string, string>;
   sessionOrder: string[];
   lastSession: string | null;
 }
 
 export const DEFAULT_CONFIG: CliConfig = {
-  baseUrl: "http://127.0.0.1:20127",
-  defaultModel: "openai/gpt-4o",
+  baseUrl: null,
+  defaultModel: "",
   theme: "dark",
   rtkEnabled: true,
   sandboxMode: "ask",
@@ -37,37 +35,22 @@ export const DEFAULT_CONFIG: CliConfig = {
   lastSession: null,
 };
 
-let cachedConfig: CliConfig | null = null;
-
-function ensureDir(): void {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  } catch {}
-}
-
 export function loadConfig(): CliConfig {
-  if (cachedConfig) return cachedConfig;
-  ensureDir();
-  try {
-    const raw = fs.readFileSync(CONFIG_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    cachedConfig = { ...DEFAULT_CONFIG, ...parsed };
-    if (cachedConfig?.baseUrl && cachedConfig.baseUrl.includes("20128")) {
-      cachedConfig.baseUrl = cachedConfig.baseUrl.replace("20128", "20127");
-      saveConfig();
-    }
-  } catch {
-    cachedConfig = { ...DEFAULT_CONFIG };
-  }
-  return cachedConfig as CliConfig;
+  const appCfg = getAppConfig();
+  return {
+    baseUrl: appCfg.baseUrl,
+    defaultModel: appCfg.defaultModel,
+    theme: appCfg.theme,
+    rtkEnabled: true,
+    sandboxMode: appCfg.sandboxMode,
+    sessionNames: {},
+    sessionOrder: [],
+    lastSession: null,
+  };
 }
 
 export function saveConfig(): void {
-  if (!cachedConfig) return;
-  ensureDir();
-  try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(cachedConfig, null, 2), "utf8");
-  } catch {}
+  // Source of truth is appConfig.ts — no-op to prevent schema stripping
 }
 
 export function getConfig(): CliConfig {
@@ -75,11 +58,14 @@ export function getConfig(): CliConfig {
 }
 
 export function updateConfig(partial: Partial<CliConfig>): void {
-  const cfg = loadConfig();
-  Object.assign(cfg, partial);
-  saveConfig();
+  const updatePayload: Partial<AppConfig> = {};
+  if (partial.baseUrl !== undefined) updatePayload.baseUrl = partial.baseUrl;
+  if (partial.defaultModel !== undefined) updatePayload.defaultModel = partial.defaultModel;
+  if (partial.theme !== undefined) updatePayload.theme = partial.theme;
+  if (partial.sandboxMode !== undefined) updatePayload.sandboxMode = partial.sandboxMode;
+  updateAppConfig(updatePayload);
 }
 
 export function getConfigPath(): string {
-  return CONFIG_FILE;
+  return getAppConfigPath();
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
-import { createGateway, GatewayClient } from "./lib/gateway";
+import { GatewayClient } from "./lib/gateway";
+import { getActiveProviderConfig, getActiveProvider, getActiveBaseUrl, getActiveDefaultModel } from "./providers";
 import { dispatchCommand, getAllCommands } from "./commands";
 import { AgentRuntime } from "./lib/agentRuntime";
 import { printToolStart, printToolEnd } from "./lib/tool-format";
@@ -395,18 +396,23 @@ function makeCompleter(commands: string[]) {
 // ─── Main ────────────────────────────────────────────────────────────────
 
 export async function main() {
-  const gateway = createGateway();
-  const gw = gateway;
+  // Check provider configuration
+  const providerConfig = getActiveProviderConfig();
+  const provider = getActiveProvider();
+  const baseUrl = getActiveBaseUrl();
+  let gw: GatewayClient | null = null;
+  let version = "";
 
-  // Check gateway health
-  const health = await withSpinner("Connecting to gateway...", () => gw.health());
-  if (!health.success) {
-    printError("Cannot connect to gateway at " + gw.getBaseUrl());
-    printError("Make sure the gateway is running (npm run dev or pm2)");
-    process.exit(1);
+  if (providerConfig?.id === "toolnet" && baseUrl) {
+    gw = new GatewayClient(baseUrl);
+    const health = await withSpinner("Checking ToolNet gateway...", () => gw!.health());
+    if (health.success) {
+      const versionResult = await gw.getVersion();
+      version = versionResult.success ? versionResult.data?.currentVersion || "" : "";
+    }
+  } else if (provider?.health) {
+    await withSpinner("Checking provider...", () => provider.health!());
   }
-  const versionResult = await gw.getVersion();
-  const version = versionResult.success ? versionResult.data?.currentVersion || "" : "";
 
   await playSplashAnimation();
 
@@ -417,11 +423,15 @@ export async function main() {
   print(C.bold + color.cyan + "  ┃╭━━╯┃╭╮┃┃╭╮┃╰╯╰╯┃┃╭╯" + C.reset);
   print(C.bold + color.cyan + "  ┃┃   ┃┃┃┃┃┃┃┃╰╮╭╮┃┃╰╮" + C.reset);
   print(C.bold + color.cyan + "  ╰╯   ╰╯╰╯╰╯╰╯ ╰╯╰╯╰━╯" + C.reset + "  " + color.subtext + "v" + (version || "?") + C.reset);
-  print(color.subtext + "  AI Coding Agent Gateway" + C.reset);
-  const currentModel_default = "openai/gpt-4o";
+  print(color.subtext + "  AI Coding Agent" + C.reset);
+  const currentModel_default = getActiveDefaultModel() || "";
   print("");
-  print(color.green + "  ✔ Connected to gateway at " + gw.getBaseUrl() + C.reset);
-  print(color.subtext + "  Model: " + C.bold + currentModel_default + C.reset + color.subtext + "  |  Type a message and press Enter  |  /help for commands  |  /exit to quit" + C.reset);
+  if (providerConfig) {
+    print(color.green + `  ✔ Provider: ${providerConfig.name} (${providerConfig.baseUrl})` + C.reset);
+  } else {
+    print(color.yellow + "  ⚠ Provider: Not configured — use /provider add to set one up" + C.reset);
+  }
+  print(color.subtext + "  Model: " + C.bold + (currentModel_default || "none") + C.reset + color.subtext + "  |  Type a message and press Enter  |  /help for commands  |  /exit to quit" + C.reset);
   print("");
   print(color.yellow + "  ─────────────────────────────────────────────────────" + C.reset);
   print("");
@@ -496,7 +506,7 @@ export async function main() {
 
       try {
         const runtime = new AgentRuntime({
-          gatewayUrl: gw.getBaseUrl(),
+          baseUrl: gw?.getBaseUrl() || getActiveBaseUrl() || "",
           model: currentModel,
           onEvent: (event, data) => {
             if (event === "TOOL_START") {

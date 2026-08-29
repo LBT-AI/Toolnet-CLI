@@ -9,25 +9,34 @@
  * - validation of every known field
  * - secrets are NOT stored here — API keys live in the key manager
  *   (`src/lib/keys.ts`, file mode 0600)
+ *
+ * Schema v2 (current):
+ * - gatewayUrl defaults to null (no mandatory localhost connection)
+ * - provider field added (references src/providers/registry)
+ * - No hardcoded gateway URLs
  */
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export type SandboxMode = "workspace" | "ask" | "full-access";
 export const SANDBOX_MODES: SandboxMode[] = ["workspace", "ask", "full-access"];
 
 export interface AppConfig {
   schemaVersion: number;
-  /** Gateway URL, or null when running in direct-API mode. */
+  /** Gateway URL, or null when not using ToolNet gateway. Default: null */
   gatewayUrl: string | null;
-  /** API base URL for direct provider mode. */
+  /** API base URL for direct provider mode (legacy alias for gatewayUrl migration). */
   apiUrl: string | null;
   /** Provider name for the stored key (see src/lib/keys.ts). */
   keyProvider: string | null;
+  /** Active provider ID from src/providers/registry, or null if none configured. */
+  provider: string | null;
+  /** Base URL for the active provider (null = use provider default). */
+  baseUrl: string | null;
   defaultModel: string;
   sandboxMode: SandboxMode;
   theme: string;
@@ -38,10 +47,12 @@ export interface AppConfig {
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
   schemaVersion: CURRENT_SCHEMA_VERSION,
-  gatewayUrl: "http://127.0.0.1:20127",
+  gatewayUrl: null,
   apiUrl: null,
   keyProvider: null,
-  defaultModel: "openai/gpt-4o",
+  provider: null,
+  baseUrl: null,
+  defaultModel: "",
   sandboxMode: "ask",
   theme: "dark",
   updateCheckIntervalHours: 24,
@@ -87,7 +98,7 @@ export function validateConfig(input: unknown): AppConfig {
     cfg.schemaVersion = Math.min(num, CURRENT_SCHEMA_VERSION);
   }
 
-  for (const key of ["gatewayUrl", "apiUrl", "keyProvider"] as const) {
+  for (const key of ["gatewayUrl", "apiUrl", "keyProvider", "provider", "baseUrl"] as const) {
     const v = input[key];
     if (v === null || typeof v === "string") cfg[key] = v as string | null;
   }
@@ -118,6 +129,27 @@ export function validateConfig(input: unknown): AppConfig {
 function migrateConfig(raw: Record<string, unknown>): AppConfig {
   let cfg = validateConfig(raw);
 
+  // v1 → v2 migration: gatewayUrl becomes null, provider field added
+  if (cfg.schemaVersion < 2) {
+    // If gatewayUrl was the old default, set it to null
+    if (cfg.gatewayUrl === "http://127.0.0.1:20127") {
+      cfg.gatewayUrl = null;
+    }
+    // If apiUrl was set and gatewayUrl is null, prefer apiUrl as baseUrl
+    if (!cfg.gatewayUrl && cfg.apiUrl) {
+      cfg.baseUrl = cfg.apiUrl;
+    }
+    // If gatewayUrl was set to something non-default, keep it but also set baseUrl
+    if (cfg.gatewayUrl && cfg.gatewayUrl !== "http://127.0.0.1:20127") {
+      cfg.baseUrl = cfg.gatewayUrl;
+    }
+    // Map keyProvider to provider if gateway was in use
+    if (cfg.keyProvider && !cfg.provider) {
+      cfg.provider = cfg.keyProvider;
+    }
+    cfg.schemaVersion = CURRENT_SCHEMA_VERSION;
+  }
+
   // Legacy flat config from ~/.toolnetapi/config.json (no schemaVersion).
   if (!isRecord(raw) || raw.schemaVersion === undefined) {
     let migrated = false;
@@ -125,16 +157,20 @@ function migrateConfig(raw: Record<string, unknown>): AppConfig {
       const value = raw[field];
       if (value === undefined) continue;
       migrated = true;
-      if (field === "baseUrl") cfg.gatewayUrl = typeof value === "string" ? value : null;
-      else if (field === "defaultModel" && typeof value === "string") cfg.defaultModel = value;
-      else if (field === "theme" && typeof value === "string") cfg.theme = value;
-      else if (field === "sandboxMode" && typeof value === "string")
+      if (field === "baseUrl") {
+        // Legacy baseUrl → store as baseUrl, not gatewayUrl
+        cfg.baseUrl = typeof value === "string" ? value : null;
+      } else if (field === "defaultModel" && typeof value === "string") {
+        cfg.defaultModel = value;
+      } else if (field === "theme" && typeof value === "string") {
+        cfg.theme = value;
+      } else if (field === "sandboxMode" && typeof value === "string") {
         cfg.sandboxMode = validateConfig({ sandboxMode: value }).sandboxMode;
+      }
     }
     if (migrated) cfg.schemaVersion = CURRENT_SCHEMA_VERSION;
   }
 
-  // Future migrations go here, e.g. `if (cfg.schemaVersion < 2) { ... }`
   cfg.schemaVersion = CURRENT_SCHEMA_VERSION;
   return cfg;
 }

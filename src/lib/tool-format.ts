@@ -1,5 +1,6 @@
 const ANSI = {
   reset: "\x1b[0m",
+  bold: "\x1b[1m",
   yellow: "\x1b[33m",
   cyan: "\x1b[36m",
   green: "\x1b[32m",
@@ -84,18 +85,20 @@ export function renderToolLine(
   name: string,
   args: any,
   status: "running" | "success" | "error",
+  durationMs?: number,
 ): string {
   const action = prettyToolName(name)
   const target = prettyToolTarget(name, args)
+  const targetFormatted = target ? ` ${ANSI.dim}${target}${ANSI.reset}` : ""
+  const durFormatted = durationMs !== undefined ? ` ${ANSI.dim}· ${(durationMs / 1000).toFixed(1)}s${ANSI.reset}` : ""
 
-  const suffix =
-    status === "running"
-      ? `${ANSI.dim}…${ANSI.reset}`
-      : status === "success"
-        ? `${ANSI.green}✓${ANSI.reset}`
-        : `${ANSI.red}✗${ANSI.reset}`
-
-  return `${ANSI.dim}◑${ANSI.reset} ${ANSI.yellow}${action}${ANSI.reset} ${ANSI.cyan}(${target})${ANSI.reset} ${suffix}`
+  if (status === "running") {
+    return `  ${ANSI.yellow}●${ANSI.reset} ${ANSI.bold}${action}${ANSI.reset}${targetFormatted}`
+  }
+  if (status === "success") {
+    return `  ${ANSI.green}✓${ANSI.reset} ${ANSI.reset}${action}${ANSI.reset}${targetFormatted}${durFormatted}`
+  }
+  return `  ${ANSI.red}✗${ANSI.reset} ${ANSI.red}${action}${targetFormatted}${ANSI.reset}`
 }
 
 /**

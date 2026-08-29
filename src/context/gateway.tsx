@@ -11,10 +11,10 @@ export function useGateway(): GatewayClient {
 
 export function GatewayProvider(props: {
   client?: GatewayClient;
-  baseUrl?: string;
+  baseUrl: string;
   children: any;
 }) {
-  const client = props.client ?? createGateway(props.baseUrl ?? "http://127.0.0.1:20127");
+  const client = props.client ?? createGateway(props.baseUrl);
   return (
     <GatewayContext.Provider value={client}>
       {props.children}

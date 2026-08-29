@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "toolnet-memory": {
+      "type": "stdio",
+      "command": "toolnet-memory",
+      "args": [
+        "mcp"
+      ],
+      "tools": [
+        "*"
+      ]
+    }
+  }
+}

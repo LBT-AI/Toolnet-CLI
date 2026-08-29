@@ -1,4 +1,5 @@
 import type { GatewayClient } from "../lib/gateway";
+import type { Provider } from "../providers";
 import { helpCommand } from "./help";
 import { statusCommand } from "./status";
 import { modelCommand } from "./model";
@@ -31,14 +32,21 @@ import { updateCommand } from "./update";
 import { subagentCommand } from "./subagent";
 import { harnessCommand } from "./harness";
 import { keyCommand } from "./key";
+import { providerCommand } from "./provider";
+import { searchCommand } from "./search";
+import { policyCommand } from "./policy";
 
 export interface CommandContext {
-  gateway: GatewayClient;
+  gateway?: GatewayClient | null;
+  provider?: Provider | null;
   addMessage: (role: "user" | "assistant" | "system", content: string) => void;
   setModel: (model: string) => void;
   setStatusMsg: (msg: string) => void;
   exit: () => void;
   currentModel: () => string;
+  openModelPicker?: () => Promise<void> | void;
+  openKeyManager?: () => Promise<void> | void;
+  openProviderPicker?: () => Promise<void> | void;
   setBypassMode?: (enabled: boolean, level?: string) => void;
   getCurrentSessionId?: () => string;
   setCurrentSessionId?: (id: string) => void;
@@ -90,6 +98,9 @@ const builtinCommands: Command[] = [
   subagentCommand,
   harnessCommand,
   keyCommand,
+  providerCommand,
+  searchCommand,
+  policyCommand,
 ];
 
 export function getAllCommands(): Command[] {

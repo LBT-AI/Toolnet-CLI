@@ -36,7 +36,7 @@ describe("GatewayClient", () => {
   });
 
   test("setBaseUrl normalizes trailing slash", () => {
-    const client = new GatewayClient();
+    const client = new GatewayClient("https://gateway.example.com/");
 
     client.setBaseUrl("https://gateway.example.com/");
 

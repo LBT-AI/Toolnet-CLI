@@ -3,7 +3,7 @@
  * Target File: src/teamwork/subagentRuntime.ts
  */
 
-import { detectGatewayUrl } from "../lib/gateway";
+import { getActiveProvider, getActiveBaseUrl, OpenAICompatibleProvider, type Provider } from "../providers";
 import { agentTools, executeTool } from "../lib/agentTools";
 import { workspaceRoot, currentCwd } from "../lib/codingAgent";
 import { contextEngine, type ContextMessage } from "../lib/context";
@@ -16,6 +16,7 @@ import type { EventBus } from "./eventBus";
 export interface SubagentOptions {
   model?: string;
   gatewayUrl?: string;
+  baseUrl?: string;
   maxTurns?: number;
   timeoutMs?: number;
   eventBus?: EventBus;
@@ -34,11 +35,27 @@ export interface SubagentResult {
   error?: string;
 }
 
+import fs from "node:fs";
+import path from "node:path";
+
+export function loadCustomPersonas(): Record<string, string> {
+  try {
+    const cwd = currentCwd || process.cwd();
+    const personasFile = path.join(cwd, ".toolnet", "personas.json");
+    if (fs.existsSync(personasFile)) {
+      const raw = fs.readFileSync(personasFile, "utf8");
+      return JSON.parse(raw);
+    }
+  } catch {}
+  return {};
+}
+
 /**
  * Returns role-specific system prompts with strict operational guidelines.
  */
 export function getSubagentRolePrompt(role: AgentRole, title: string): string {
   const baseMemory = contextEngine.getMemoryPromptSnippet();
+  const customPersonas = loadCustomPersonas();
 
   const rolePrompts: Record<string, string> = {
     RESEARCHER: `You are ToolNet Sub-Agent [RESEARCHER].
@@ -80,9 +97,10 @@ Guidelines:
 
     GENERAL: `You are ToolNet Autonomous Sub-Agent.
 Your goal is to execute the designated task with maximum autonomy, using available tools efficiently.`,
+    ...customPersonas,
   };
 
-  const selectedRolePrompt = rolePrompts[role] || rolePrompts.GENERAL;
+  const selectedRolePrompt = customPersonas[role] || rolePrompts[role] || rolePrompts.GENERAL;
 
   return `${selectedRolePrompt}
 
@@ -143,8 +161,23 @@ export async function executeSubagentTask(
   const maxTurns = options.maxTurns || node.maxTurns || 8;
   const timeoutMs = options.timeoutMs || 120000;
   const model = options.model || "default";
-  const gatewayUrl = options.gatewayUrl || detectGatewayUrl();
   const onEvent = options.onEvent;
+
+  const fallbackUrl = options.gatewayUrl || options.baseUrl || getActiveBaseUrl() || "http://localhost:8080";
+  const provider = getActiveProvider() ?? new OpenAICompatibleProvider({ id: "default", name: "Default", baseUrl: fallbackUrl });
+
+  if (!provider) {
+    return {
+      success: false,
+      output: "",
+      toolCallsCount: 0,
+      turnsUsed: 0,
+      tokensUsed: 0,
+      role,
+      nodeId: node.id,
+      error: "No active AI provider configured. Use /provider add or toolnet provider add.",
+    };
+  }
 
   const rolePrompt = getSubagentRolePrompt(role, node.title);
   const tools = getSubagentTools(role);
@@ -158,11 +191,6 @@ export async function executeSubagentTask(
   let turnsUsed = 0;
   let estimatedTokens = 0;
   const toolCallHistory: string[] = [];
-
-  const providerStr = model.includes("/") ? model.split("/")[0] : model;
-  let localKey = getCliKey(providerStr) || getCliKey("toolnet") || getCliKey("gateway") || getCliKey("default");
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (localKey) headers["Authorization"] = `Bearer ${localKey}`;
 
   if (onEvent) {
     onEvent("subagent:start", { nodeId: node.id, role, title: node.title });
@@ -189,18 +217,14 @@ export async function executeSubagentTask(
     const prep = contextEngine.prepareMessagesForApi(messages, { model });
     estimatedTokens = prep.budget.currentEstimatedTokens;
 
-    let response: Response;
+    let chatRes;
     try {
-      response = await fetch(`${gatewayUrl}/v1/chat/completions`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          model,
-          messages: prep.messages,
-          tools,
-          tool_choice: "auto",
-          temperature: 0.1,
-        }),
+      chatRes = await provider.chat({
+        model,
+        messages: prep.messages as any,
+        tools,
+        tool_choice: "auto",
+        temperature: 0.1,
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (netErr: any) {
@@ -216,37 +240,7 @@ export async function executeSubagentTask(
       };
     }
 
-    if (!response.ok) {
-      const errText = await response.text();
-      return {
-        success: false,
-        output: "",
-        toolCallsCount,
-        turnsUsed,
-        tokensUsed: estimatedTokens,
-        role,
-        nodeId: node.id,
-        error: `Gateway HTTP ${response.status}: ${errText}`,
-      };
-    }
-
-    let data: any;
-    try {
-      data = await response.json();
-    } catch {
-      return {
-        success: false,
-        output: "",
-        toolCallsCount,
-        turnsUsed,
-        tokensUsed: estimatedTokens,
-        role,
-        nodeId: node.id,
-        error: "Failed to parse JSON response from model gateway",
-      };
-    }
-
-    const choice = data.choices?.[0];
+    const choice = chatRes.choices?.[0];
     const assistantMsg = choice?.message;
     if (!assistantMsg) {
       return {
@@ -257,11 +251,15 @@ export async function executeSubagentTask(
         tokensUsed: estimatedTokens,
         role,
         nodeId: node.id,
-        error: "Invalid empty response from model gateway",
+        error: "Invalid empty response from model provider",
       };
     }
 
-    messages.push(assistantMsg);
+    messages.push({
+      role: assistantMsg.role || "assistant",
+      content: assistantMsg.content || "",
+      ...(assistantMsg.tool_calls ? { tool_calls: assistantMsg.tool_calls } : {}),
+    });
 
     const toolCalls = assistantMsg.tool_calls;
     if (!toolCalls || toolCalls.length === 0) {

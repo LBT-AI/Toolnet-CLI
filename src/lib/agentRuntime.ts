@@ -1,4 +1,4 @@
-import { detectGatewayUrl } from "./gateway";
+import { getActiveProvider, getActiveBaseUrl, OpenAICompatibleProvider, type Provider } from "../providers";
 import { agentTools, getMergedAgentTools, executeTool } from "./agentTools";
 import { workspaceRoot, currentCwd } from "./codingAgent";
 import { loadLocalSkills } from "./skillsLoader";
@@ -9,7 +9,10 @@ import { executeToolBatch, type ToolCall } from "./harness/toolExecutor";
 
 export interface AgentRuntimeOptions {
   model?: string;
+  baseUrl?: string;
+  /** @deprecated Use baseUrl instead */
   gatewayUrl?: string;
+  provider?: Provider;
   maxTurns?: number;
   timeoutMs?: number;
   onEvent?: (event: string, data: any) => void;
@@ -72,12 +75,21 @@ export const AGENT_SYSTEM_PROMPT = getAgentSystemPrompt();
 
 
 export class AgentRuntime {
-  private gatewayUrl: string;
+  private explicitProvider: Provider | null = null;
   private maxTurns: number;
   private timeoutMs: number;
 
   constructor(options: AgentRuntimeOptions = {}) {
-    this.gatewayUrl = options.gatewayUrl || detectGatewayUrl();
+    if (options.provider) {
+      this.explicitProvider = options.provider;
+    } else if (options.baseUrl || options.gatewayUrl) {
+      const url = options.baseUrl || options.gatewayUrl!;
+      this.explicitProvider = new OpenAICompatibleProvider({
+        id: "custom",
+        name: "Custom",
+        baseUrl: url,
+      });
+    }
     this.maxTurns = options.maxTurns ?? 30;
     this.timeoutMs = options.timeoutMs ?? 60000;
   }
@@ -94,6 +106,18 @@ export class AgentRuntime {
     const model = options.model || "default";
     const maxTurns = options.maxTurns || this.maxTurns;
     const onEvent = options.onEvent;
+
+    const fallbackUrl = options.baseUrl || options.gatewayUrl || getActiveBaseUrl() || "http://localhost:8080";
+    const provider = options.provider ?? (this.explicitProvider ?? (getActiveProvider() ?? new OpenAICompatibleProvider({ id: "default", name: "Default", baseUrl: fallbackUrl })));
+    if (!provider) {
+      return {
+        success: false,
+        output: "",
+        toolCallsCount: 0,
+        turnsUsed: 0,
+        error: "No active AI provider configured. Use /provider add or toolnet provider add.",
+      };
+    }
 
     // Ensure system prompt is present
     if (!messages.some((m) => m.role === "system")) {
@@ -163,18 +187,14 @@ export class AgentRuntime {
         }
       }
 
-      let response: Response;
+      let chatResponse;
       try {
-        response = await fetch(`${this.gatewayUrl}/v1/chat/completions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model,
-            messages: apiMessages,
-            tools: getMergedAgentTools(),
-            tool_choice: isWorkspaceIntent && turnCount === 1 ? "required" : "auto",
-            temperature: 0.1,
-          }),
+        chatResponse = await provider.chat({
+          model,
+          messages: apiMessages as any,
+          tools: getMergedAgentTools(),
+          tool_choice: isWorkspaceIntent && turnCount === 1 ? "required" : "auto",
+          temperature: 0.1,
           signal: AbortSignal.timeout(this.timeoutMs),
         });
       } catch (netErr: any) {
@@ -183,35 +203,26 @@ export class AgentRuntime {
           output: "",
           toolCallsCount,
           turnsUsed: turnCount,
-          error: `Gateway connection error: ${netErr.message}`,
+          error: `Provider connection error: ${netErr.message || String(netErr)}`,
         };
       }
 
-      if (!response.ok) {
-        const errText = await response.text();
-        return {
-          success: false,
-          output: "",
-          toolCallsCount,
-          turnsUsed: turnCount,
-          error: `HTTP ${response.status}: ${errText}`,
-        };
-      }
-
-      const data = await response.json();
-      const assistantMsg = data.choices?.[0]?.message;
-
+      const assistantMsg = chatResponse.choices?.[0]?.message;
       if (!assistantMsg) {
         return {
           success: false,
           output: "",
           toolCallsCount,
           turnsUsed: turnCount,
-          error: "Invalid assistant response from model gateway",
+          error: "Invalid assistant response from provider",
         };
       }
 
-      messages.push(assistantMsg);
+      messages.push({
+        role: assistantMsg.role || "assistant",
+        content: assistantMsg.content || "",
+        ...(assistantMsg.tool_calls ? { tool_calls: assistantMsg.tool_calls } : {}),
+      });
       if (onEvent) onEvent("ASSISTANT_MESSAGE", assistantMsg);
 
       const toolCalls = assistantMsg.tool_calls;

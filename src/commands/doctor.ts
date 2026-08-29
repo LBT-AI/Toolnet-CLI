@@ -44,8 +44,12 @@ export const doctorCommand: Command = {
 
     let gwStatus = "unknown";
     try {
-      const isOnline = await ctx.gateway.checkConnection();
-      gwStatus = isOnline ? "Connected (Online)" : "Offline / Unreachable";
+      if (ctx.gateway) {
+        const isOnline = await ctx.gateway.checkConnection();
+        gwStatus = isOnline ? "Connected (Online)" : "Offline / Unreachable";
+      } else {
+        gwStatus = "No gateway configured";
+      }
     } catch {
       gwStatus = "Offline / Unreachable";
     }
@@ -71,7 +75,7 @@ export const doctorCommand: Command = {
       `• Sandbox Mode : ${sandbox.toUpperCase()}`,
       `• Bypass 2.0   : ${bypassEngine.isEnabled() ? `ACTIVE (${bypassEngine.getLevel().toUpperCase()})` : "OFF"} (Auto-Escalate: ${bypassEngine.getConfig().autoEscalate ? "ON" : "OFF"})`,
       `• Active Model : ${ctx.currentModel()}`,
-      `• Gateway URL  : ${ctx.gateway.getBaseUrl()} [${gwStatus}]`,
+      `• Gateway URL  : ${ctx.gateway?.getBaseUrl() ?? "(none)"} [${gwStatus}]`,
       ``,
       `Stored API Keys:`,
       `• ToolNet / Default   : ${hasToolnetKey ? "Set ✓" : "Not Set"}`,

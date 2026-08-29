@@ -3,6 +3,10 @@ import { loadLocalMcpConfig, addLocalMcpServer, removeLocalMcpServer } from "../
 
 async function showMcpStatus(ctx: CommandContext) {
   const { gateway, addMessage } = ctx;
+  if (!gateway) {
+    addMessage("assistant", "MCP status requires a ToolNet gateway connection. Use /provider to configure.");
+    return;
+  }
   addMessage("assistant", "Fetching MCP status...");
   const res = await gateway.getCoworkSettings();
   if (!res.success) {
@@ -65,6 +69,10 @@ async function showMcpStatus(ctx: CommandContext) {
 
 async function browseRegistry(ctx: CommandContext) {
   const { gateway, addMessage } = ctx;
+  if (!gateway) {
+    addMessage("assistant", "MCP registry requires a ToolNet gateway connection. Use /provider to configure.");
+    return;
+  }
   addMessage("assistant", "Fetching MCP registry...");
   const res = await gateway.getMcpRegistry();
   if (!res.success) {
@@ -95,6 +103,10 @@ async function browseRegistry(ctx: CommandContext) {
 
 async function probeTools(args: string[], ctx: CommandContext) {
   const { gateway, addMessage } = ctx;
+  if (!gateway) {
+    addMessage("assistant", "MCP tools probing requires a ToolNet gateway connection. Use /provider to configure.");
+    return;
+  }
   if (args.length < 1) {
     addMessage("assistant", "Usage: /mcp tools <url>\ne.g. /mcp tools https://mcp.example.com/mcp");
     return;

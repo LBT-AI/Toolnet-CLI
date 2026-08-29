@@ -36,6 +36,7 @@ export interface DoctorReport {
   configPath: string;
   sessionsDir: string;
   gatewayUrl: string | null;
+  provider: string | null;
   defaultModel: string;
   sandboxMode: string;
   budgetUsd: number | null;
@@ -52,11 +53,13 @@ export function runDoctor(): DoctorReport {
 
   // Load config
   let gatewayUrl: string | null = null;
+  let provider: string | null = null;
   let defaultModel = "unknown";
   let sandboxMode = "unknown";
   try {
     const { config } = loadAppConfig();
-    gatewayUrl = config.gatewayUrl;
+    gatewayUrl = config.gatewayUrl ?? config.baseUrl;
+    provider = config.provider;
     defaultModel = config.defaultModel;
     sandboxMode = config.sandboxMode;
   } catch {
@@ -91,6 +94,7 @@ export function runDoctor(): DoctorReport {
     configPath,
     sessionsDir,
     gatewayUrl,
+    provider,
     defaultModel,
     sandboxMode,
     budgetUsd: budget.budgetUsd,
@@ -108,7 +112,8 @@ export function formatDoctorReport(report: DoctorReport): string {
   lines.push(`Install:       ${report.installMethod}`);
   lines.push(`Config:        ${report.configPath}`);
   lines.push(`Sessions:      ${report.sessionsDir}`);
-  lines.push(`Gateway:       ${report.gatewayUrl ?? "(direct mode)"}`);
+  lines.push(`Gateway:       ${report.gatewayUrl ?? "(none)"}`);
+  lines.push(`Provider:      ${report.provider ?? "(none configured)"}`);
   lines.push(`Model:         ${report.defaultModel}`);
   lines.push(`Sandbox:       ${report.sandboxMode}`);
   lines.push(`Budget:        ${report.budgetUsd !== null ? `$${report.budgetUsd}` : "(none)"}`);

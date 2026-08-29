@@ -19,7 +19,7 @@ describe("Production CLI Features (/doctor, /update, commands)", () => {
     const mockCtx: any = {
       currentModel: () => "openai/gpt-4o",
       gateway: {
-        getBaseUrl: () => "http://127.0.0.1:20127",
+        getBaseUrl: () => "https://api.example.com/v1",
         checkConnection: async () => false,
       },
       addMessage: (_role: string, content: string) => {

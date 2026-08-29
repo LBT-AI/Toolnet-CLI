@@ -3,7 +3,7 @@
  * Target File: src/lib/harness/agentHarness.ts
  */
 
-import { detectGatewayUrl, GatewayClient } from "../gateway";
+import { getActiveProvider, getActiveBaseUrl, OpenAICompatibleProvider, type Provider } from "../../providers";
 import { agentTools, getMergedAgentTools, executeTool } from "../agentTools";
 import { workspaceRoot, currentCwd, initWorkspace } from "../codingAgent";
 import { contextEngine, type ContextMessage, sessionMemory } from "../context";
@@ -44,7 +44,7 @@ export class AgentHarness {
       sessionId: config.sessionId || `session-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       model: config.model || "openai/gpt-4o",
       sandboxMode: config.sandboxMode || getSandboxMode(),
-      gatewayUrl: config.gatewayUrl || detectGatewayUrl(),
+      gatewayUrl: config.gatewayUrl || "",
       maxTurns: config.maxTurns || 10,
       timeoutMs: config.timeoutMs || 120000,
       bypassSecurity: config.bypassSecurity || false,
@@ -159,23 +159,39 @@ export class AgentHarness {
   ): Promise<HarnessResult> {
     const startTime = Date.now();
     const model = options.model || this.config.model || "openai/gpt-4o";
-    const gatewayUrl = options.gatewayUrl || this.config.gatewayUrl || detectGatewayUrl();
     const maxTurns = options.maxTurns || this.config.maxTurns || 10;
     const timeoutMs = options.timeoutMs || this.config.timeoutMs || 120000;
     const sessionId = options.sessionId || this.config.sessionId || "session";
+
+    const fallbackUrl = options.gatewayUrl || this.config.gatewayUrl || getActiveBaseUrl() || "http://localhost:8080";
+    const provider = getActiveProvider() ?? new OpenAICompatibleProvider({ id: "default", name: "Default", baseUrl: fallbackUrl });
+
+    if (!provider) {
+      const errorMsg = "No active AI provider configured.";
+      this.emitEvent("agent:error", mode, { error: errorMsg });
+      return {
+        success: false,
+        output: "",
+        messages: initialMessages,
+        toolCallsCount: 0,
+        turnsUsed: 0,
+        tokensUsed: 0,
+        durationMs: Date.now() - startTime,
+        mode,
+        sessionId,
+        error: errorMsg,
+      };
+    }
 
     const messages: ContextMessage[] = [...initialMessages];
     let toolCallsCount = 0;
     let turnsUsed = 0;
     let accumulatedTokens = 0;
 
-    const providerStr = model.includes("/") ? model.split("/")[0] : model;
-    let localKey = getCliKey(providerStr) || getCliKey("toolnet") || getCliKey("gateway") || getCliKey("default");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (localKey) headers["Authorization"] = `Bearer ${localKey}`;
+    const extraHeaders: Record<string, string> = {};
     if (bypassEngine.isEnabled()) {
-      headers["x-bypass-toolnet"] = "true";
-      headers["x-bypass-level"] = bypassEngine.getLevel();
+      extraHeaders["x-bypass-toolnet"] = "true";
+      extraHeaders["x-bypass-level"] = bypassEngine.getLevel();
     }
 
     this.emitEvent("agent:start", mode, { model, totalMessages: messages.length });
@@ -211,20 +227,14 @@ export class AgentHarness {
         });
       }
 
-      const payload = {
-        model,
-        messages: prep.messages,
-        tools: options.toolsOverride || getMergedAgentTools(),
-        tool_choice: "auto",
-        stream: options.stream ?? false,
-      };
-
-      let response: Response;
+      let chatRes;
       try {
-        response = await fetch(`${gatewayUrl}/v1/chat/completions`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(payload),
+        chatRes = await provider.chat({
+          model,
+          messages: prep.messages as any,
+          tools: options.toolsOverride || getMergedAgentTools(),
+          tool_choice: "auto",
+          headers: extraHeaders,
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (netErr: any) {
@@ -244,43 +254,7 @@ export class AgentHarness {
         };
       }
 
-      if (!response.ok) {
-        const errText = await response.text();
-        const errorMsg = `Gateway HTTP ${response.status}: ${errText}`;
-        this.emitEvent("agent:error", mode, { error: errorMsg });
-        return {
-          success: false,
-          output: "",
-          messages,
-          toolCallsCount,
-          turnsUsed,
-          tokensUsed: accumulatedTokens,
-          durationMs: Date.now() - startTime,
-          mode,
-          sessionId,
-          error: errorMsg,
-        };
-      }
-
-      let data: any;
-      try {
-        data = await response.json();
-      } catch {
-        return {
-          success: false,
-          output: "",
-          messages,
-          toolCallsCount,
-          turnsUsed,
-          tokensUsed: accumulatedTokens,
-          durationMs: Date.now() - startTime,
-          mode,
-          sessionId,
-          error: "Failed to parse JSON response from Gateway",
-        };
-      }
-
-      const choice = data.choices?.[0];
+      const choice = chatRes.choices?.[0];
       const assistantMsg = choice?.message;
       if (!assistantMsg) {
         return {
@@ -293,11 +267,15 @@ export class AgentHarness {
           durationMs: Date.now() - startTime,
           mode,
           sessionId,
-          error: "Empty assistant response returned from model gateway",
+          error: "Empty assistant response returned from model provider",
         };
       }
 
-      messages.push(assistantMsg);
+      messages.push({
+        role: assistantMsg.role || "assistant",
+        content: assistantMsg.content || "",
+        ...(assistantMsg.tool_calls ? { tool_calls: assistantMsg.tool_calls } : {}),
+      });
 
       const toolCalls = assistantMsg.tool_calls;
       if (!toolCalls || toolCalls.length === 0) {

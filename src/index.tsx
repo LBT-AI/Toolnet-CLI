@@ -47,6 +47,11 @@ OPTIONS:
 SUBCOMMANDS:
   pr review <url|num>   Review a GitHub or GitLab Pull Request
   issue <url|num>       Inspect and solve a GitHub or GitLab Issue
+  provider list         List configured LLM providers
+  provider add <id>     Add a new provider (--base-url <url>, etc.)
+  provider use <id>     Set the active provider
+  provider current      Show active provider configuration
+  provider remove <id>  Remove a configured provider
   plugin list           List installed plugins
   plugin install <pkg>  Install a plugin from directory or package
   plugin remove <name>  Uninstall a plugin
@@ -68,15 +73,37 @@ SUBCOMMANDS:
   version [--json]      Version and build metadata
 
 INTERACTIVE COMMANDS:
-  /help    /bypass    /status    /model    /session
-  /sandbox /doctor    /update    /compact  /attach
-  /config  /exit
+  /help     /provider /bypass   /status   /model
+  /session  /sandbox  /doctor   /update   /compact
+  /attach   /config   /exit
 `);
   process.exit(0);
 }
 
 // ---- CLI subcommand dispatch ----
 const subCmd = args[0] ?? "";
+
+// ---- Provider subcommand ----
+if (subCmd === "provider" || subCmd === "providers") {
+  const { providerCommand } = await import("./commands/provider");
+  const subArgs = args.slice(1);
+  const outLines: string[] = [];
+  const ctx = {
+    gateway: null,
+    addMessage: (_role: string, content: string) => {
+      outLines.push(content);
+    },
+    setModel: () => {},
+    setStatusMsg: () => {},
+    exit: () => {},
+    currentModel: () => "",
+  };
+  await providerCommand.handler(subArgs, ctx as any);
+  if (outLines.length > 0) {
+    console.log(outLines.join("\n"));
+  }
+  process.exit(0);
+}
 
 // ---- PR Review subcommand ----
 if (subCmd === "pr") {

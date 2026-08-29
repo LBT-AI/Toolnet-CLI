@@ -26,7 +26,7 @@ export function handleKey(data: Buffer, cb: KeyboardCallbacks) {
       cb.renderAll();
     } else if (hex === "0d" || hex === "0a") { // Enter
       const sel = store.filteredModels[store.modelPickerIdx];
-      if (sel && !sel.includes("No models") && !sel.includes("Gateway offline") && !sel.includes("Error") && !sel.includes("No matches")) {
+      if (sel && !sel.includes("No models") && !sel.includes("Provider offline") && !sel.includes("Gateway offline") && !sel.includes("Error") && !sel.includes("No matches") && !sel.includes("No provider")) {
         store.currentModel = sel;
         cb.setStatus("Model: " + store.currentModel);
       }

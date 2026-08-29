@@ -2,6 +2,8 @@ import { tuiState } from "../state";
 import { getAllCommands } from "../../commands";
 import { providerPicker } from "../../components/ProviderPicker";
 import { MultilineInputBuffer } from "./multilineInput";
+import { getKeyManagerProviders } from "../renderers/keyManagerRenderer";
+import { saveCliKey, deleteCliKey } from "../../lib/keys";
 
 const inputBufferManager = new MultilineInputBuffer();
 
@@ -84,7 +86,7 @@ export function handleKey(
       renderAll();
     } else if (hex === "0d" || hex === "0a") { // Enter
       const sel = tuiState.filteredModels[tuiState.modelPickerIdx];
-      if (sel && !sel.includes("No models") && !sel.includes("Gateway offline") && !sel.includes("Error") && !sel.includes("No matches")) {
+      if (sel && !sel.includes("No models") && !sel.includes("Provider offline") && !sel.includes("Gateway offline") && !sel.includes("Error") && !sel.includes("No matches") && !sel.includes("No provider")) {
         tuiState.currentModel = sel;
         tuiState.setStatus("Model: " + tuiState.currentModel);
       }
@@ -111,6 +113,105 @@ export function handleKey(
       tuiState.modelPickerIdx = 0;
       renderAll();
     }
+    return;
+  }
+
+  // 2.5 Key Manager Modal
+  if (tuiState.showKeyManager) {
+    // A. Confirm Delete Mode
+    if (tuiState.keyManagerConfirmDelete) {
+      if (hex === "79" || hex === "59") { // 'y' / 'Y'
+        const prov = tuiState.keyManagerConfirmDelete;
+        deleteCliKey(prov);
+        tuiState.showToast("Deleted API key for " + prov);
+        tuiState.keyManagerConfirmDelete = null;
+        renderAll();
+        return;
+      }
+      if (hex === "6e" || hex === "4e" || hex === "1b") { // 'n' / 'N' / Esc
+        tuiState.keyManagerConfirmDelete = null;
+        renderAll();
+        return;
+      }
+      return;
+    }
+
+    // B. Inputting API Key Mode
+    if (tuiState.keyManagerInput) {
+      if (hex === "1b") { // Esc -> Cancel input
+        tuiState.keyManagerInput = null;
+        tuiState.setStatus("Enter/A: Set Key │ D: Delete │ ↑↓: Move │ Esc: Close");
+        renderAll();
+        return;
+      }
+      if (hex === "0d" || hex === "0a") { // Enter -> Save key
+        const { provider, buffer } = tuiState.keyManagerInput;
+        if (buffer.trim()) {
+          saveCliKey(provider, buffer.trim());
+          tuiState.showToast("Saved API key for " + provider);
+        }
+        tuiState.keyManagerInput = null;
+        tuiState.setStatus("Enter/A: Set Key │ D: Delete │ ↑↓: Move │ Esc: Close");
+        renderAll();
+        return;
+      }
+      if (hex === "7f" || hex === "08") { // Backspace
+        if (tuiState.keyManagerInput.buffer.length > 0) {
+          tuiState.keyManagerInput.buffer = tuiState.keyManagerInput.buffer.slice(0, -1);
+          renderAll();
+        }
+        return;
+      }
+      if (s.length >= 1 && !s.startsWith("\x1b")) {
+        tuiState.keyManagerInput.buffer += s;
+        renderAll();
+        return;
+      }
+      return;
+    }
+
+    // C. Normal Key Manager List Navigation
+    if (hex === "1b") { // Esc -> Close Key Manager
+      tuiState.closeKeyManager();
+      renderAll();
+      return;
+    }
+
+    const providers = getKeyManagerProviders();
+
+    if (hex === "1b5b41" || hex === "1b4f41" || hex === "0b") { // Up
+      tuiState.keyManagerIdx = tuiState.keyManagerIdx <= 0 ? Math.max(0, providers.length - 1) : tuiState.keyManagerIdx - 1;
+      renderAll();
+      return;
+    }
+
+    if (hex === "1b5b42" || hex === "1b4f42" || hex === "0e") { // Down
+      tuiState.keyManagerIdx = tuiState.keyManagerIdx >= providers.length - 1 ? 0 : tuiState.keyManagerIdx + 1;
+      renderAll();
+      return;
+    }
+
+    if (hex === "0d" || hex === "0a" || hex === "61" || hex === "41") { // Enter or 'a' / 'A'
+      const item = providers[tuiState.keyManagerIdx];
+      if (item) {
+        tuiState.keyManagerInput = { provider: item.id, buffer: "" };
+        tuiState.setStatus("Enter API key for " + item.name + " │ Enter: Save │ Esc: Cancel");
+        renderAll();
+      }
+      return;
+    }
+
+    if (hex === "64" || hex === "44") { // 'd' / 'D'
+      const item = providers[tuiState.keyManagerIdx];
+      if (item && item.isConfigured) {
+        tuiState.keyManagerConfirmDelete = item.id;
+        renderAll();
+      } else if (item) {
+        tuiState.showToast("No key configured for " + item.name);
+      }
+      return;
+    }
+
     return;
   }
 
