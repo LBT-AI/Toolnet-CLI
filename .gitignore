@@ -4,7 +4,9 @@ dist/
 *.tgz
 *.log
 *.db
+*.db.json
 *.sqlite
+*.sqlite.json
 .env
 .DS_Store
 .toolnet/
