@@ -48,6 +48,11 @@ jobs:
       - name: Node smoke test
         run: node dist/node/index.js --help
 
+      - name: Node persistence smoke test
+        run: |
+          bun build scripts/node-persistence-smoke.ts --target=node --outfile=/tmp/toolnet-node-persistence-smoke.mjs
+          node /tmp/toolnet-node-persistence-smoke.mjs
+
       - name: Launcher smoke test
         run: node bin/toolnet.js --version
 
