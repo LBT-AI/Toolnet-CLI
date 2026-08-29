@@ -158,3 +158,16 @@ export class TuiState {
 }
 
 export const tuiState = new TuiState();
+
+// Subscribe to provider switch events to keep tuiState live
+import { onProviderSwitch } from "../commands/provider";
+onProviderSwitch((_id, config) => {
+  if (!config) return;
+  tuiState.providerName = config.name || config.id;
+  if (config.defaultModel) {
+    tuiState.currentModel = config.defaultModel;
+  }
+  if (config.baseUrl) {
+    tuiState.gatewayUrl = config.baseUrl;
+  }
+});
