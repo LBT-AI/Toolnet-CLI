@@ -25,7 +25,7 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -45,7 +45,24 @@ jobs:
       - name: Bun smoke test
         run: bun dist/index.js --help
 
-      - name: Node smoke test
+      - name: Node 22 smoke test
+        run: node dist/node/index.js --help
+
+      - name: Build Node persistence smoke bundle
+        run: bun build scripts/node-persistence-smoke.ts --target=node --outfile=/tmp/toolnet-node-persistence-smoke.mjs
+
+      - name: Node 22 native SQLite persistence smoke test
+        run: node /tmp/toolnet-node-persistence-smoke.mjs
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Node 20 fallback persistence smoke test
+        run: node /tmp/toolnet-node-persistence-smoke.mjs
+
+      - name: Node 20 CLI smoke test
         run: node dist/node/index.js --help
 
       - name: Launcher smoke test

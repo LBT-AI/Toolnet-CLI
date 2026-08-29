@@ -2,6 +2,23 @@
 All notable changes to ToolNet CLI will be documented here.
 The project follows Semantic Versioning.
 
+## [Unreleased]
+### Added
+- Production distribution pipeline for standalone Linux, macOS, and Windows binaries, including release checksums, installer scripts, Homebrew/Scoop manifests, and release smoke tests.
+- First-run setup wizard, canonical `~/.toolnetcli/config.json`, shell completion, update checks, `version --json`, usage tracking, budget controls, diagnostics, and structured `text|markdown|json|jsonl` output.
+- Tool planner improvements including read-only caching, duplicate-call elimination, parallel read dispatch, output compression, and workspace symbol indexing.
+- Modular TUI improvements, multimodal image input, SCM integrations, plugin capability gating, tamper-resistant audit logging, multi-project workspaces, crash recovery, and opt-in telemetry.
+- Node runtime persistence smoke coverage in CI for both Node 22 native SQLite and the minimum supported Node 20 fallback path.
+
+### Changed
+- Agent execution paths now share the unified cache/compression pipeline so TUI, runtime, sub-agent, and scheduler calls receive the same behavior.
+- Teamwork persistence now selects `bun:sqlite` on Bun, built-in `node:sqlite` on supported Node releases, and a durable JSON-backed adapter when native SQLite is unavailable.
+
+### Fixed
+- Fixed Teamwork checkpoint and context-cache persistence silently becoming a no-op on Node runtimes.
+- Fixed cross-instance fallback database writes so checkpoint and context-cache tables do not overwrite each other.
+- Unsupported fallback SQL now fails explicitly instead of reporting success while discarding data.
+
 ## [1.0.5] - 2026-08-17
 ### Added
 - **Bypass & Jailbreak Engine 2.0 (`src/lib/bypass/`)**:
@@ -67,6 +84,7 @@ The project follows Semantic Versioning.
 - ToolNet CLI separated from the ToolNet API repository
 - Repository metadata now points to LBT-AI/Toolnet-CLI
 
+[Unreleased]: https://github.com/LBT-AI/Toolnet-CLI/compare/v1.0.5...HEAD
 [1.0.5]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.5
 [1.0.4]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.4
 [1.0.3]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.3
