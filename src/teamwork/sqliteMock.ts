@@ -28,7 +28,7 @@ type NodeDatabaseSync = {
   prepare(query: string): NativeStatement;
 };
 
-type NodeDatabaseSyncConstructor = new (dbPath: string, options?: unknown) => NodeDatabaseSync;
+type NodeDatabaseSyncConstructor = new (dbPath: string) => NodeDatabaseSync;
 
 type JsonRow = Record<string, unknown>;
 
@@ -68,8 +68,8 @@ function loadNodeDatabase(): DatabaseConstructor | undefined {
     return class NodeSqliteDatabase implements DatabaseLike {
       private readonly db: NodeDatabaseSync;
 
-      constructor(dbPath: string, options?: unknown) {
-        this.db = new DatabaseSync(dbPath, options);
+      constructor(dbPath: string) {
+        this.db = new DatabaseSync(dbPath);
       }
 
       exec(query: string): unknown {
@@ -125,14 +125,23 @@ function readParam(token: string, params: DatabaseParams): unknown {
   }
 
   if (trimmed.toUpperCase() === "NULL") return null;
-  if (trimmed === "true" || trimmed.toUpperCase() === "TRUE") return true;
-  if (trimmed === "false" || trimmed.toUpperCase() === "FALSE") return false;
+  if (trimmed.toUpperCase() === "TRUE") return true;
+  if (trimmed.toUpperCase() === "FALSE") return false;
   if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) return Number(trimmed);
 
   const stringMatch = trimmed.match(/^'(.*)'$/s);
   if (stringMatch) return stringMatch[1].replace(/''/g, "'");
 
   throw new Error(`Unsupported JSON database value token: ${trimmed}`);
+}
+
+function compareDatabaseValues(left: unknown, right: unknown): number {
+  if (typeof left === "number" && typeof right === "number") return left - right;
+
+  const leftText = String(left);
+  const rightText = String(right);
+  if (leftText === rightText) return 0;
+  return leftText < rightText ? -1 : 1;
 }
 
 /**
@@ -269,7 +278,7 @@ export class JsonFileDatabase implements DatabaseLike {
         if (a === b) return 0;
         if (a === undefined || a === null) return -1 * direction;
         if (b === undefined || b === null) return 1 * direction;
-        return (a < b ? -1 : 1) * direction;
+        return compareDatabaseValues(a, b) * direction;
       });
     }
 
