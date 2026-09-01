@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { MessageQueue, messageQueue } from "../../lib/messageQueue";
 import { tuiState } from "../../tui/state";
-import { handleKey, handlePaste } from "../../tui/input/inputHandler";
+import { handleKey, handlePaste, resetInputState } from "../../tui/input/inputHandler";
 import { queueCommand } from "../../commands/queue";
 import { saveSession, loadSession } from "../../lib/sessionPersistence";
 import { renderQueuedMessagesPreview } from "../../tui/renderers/queuePreviewRenderer";
@@ -29,6 +29,7 @@ describe("Queued Messages & Queue Manager Regression Suite", () => {
 
     messageQueue.clear();
     messageQueue.setIsProcessing(false);
+    resetInputState();
 
     tuiState.messages = [];
     tuiState.isStreaming = false;

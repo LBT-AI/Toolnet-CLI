@@ -21,6 +21,7 @@ function tmpDir(): string {
 }
 
 describe("CLI UX Enhancements Regression Suite", () => {
+  const originalCwd = process.cwd();
   let testCwd: string;
 
   beforeEach(() => {
@@ -33,6 +34,9 @@ describe("CLI UX Enhancements Regression Suite", () => {
   });
 
   afterEach(() => {
+    try {
+      process.chdir(originalCwd);
+    } catch {}
     try {
       fs.rmSync(testCwd, { recursive: true, force: true });
     } catch {}

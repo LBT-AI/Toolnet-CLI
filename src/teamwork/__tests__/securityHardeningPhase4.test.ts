@@ -21,6 +21,7 @@ import { securityEngine, ToolGateway } from "../../lib/security";
 import { auditLogger } from "../../lib/security/auditLogger";
 
 describe("Security Hardening Phase 4 — Runtime Isolation & Dynamic Execution", () => {
+  const originalCwd = process.cwd();
   const tmpDir = path.join(os.tmpdir(), `toolnet-phase4-${Date.now()}`);
   const outsideDir = path.join(os.tmpdir(), `toolnet-outside-phase4-${Date.now()}`);
 
@@ -36,6 +37,10 @@ describe("Security Hardening Phase 4 — Runtime Isolation & Dynamic Execution",
       fs.rmSync(tmpDir, { recursive: true, force: true });
       fs.rmSync(outsideDir, { recursive: true, force: true });
     } catch {}
+    try {
+      process.chdir(originalCwd);
+    } catch {}
+    setWorkspaceRoot(originalCwd);
   });
 
   // ── 1. OS SANDBOX RUNTIME ─────────────────────────────────────────────────

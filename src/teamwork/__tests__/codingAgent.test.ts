@@ -1,4 +1,4 @@
-import { test, expect, describe, beforeEach } from "bun:test";
+import { test, expect, describe, beforeEach, afterAll, afterEach } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -10,9 +10,10 @@ import {
 } from "../../lib/codingAgent";
 
 describe("codingAgent Cross-Workspace Filesystem & Workspace Tracking", () => {
-  const testRoot = path.resolve(process.cwd(), "test_sandbox");
+  const originalCwd = process.cwd();
+  const testRoot = path.resolve(originalCwd, "test_sandbox");
   const extDir = path.resolve(testRoot, "external_project");
-  
+
   beforeEach(() => {
     // Reset test environment
     if (fs.existsSync(testRoot)) {
@@ -22,6 +23,19 @@ describe("codingAgent Cross-Workspace Filesystem & Workspace Tracking", () => {
     fs.mkdirSync(extDir, { recursive: true });
     fs.writeFileSync(path.join(extDir, "hello.txt"), "external hello", "utf8");
     setWorkspaceRoot(testRoot);
+  });
+
+  afterEach(() => {
+    try {
+      process.chdir(originalCwd);
+    } catch {}
+    setWorkspaceRoot(originalCwd);
+  });
+
+  afterAll(() => {
+    try {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+    } catch {}
   });
 
   test("toolBash tracks shell CWD changes while starting in workspaceRoot", async () => {
