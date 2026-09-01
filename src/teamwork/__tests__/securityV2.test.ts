@@ -144,12 +144,12 @@ describe("Security & Permissions 2.0 Engine", () => {
       setSandboxMode("ask");
 
       const envCheck = securityEngine.evaluate("read_file", { path: ".env" }, "ask", cwd, cwd);
-      expect(envCheck.allowed).toBe(true);
       expect(envCheck.needsApproval).toBe(true);
+      expect(envCheck.decision).toBe("ASK");
 
       const dangerGit = securityEngine.evaluate("shell", { command: "git reset --hard" }, "ask", cwd, cwd);
-      expect(dangerGit.allowed).toBe(true);
       expect(dangerGit.needsApproval).toBe(true);
+      expect(dangerGit.decision).toBe("ASK");
 
       const safeRead = securityEngine.evaluate("read_file", { path: "package.json" }, "ask", cwd, cwd);
       expect(safeRead.allowed).toBe(true);

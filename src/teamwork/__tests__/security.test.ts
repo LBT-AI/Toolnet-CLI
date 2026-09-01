@@ -52,8 +52,8 @@ describe("Security & Permissions", () => {
     // Mode: ask (prompt user for outside access / dangerous commands)
     setSandboxMode("ask");
     const askRead = evaluatePermission("read_file", { path: "/etc/passwd" }, "ask", cwd, cwd);
-    expect(askRead.allowed).toBe(true);
     expect(askRead.needsApproval).toBe(true);
+    expect(askRead.decision).toBe("ASK");
 
     const askInside = evaluatePermission("read_file", { path: "package.json" }, "ask", cwd, cwd);
     expect(askInside.allowed).toBe(true);

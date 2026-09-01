@@ -1,9 +1,14 @@
 export * from "./types";
 export * from "./secretGuard";
 export * from "./outputRedactor";
+export * from "./shellParser";
+export * from "./workspacePolicy";
 export * from "./commandClassifier";
+export * from "./sandboxExecutor";
+export * from "./permissionGate";
 export * from "./policyEngine";
 export * from "./sessionTrust";
 export * from "./auditLogger";
 export * from "./securityEngine";
-
+export * from "./permissionContext";
+export * from "./toolGateway";

@@ -11,11 +11,13 @@ import {
   executeMcpTool,
 } from "../../lib/mcpRunner";
 import { getMergedAgentTools, executeTool } from "../../lib/agentTools";
+import { setSandboxMode } from "../../lib/permissions";
 
 describe("Challenger 2 Empirical Tests - R2 & R3", () => {
   let tempDir: string;
 
   beforeEach(() => {
+    setSandboxMode("workspace");
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "challenger2-test-"));
     const mockMcpPath = path.resolve(__dirname, "../../mock-mcp.ts");
 

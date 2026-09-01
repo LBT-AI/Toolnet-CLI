@@ -24,7 +24,7 @@ export const modelCommand: Command = {
         "  /model                         List available models / Open picker\n" +
         "  /model <model-id>              Select a model (e.g., /model cc/claude-sonnet-4-5)\n" +
         "  /model --help                  Show this help\n\n" +
-        "Current: " + currentModel()
+        "Current: " + (currentModel() || "Not selected")
       );
       return;
     }
@@ -49,7 +49,7 @@ export const modelCommand: Command = {
         const lines: string[] = [];
         lines.push(`Available Models (${models.length} total)`);
         lines.push("───".repeat(18));
-        lines.push(`Current: ${currentModel()}`);
+        lines.push(`Current: ${currentModel() || "Not selected"}`);
         lines.push("");
 
         const grouped: Record<string, string[]> = {};
@@ -99,7 +99,7 @@ export const modelCommand: Command = {
       const lines: string[] = [];
       lines.push(`Available Models (${models.length} total)`);
       lines.push("───".repeat(18));
-      lines.push(`Current: ${currentModel()}`);
+      lines.push(`Current: ${currentModel() || "Not selected"}`);
       lines.push("");
 
       if (combos.length > 0) {

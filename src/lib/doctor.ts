@@ -85,6 +85,7 @@ export function runDoctor(): DoctorReport {
   checks.push(checkVisionCapability(defaultModel));
   checks.push(checkScmAuth());
   checks.push(checkRecoveryState());
+  checks.push(checkSandboxIsolation());
 
   return {
     version: getVersion(),
@@ -280,5 +281,15 @@ function checkRecoveryState(): DiagnosticResult {
     name: "crash recovery",
     status: "ok",
     value: "clean (no crashed sessions)",
+  };
+}
+
+function checkSandboxIsolation(): DiagnosticResult {
+  const { detectSandboxCapability } = require("./security/sandboxExecutor");
+  const cap = detectSandboxCapability();
+  return {
+    name: "OS sandbox isolation",
+    status: cap.available ? "ok" : "warn",
+    value: cap.label + " (" + cap.details + ")",
   };
 }

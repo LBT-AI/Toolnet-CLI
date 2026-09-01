@@ -23,8 +23,8 @@ export function getSandboxMode(): SandboxMode {
       return currentSandboxMode;
     }
   } catch {}
-  currentSandboxMode = "ask";
-  return "ask";
+  currentSandboxMode = "workspace";
+  return "workspace";
 }
 
 export function setSandboxMode(mode: SandboxMode): void {

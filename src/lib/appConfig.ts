@@ -53,7 +53,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   provider: null,
   baseUrl: null,
   defaultModel: "",
-  sandboxMode: "ask",
+  sandboxMode: "workspace",
   theme: "dark",
   updateCheckIntervalHours: 24,
   updateCheckEnabled: true,

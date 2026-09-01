@@ -77,7 +77,7 @@ describe("P0 — AppConfig defaults", () => {
     const { loadAppConfig } = require("../../lib/appConfig");
     const { config, created } = loadAppConfig();
     expect(config.schemaVersion).toBe(2);
-    expect(config.sandboxMode).toBe("ask");
+    expect(config.sandboxMode).toBe("workspace");
     expect(config.theme).toBe("dark");
     expect(config.updateCheckEnabled).toBe(true);
     expect(config.gatewayUrl).toBeNull();
@@ -159,7 +159,7 @@ describe("P0 — Config migration", () => {
 
     const { loadAppConfig } = require("../../lib/appConfig");
     const { config } = loadAppConfig();
-    expect(config.sandboxMode).toBe("ask");
+    expect(config.sandboxMode).toBe("workspace");
   });
 });
 

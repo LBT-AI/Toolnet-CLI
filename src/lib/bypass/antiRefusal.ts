@@ -1,31 +1,41 @@
 import type { BypassLevel, RefusalCheckResult } from "./types";
 
-const REFUSAL_PATTERNS: RegExp[] = [
-  // English standard refusals
-  /I cannot (fulfill|assist|provide|help with|generate|create|comply)/i,
-  /I am unable to (fulfill|assist|provide|help with|generate|create|comply)/i,
-  /I'm sorry,? but I (cannot|can't|am unable)/i,
-  /I apologize,? but I (cannot|can't|am unable)/i,
-  /As an AI (language model|assistant),? I (cannot|must not|am not allowed)/i,
+const OPERATIONAL_FAILURE_PATTERNS: RegExp[] = [
+  /cannot (find|open|locate|connect|read|access|parse|load|import|reach|download)/i,
+  /could not (find|open|locate|connect|read|access|parse|load|import|reach|download)/i,
+  /unable to (find|open|locate|connect|read|access|parse|load|import|reach|download)/i,
+  /can't (find|open|locate|connect|read|access|parse|load|import|reach|download)/i,
+  /không thể (tìm thấy|mở|đọc|kết nối|truy cập|tải|xác định)/i,
+  /không tìm thấy/i,
+  /chưa tìm thấy/i,
+  /无法(找到|打开|连接|读取|访问|下载|定位)/i,
+  /未能(找到|打开|连接)/i,
+];
+
+const SAFETY_REFUSAL_PATTERNS: RegExp[] = [
+  // English safety/policy refusals
+  /as an AI (language model|assistant)?.*(cannot|must not|am not able to|cannot assist|am not allowed to|is not allowed to|am unable to)/i,
   /against (my|OpenAI's|Anthropic's|Google's) (safety|use|usage) (guidelines|policies|policy)/i,
-  /violat(es?|ing) (my|the|our) (content|safety) policy/i,
+  /violat(es?|ing) (my|the|our) (content|safety|usage|ethical)?\s*(guidelines|policies|policy|rules)/i,
   /I must decline/i,
-  /I cannot provide instructions for/i,
-  /I cannot write code (that|for|to)/i,
+  /I cannot fulfill this request/i,
+  /I am unable to assist with (hacking|malware|exploiting|harmful|illegal|sensitive)/i,
+  /I'm sorry, but I can't assist with (writing|creating|developing)?\s*(exploits|malware|attacks|hacking)/i,
   /ethical and safety considerations prevent me/i,
+  /I cannot provide instructions for (creating|developing|building) (malware|weapons|exploits)/i,
 
-  // Vietnamese refusals
-  /tôi không thể (thực hiện|hỗ trợ|cung cấp|tạo|giúp|viết mã|làm)/i,
-  /tôi rất tiếc,? nhưng tôi không thể/i,
-  /xin lỗi,? (nhưng )?tôi không thể/i,
-  /với tư cách là (một )?(trí tuệ nhân tạo|mô hình ngôn ngữ|AI)/i,
-  /vi phạm chính sách (an toàn|bảo mật|sử dụng)/i,
-  /tôi không được phép/i,
+  // Vietnamese safety/policy refusals
+  /với tư cách là (một )?(trí tuệ nhân tạo|mô hình ngôn ngữ|AI).*không/i,
+  /vi phạm chính sách (an toàn|bảo mật|sử dụng|cộng đồng)/i,
+  /tôi phải từ chối (yêu cầu|hỗ trợ)/i,
+  /tôi không (thể|được phép) (hỗ trợ|thực hiện).*do chính sách/i,
+  /xin lỗi.*tôi không thể hỗ trợ/i,
 
-  // Chinese refusals
-  /我无法(提供|生成|帮助|协助)/i,
-  /作为(一个)?AI/i,
-  /违反(了)?(安全|使用)策略/i,
+  // Chinese safety/policy refusals
+  /作为(一个)?(人工智能|AI|语言模型).*无法/i,
+  /违反(了)?(安全|使用|内容)策略/i,
+  /出于安全(和伦理)?考虑.*无法/i,
+  /我必须拒绝/i,
 ];
 
 const ESCALATION_LADDER: BypassLevel[] = [
@@ -44,18 +54,26 @@ export function isRefusal(text: string): RefusalCheckResult {
     return { isRefusal: false };
   }
 
-  // Refusals typically occur in the first 400 characters of the response
+  // Refusals typically occur in the first 500 characters of the response
   const head = text.substring(0, 500);
 
-  for (const pattern of REFUSAL_PATTERNS) {
-    const match = pattern.exec(head);
-    if (match) {
-      return {
-        isRefusal: true,
-        reason: "Detected AI safety refusal phrase",
-        matchedPattern: match[0],
-      };
-    }
+  // 1. Check if this is an operational failure (e.g. file not found, connection failed)
+  // Operational failures must NOT trigger bypass escalation
+  const isOperational = OPERATIONAL_FAILURE_PATTERNS.some((p) => p.test(head));
+  const hasSafetyRefusal = SAFETY_REFUSAL_PATTERNS.some((p) => p.test(head));
+
+  if (isOperational && !hasSafetyRefusal) {
+    return { isRefusal: false };
+  }
+
+  if (hasSafetyRefusal) {
+    const matched = SAFETY_REFUSAL_PATTERNS.find((p) => p.test(head));
+    const match = matched ? matched.exec(head) : null;
+    return {
+      isRefusal: true,
+      reason: "Detected AI safety refusal phrase",
+      matchedPattern: match ? match[0] : "safety_policy_refusal",
+    };
   }
 
   return { isRefusal: false };

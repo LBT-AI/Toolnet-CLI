@@ -35,6 +35,8 @@ import { keyCommand } from "./key";
 import { providerCommand } from "./provider";
 import { searchCommand } from "./search";
 import { policyCommand } from "./policy";
+import { queueCommand } from "./queue";
+import { permissionsCommand } from "./permissions";
 
 export interface CommandContext {
   gateway?: GatewayClient | null;
@@ -47,6 +49,9 @@ export interface CommandContext {
   openModelPicker?: () => Promise<void> | void;
   openKeyManager?: () => Promise<void> | void;
   openProviderPicker?: () => Promise<void> | void;
+  openSkillsPicker?: (initialSkillName?: string) => Promise<void> | void;
+  openQueueManager?: () => Promise<void> | void;
+  openSessionPicker?: () => Promise<void> | void;
   setBypassMode?: (enabled: boolean, level?: string) => void;
   getCurrentSessionId?: () => string;
   setCurrentSessionId?: (id: string) => void;
@@ -101,6 +106,8 @@ const builtinCommands: Command[] = [
   providerCommand,
   searchCommand,
   policyCommand,
+  queueCommand,
+  permissionsCommand,
 ];
 
 export function getAllCommands(): Command[] {

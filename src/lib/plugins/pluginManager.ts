@@ -11,6 +11,7 @@ import type {
 } from "./types";
 import { validatePluginManifest, loadPluginManifestFromDir } from "./manifest";
 import { evaluatePermission, getSandboxMode } from "../permissions";
+import { securityEngine } from "../security/securityEngine";
 import { auditLogger } from "../security/auditLogger";
 
 function getPluginsDir(): string {
@@ -162,6 +163,7 @@ export class PluginManager {
       const api: PluginApi = {
         defineTool: (toolDef: PluginToolDefinition) => {
           this.tools.set(toolDef.name, { pluginName: info.name, tool: toolDef });
+          securityEngine.registerPluginTool(toolDef.name);
         },
         defineCommand: (cmdDef: PluginCommandDefinition) => {
           this.commands.set(cmdDef.name, { pluginName: info.name, cmd: cmdDef });

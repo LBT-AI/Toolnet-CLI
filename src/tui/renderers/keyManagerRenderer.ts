@@ -70,7 +70,7 @@ export function renderKeyManagerBox(
   rows: number,
   state: {
     keyManagerIdx: number;
-    keyManagerInput: { provider: string; buffer: string } | null;
+    keyManagerInput: { provider: string; buffer: string; cursor?: number } | null;
     keyManagerConfirmDelete?: string | null;
   }
 ): string {
@@ -92,8 +92,23 @@ export function renderKeyManagerBox(
     out.push(A.fgBorder + "│" + A.reset + A.fgSubtext + hint + " ".repeat(Math.max(0, boxW - 2 - stripAnsi(hint).length)) + A.fgBorder + "│" + A.reset);
 
     out.push(T.goto(startRow + 2, startCol));
-    const masked = "•".repeat(state.keyManagerInput.buffer.length) + "█";
-    const lineContent = " " + A.fgYellow + (state.keyManagerInput.buffer.length > 0 ? masked : "█ (paste key here)") + A.reset;
+    const bufLen = state.keyManagerInput.buffer.length;
+    const cur = state.keyManagerInput.cursor !== undefined ? state.keyManagerInput.cursor : bufLen;
+    const maxContentWidth = Math.max(10, boxW - 4);
+
+    let lineContent = "";
+    if (bufLen === 0) {
+      lineContent = " " + A.fgYellow + "█ (paste key here)" + A.reset;
+    } else {
+      const maskedFull = "•".repeat(cur) + "█" + "•".repeat(Math.max(0, bufLen - cur));
+      let visibleMasked = maskedFull;
+      if (maskedFull.length > maxContentWidth) {
+        const half = Math.floor(maxContentWidth / 2);
+        const start = Math.max(0, Math.min(cur - half, maskedFull.length - maxContentWidth));
+        visibleMasked = (start > 0 ? "…" : "") + maskedFull.slice(start, start + maxContentWidth - (start > 0 ? 1 : 0));
+      }
+      lineContent = " " + A.fgYellow + visibleMasked + A.reset;
+    }
     out.push(A.fgBorder + "│" + A.reset + lineContent + " ".repeat(Math.max(0, boxW - 2 - stripAnsi(lineContent).length)) + A.fgBorder + "│" + A.reset);
 
     out.push(T.goto(startRow + 3, startCol));

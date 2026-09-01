@@ -120,7 +120,7 @@ export async function runSetupWizard(): Promise<WizardResult> {
     const sandboxInput = await ask(r, "  Choose [workspace/ask/full-access]: ");
     const sandboxMode: SandboxMode = SANDBOX_MODES.includes(sandboxInput as SandboxMode)
       ? (sandboxInput as SandboxMode)
-      : existing.sandboxMode || "ask";
+      : existing.sandboxMode || "workspace";
 
     // 6. Theme
     const themeInput = await ask(r, "\n\x1b[1m6. Theme (optional)\x1b[0m\n  dark / light [dark]: ");

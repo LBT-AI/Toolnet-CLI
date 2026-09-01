@@ -10,6 +10,8 @@
  *  6. Metrics tracking
  */
 
+import { canonicalizeJson } from "../security/auditLogger";
+
 // ─── Read-only tool set ──────────────────────────────────────────────────────
 
 const READ_ONLY_TOOLS = new Set([
@@ -82,7 +84,7 @@ export class ToolCache {
       return `${name}:${args?.path ?? "."}:${args?.depth ?? ""}`;
     }
     // Non-cacheable tools get a unique signature per invocation
-    return `${name}:${JSON.stringify(args)}`;
+    return `${name}:${canonicalizeJson(args ?? {})}`;
   }
 
   /** Check cache for a read-only tool call. Returns null on miss. */
@@ -282,7 +284,7 @@ export function deduplicateToolCalls(calls: ToolCall[]): { kept: ToolCall[]; ski
   let skipped = 0;
 
   for (const call of calls) {
-    const sig = `${call.name}:${JSON.stringify(call.args)}`;
+    const sig = `${call.name}:${canonicalizeJson(call.args ?? {})}`;
     const count = seen.get(sig) ?? 0;
     if (count >= 1) {
       skipped++;

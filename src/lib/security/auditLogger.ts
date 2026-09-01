@@ -1,11 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import crypto from "node:crypto";
 import type { SecurityAuditEvent } from "./types";
 import { redactOutputSecrets } from "./outputRedactor";
 import { redactSecrets } from "./secretGuard";
 
 export const GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
+
+function getDefaultAuditDir(): string {
+  if (process.env.TOOLNET_AUDIT_DIR) return process.env.TOOLNET_AUDIT_DIR;
+  return path.join(os.homedir(), ".toolnet-cli", "audit");
+}
 
 export interface AuditEntry {
   timestamp: string;
@@ -48,7 +54,7 @@ export class SecurityAuditLogger {
   private maxSizeBytes: number;
 
   constructor(customLogPath?: string, maxSizeBytes = 10 * 1024 * 1024) {
-    this.logsDir = customLogPath ? path.dirname(customLogPath) : path.resolve(process.cwd(), ".logs");
+    this.logsDir = customLogPath ? path.dirname(customLogPath) : getDefaultAuditDir();
     this.logFilePath = customLogPath || path.join(this.logsDir, "security-audit.jsonl");
     this.enabled = true;
     this.maxSizeBytes = maxSizeBytes;
@@ -57,14 +63,40 @@ export class SecurityAuditLogger {
 
   private recoverLastHash(): string {
     try {
-      if (!fs.existsSync(this.logFilePath)) return GENESIS_HASH;
-      const content = fs.readFileSync(this.logFilePath, "utf8").trim();
-      if (!content) return GENESIS_HASH;
-      const lines = content.split("\n").filter(Boolean);
-      if (lines.length === 0) return GENESIS_HASH;
-      const lastLine = lines[lines.length - 1];
-      const parsed = JSON.parse(lastLine);
-      return parsed.hash || GENESIS_HASH;
+      if (fs.existsSync(this.logFilePath)) {
+        const content = fs.readFileSync(this.logFilePath, "utf8").trim();
+        if (content) {
+          const lines = content.split("\n").filter(Boolean);
+          if (lines.length > 0) {
+            const lastLine = lines[lines.length - 1];
+            const parsed = JSON.parse(lastLine);
+            if (parsed.hash) return parsed.hash;
+          }
+        }
+      }
+
+      // Check rotated files to preserve continuity across rotations
+      if (fs.existsSync(this.logsDir)) {
+        const files = fs.readdirSync(this.logsDir)
+          .filter((f) => f.startsWith("security-audit-") && f.endsWith(".jsonl"))
+          .sort()
+          .reverse();
+
+        if (files.length > 0) {
+          const latestRotated = path.join(this.logsDir, files[0]);
+          const rotContent = fs.readFileSync(latestRotated, "utf8").trim();
+          if (rotContent) {
+            const lines = rotContent.split("\n").filter(Boolean);
+            if (lines.length > 0) {
+              const lastLine = lines[lines.length - 1];
+              const parsed = JSON.parse(lastLine);
+              if (parsed.hash) return parsed.hash;
+            }
+          }
+        }
+      }
+
+      return GENESIS_HASH;
     } catch {
       return GENESIS_HASH;
     }
@@ -76,7 +108,7 @@ export class SecurityAuditLogger {
     try {
       const dir = path.dirname(this.logFilePath);
       if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
 
       // Check size rotation
@@ -89,18 +121,27 @@ export class SecurityAuditLogger {
 
       const timestamp = new Date().toISOString();
       const actionName = event.action || event.toolName || "unknown";
-      const isAllowed = event.allowed !== undefined ? event.allowed : event.decision === "ALLOWED" || event.decision === "APPROVED_BY_USER";
+      const isAllowed = event.allowed !== undefined
+        ? event.allowed
+        : (event.decision === "ALLOWED" || event.decision === "APPROVED_BY_USER" || event.decision === "ALLOW" || event.decision === "APPROVED");
       const sanitizedArgs = JSON.parse(redactOutputSecrets(JSON.stringify(event.args || {})));
       const sanitizedReason = redactOutputSecrets(event.reason || "");
 
       const data: Record<string, unknown> = {
         action: actionName,
         allowed: isAllowed,
+        decision: event.decision || (isAllowed ? "ALLOW" : "DENY"),
+        riskLevel: event.riskLevel || "SAFE_READ",
+        capability: event.capability || "READ",
         mode: event.mode,
         cwd: event.cwd || process.cwd(),
         args: sanitizedArgs,
         reason: sanitizedReason,
       };
+
+      if (event.correlationId) {
+        data.correlationId = event.correlationId;
+      }
 
       if (event.metadata) {
         data.metadata = JSON.parse(redactOutputSecrets(JSON.stringify(event.metadata)));
@@ -125,7 +166,11 @@ export class SecurityAuditLogger {
 
       this.lastHash = hash;
       const line = JSON.stringify(entry) + "\n";
-      fs.appendFileSync(this.logFilePath, line, "utf-8");
+      if (!fs.existsSync(this.logFilePath)) {
+        fs.writeFileSync(this.logFilePath, line, { mode: 0o600, encoding: "utf-8" });
+      } else {
+        fs.appendFileSync(this.logFilePath, line, "utf-8");
+      }
     } catch {
       // Non-fatal if logging fails
     }
@@ -137,7 +182,7 @@ export class SecurityAuditLogger {
       const dateStr = new Date().toISOString().slice(0, 10);
       const rotatedPath = path.join(this.logsDir, `security-audit-${dateStr}-${Date.now()}.jsonl`);
       fs.renameSync(this.logFilePath, rotatedPath);
-      this.lastHash = GENESIS_HASH;
+      // Hash continuity: this.lastHash is preserved so the new file chains directly from the rotated file
     } catch {}
   }
 

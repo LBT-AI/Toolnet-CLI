@@ -9,11 +9,13 @@ import {
   spawnMcpServer,
 } from "../../lib/mcpRunner";
 import { getMergedAgentTools, executeTool } from "../../lib/agentTools";
+import { setSandboxMode } from "../../lib/permissions";
 
 describe("MCP Integration Tests", () => {
   let tempDir: string;
 
   beforeEach(() => {
+    setSandboxMode("workspace");
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-integration-test-"));
     const mockMcpPath = path.resolve(__dirname, "../../mock-mcp.ts");
 

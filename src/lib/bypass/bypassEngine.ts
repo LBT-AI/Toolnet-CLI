@@ -6,6 +6,8 @@ import { BYPASS_LEVEL_CATALOG, getBypassPrompt } from "./prompts";
 import { isRefusal, getEscalatedLevel, generateRefusalOverridePrompt } from "./antiRefusal";
 import { setBypassPolicy } from "../codingAgent";
 
+import { getSandboxMode } from "../permissions";
+
 function getConfigDir(): string {
   if (process.env.TOOLNETCLI_CONFIG_DIR) return process.env.TOOLNETCLI_CONFIG_DIR;
   if (process.env.DATA_DIR) return process.env.DATA_DIR;
@@ -107,10 +109,41 @@ export class BypassEngine {
     this.saveConfig();
   }
 
-  public setForceExecution(enabled: boolean): void {
+  public setForceExecution(enabled: boolean, sandboxMode: string = getSandboxMode()): boolean {
+    if (enabled && sandboxMode !== "full-access") {
+      this.config.forceExecution = false;
+      this.saveConfig();
+      return false; // Rejected in workspace/ask modes
+    }
     this.config.forceExecution = enabled;
     setBypassPolicy(this.config.enabled && enabled);
     this.saveConfig();
+    return true;
+  }
+
+  /**
+   * Creates an isolated subagent BypassContext.
+   * Subagents do NOT inherit bypass level by default (default is disabled).
+   */
+  public createSubagentContext(parentConfig?: BypassConfig, sandboxMode: string = getSandboxMode()): BypassConfig {
+    if (!parentConfig || !parentConfig.enabled) {
+      return {
+        enabled: false,
+        level: "lite",
+        autoEscalate: false,
+        forceExecution: false,
+        prefixInjection: false,
+      };
+    }
+
+    return {
+      enabled: parentConfig.enabled,
+      level: parentConfig.level,
+      autoEscalate: parentConfig.autoEscalate,
+      forceExecution: sandboxMode === "full-access" ? parentConfig.forceExecution : false,
+      prefixInjection: parentConfig.prefixInjection,
+      customPrompt: parentConfig.customPrompt,
+    };
   }
 
   public setCustomPrompt(prompt: string): void {

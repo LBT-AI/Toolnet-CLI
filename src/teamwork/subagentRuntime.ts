@@ -3,13 +3,9 @@
  * Target File: src/teamwork/subagentRuntime.ts
  */
 
-import { getActiveProvider, getActiveBaseUrl, OpenAICompatibleProvider, type Provider } from "../providers";
-import { agentTools, executeTool } from "../lib/agentTools";
+import { agentTools } from "../lib/agentTools";
 import { workspaceRoot, currentCwd } from "../lib/codingAgent";
-import { contextEngine, type ContextMessage } from "../lib/context";
-import { getCliKey } from "../lib/keys";
-import { evaluatePermission, getSandboxMode } from "../lib/permissions";
-import { executeToolBatch, type ToolCall } from "../lib/harness/toolExecutor";
+import { contextEngine } from "../lib/context";
 import type { AgentRole, TaskNode } from "./types";
 import type { EventBus } from "./eventBus";
 
@@ -120,11 +116,11 @@ Operational Rules:
  * Returns filtered tools allowed for the specific agent role.
  */
 export function getSubagentTools(role: AgentRole): any[] {
-  const roleName = String(role).toUpperCase();
+  const roleName = String(role || "").trim().toUpperCase();
 
   if (roleName === "RESEARCHER") {
     const allowed = new Set([
-      "read_file", "file_exists", "list_dir", "tree", "grep", "glob",
+      "read_file", "file_exists", "list_dir", "tree", "grep", "glob", "glob_search", "grep_search",
       "find_path", "web_fetch", "audit_url", "git_status", "git_diff", "get_cwd"
     ]);
     return agentTools.filter((t: any) => allowed.has(t.function?.name));
@@ -132,7 +128,7 @@ export function getSubagentTools(role: AgentRole): any[] {
 
   if (roleName === "TESTER") {
     const allowed = new Set([
-      "read_file", "file_exists", "list_dir", "tree", "grep", "glob",
+      "read_file", "file_exists", "list_dir", "tree", "grep", "glob", "glob_search", "grep_search",
       "find_path", "shell", "run_command", "git_status", "git_diff", "get_cwd"
     ]);
     return agentTools.filter((t: any) => allowed.has(t.function?.name));
@@ -140,14 +136,24 @@ export function getSubagentTools(role: AgentRole): any[] {
 
   if (roleName === "REVIEWER") {
     const allowed = new Set([
-      "read_file", "file_exists", "list_dir", "tree", "grep", "glob",
+      "read_file", "file_exists", "list_dir", "tree", "grep", "glob", "glob_search", "grep_search",
       "find_path", "git_status", "git_diff", "get_cwd"
     ]);
     return agentTools.filter((t: any) => allowed.has(t.function?.name));
   }
 
-  // Coder, Architect, General get all tools
-  return agentTools;
+  if (roleName === "CODER" || roleName === "ARCHITECT") {
+    // Coder and Architect get workspace tools but NO nested spawn_subagent or delegate_task
+    const blocked = new Set(["spawn_subagent", "delegate_task"]);
+    return agentTools.filter((t: any) => !blocked.has(t.function?.name));
+  }
+
+  // GENERAL or unknown role -> Restrictive default (read-only like researcher)
+  const defaultAllowed = new Set([
+    "read_file", "file_exists", "list_dir", "tree", "grep", "glob", "glob_search", "grep_search",
+    "find_path", "git_status", "git_diff", "get_cwd"
+  ]);
+  return agentTools.filter((t: any) => defaultAllowed.has(t.function?.name));
 }
 
 /**
@@ -160,213 +166,58 @@ export async function executeSubagentTask(
   const role = (node.role || "CODER") as AgentRole;
   const maxTurns = options.maxTurns || node.maxTurns || 8;
   const timeoutMs = options.timeoutMs || 120000;
-  const model = options.model || "default";
   const onEvent = options.onEvent;
-
-  const fallbackUrl = options.gatewayUrl || options.baseUrl || getActiveBaseUrl() || "http://localhost:8080";
-  const provider = getActiveProvider() ?? new OpenAICompatibleProvider({ id: "default", name: "Default", baseUrl: fallbackUrl });
-
-  if (!provider) {
-    return {
-      success: false,
-      output: "",
-      toolCallsCount: 0,
-      turnsUsed: 0,
-      tokensUsed: 0,
-      role,
-      nodeId: node.id,
-      error: "No active AI provider configured. Use /provider add or toolnet provider add.",
-    };
-  }
-
-  const rolePrompt = getSubagentRolePrompt(role, node.title);
-  const tools = getSubagentTools(role);
-
-  const messages: ContextMessage[] = [
-    { role: "system", content: rolePrompt },
-    { role: "user", content: node.prompt || node.title },
-  ];
-
-  let toolCallsCount = 0;
-  let turnsUsed = 0;
-  let estimatedTokens = 0;
-  const toolCallHistory: string[] = [];
 
   if (onEvent) {
     onEvent("subagent:start", { nodeId: node.id, role, title: node.title });
   }
 
-  const startTime = Date.now();
+  // Single-kernel delegation: the AgentHarness owns the ReAct loop, provider
+  // calls, SecurityEngine enforcement, executeToolBatch, ToolCache + compress,
+  // loop detection, approval flow, EventBus, and session persistence. The
+  // child inherits the parent harness's sandbox mode (never broader). The
+  // harness constructs the provider from the gateway URL / active provider, so
+  // no provider wiring is duplicated here.
+  const { getHarness } = await import("../lib/harness");
+  const harness = getHarness({
+    model: options.model || "default",
+    gatewayUrl: options.gatewayUrl || options.baseUrl,
+    maxTurns,
+    timeoutMs,
+  });
 
-  while (turnsUsed < maxTurns) {
-    turnsUsed++;
+  const unsubscribe = onEvent
+    ? harness.on((evt) => {
+        if (evt.type === "tool:start") {
+          onEvent("subagent:tool", { nodeId: node.id, role, toolName: evt.payload?.toolName, toolArgs: evt.payload?.toolArgs, id: evt.payload?.id });
+        }
+      })
+    : () => {};
 
-    if (Date.now() - startTime > timeoutMs) {
-      return {
-        success: false,
-        output: "",
-        toolCallsCount,
-        turnsUsed,
-        tokensUsed: estimatedTokens,
-        role,
-        nodeId: node.id,
-        error: `Sub-Agent execution timed out after ${timeoutMs}ms`,
-      };
-    }
-
-    const prep = contextEngine.prepareMessagesForApi(messages, { model });
-    estimatedTokens = prep.budget.currentEstimatedTokens;
-
-    let chatRes;
-    try {
-      chatRes = await provider.chat({
-        model,
-        messages: prep.messages as any,
-        tools,
-        tool_choice: "auto",
-        temperature: 0.1,
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (netErr: any) {
-      return {
-        success: false,
-        output: "",
-        toolCallsCount,
-        turnsUsed,
-        tokensUsed: estimatedTokens,
-        role,
-        nodeId: node.id,
-        error: `Gateway network error: ${netErr?.message || String(netErr)}`,
-      };
-    }
-
-    const choice = chatRes.choices?.[0];
-    const assistantMsg = choice?.message;
-    if (!assistantMsg) {
-      return {
-        success: false,
-        output: "",
-        toolCallsCount,
-        turnsUsed,
-        tokensUsed: estimatedTokens,
-        role,
-        nodeId: node.id,
-        error: "Invalid empty response from model provider",
-      };
-    }
-
-    messages.push({
-      role: assistantMsg.role || "assistant",
-      content: assistantMsg.content || "",
-      ...(assistantMsg.tool_calls ? { tool_calls: assistantMsg.tool_calls } : {}),
+  try {
+    const res = await harness.runSubagent(role, node.prompt || node.title, {
+      model: options.model || "default",
+      gatewayUrl: options.gatewayUrl || options.baseUrl,
+      maxTurns,
+      timeoutMs,
+      sessionId: options.sessionId,
     });
 
-    const toolCalls = assistantMsg.tool_calls;
-    if (!toolCalls || toolCalls.length === 0) {
-      // Subagent finished execution turn
-      const finalOutput = assistantMsg.content || `[Subagent ${role} finished task '${node.title}']`;
-      if (onEvent) {
-        onEvent("subagent:complete", { nodeId: node.id, role, output: finalOutput });
-      }
-      return {
-        success: true,
-        output: finalOutput,
-        toolCallsCount,
-        turnsUsed,
-        tokensUsed: estimatedTokens,
-        role,
-        nodeId: node.id,
-      };
+    if (onEvent) {
+      onEvent("subagent:complete", { nodeId: node.id, role, output: res.output });
     }
 
-    // Execute requested tools through the unified P1 pipeline (dedup + parallel + cache + compress).
-    const parsedCalls: ToolCall[] = toolCalls.map((call: any) => {
-      let toolArgs: any = {};
-      try { toolArgs = JSON.parse(call.function.arguments || "{}"); } catch {}
-      return { id: call.id, name: call.function.name, args: toolArgs };
-    });
-
-    let loopAborted = false;
-    const outcome = await executeToolBatch(parsedCalls, {
-      cwd: currentCwd,
-      workspaceRoot: workspaceRoot,
-      maxRepeat: 2,
-      needsApproval: (name, args) => {
-        const perm = evaluatePermission(name, args, getSandboxMode(), currentCwd, workspaceRoot);
-        return perm.needsApproval || !perm.allowed;
-      },
-      runTool: async (name, args, id) => {
-        const sig = `${name}:${JSON.stringify(args)}`;
-        if (toolCallHistory.filter((s) => s === sig).length >= 2) {
-          loopAborted = true;
-          return {
-            result: JSON.stringify({ error: `Infinite loop detected on '${name}'. Tool call aborted.` }),
-            allowed: false,
-            reason: "loop",
-          };
-        }
-        toolCallHistory.push(sig);
-
-        toolCallsCount++;
-        if (onEvent) {
-          onEvent("subagent:tool", { nodeId: node.id, role, toolName: name, toolArgs: args, id });
-        }
-
-        const perm = evaluatePermission(name, args, getSandboxMode(), currentCwd, workspaceRoot);
-        let resultJson: string;
-        if (!perm.allowed) {
-          resultJson = JSON.stringify({
-            stdout: "",
-            stderr: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}`,
-            exitCode: 1,
-            permissionDenied: true,
-          });
-        } else if (perm.needsApproval) {
-          // Child agents cannot grant their own permissions. Any ask-mode action
-          // that requires approval must be surfaced to the parent/user instead of
-          // being executed silently.
-          resultJson = JSON.stringify({
-            stdout: "",
-            stderr: `Approval Required: ${perm.reason || `Tool "${name}" requires user confirmation.`}`,
-            exitCode: 1,
-            approvalRequired: true,
-          });
-        } else {
-          resultJson = await executeTool(name, args);
-        }
-
-        if (args?.path) {
-          contextEngine.recordFileAccess(
-            args.path,
-            name.includes("write") || name.includes("edit") || name.includes("patch") ? "write" : "read"
-          );
-        }
-
-        return { result: resultJson, allowed: perm.allowed };
-      },
-      onMessage: (m) => {
-        messages.push({
-          role: "tool",
-          tool_call_id: m.id,
-          name: m.name,
-          content: m.content,
-        });
-      },
-    });
-
-    if (loopAborted) {
-      break;
-    }
+    return {
+      success: res.success,
+      output: res.output || `[Subagent ${role} finished task '${node.title}']`,
+      toolCallsCount: res.toolCallsCount,
+      turnsUsed: res.turnsUsed,
+      tokensUsed: res.tokensUsed || 0,
+      role,
+      nodeId: node.id,
+      error: res.error || (res.success ? undefined : `Sub-Agent failed for task '${node.title}'`),
+    };
+  } finally {
+    unsubscribe();
   }
-
-  return {
-    success: false,
-    output: "",
-    toolCallsCount,
-    turnsUsed,
-    tokensUsed: estimatedTokens,
-    role,
-    nodeId: node.id,
-    error: `Sub-Agent exceeded maximum turns (${maxTurns})`,
-  };
 }

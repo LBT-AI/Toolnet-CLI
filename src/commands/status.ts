@@ -55,6 +55,16 @@ export const statusCommand: Command = {
       lines.push(`  API Key:   \u001b[31mnone configured\u001b[0m`);
     }
 
+    const { getSandboxMode } = await import("../lib/permissions");
+    const { getSandboxStatusBadge, detectSandboxCapability } = await import("../lib/security/sandboxExecutor");
+    const { permissionGate } = await import("../lib/security/permissionGate");
+    const mode = getSandboxMode();
+    const cap = detectSandboxCapability();
+    lines.push("");
+    lines.push(`  Sandbox:   ${mode.toUpperCase()} · ${cap.label}`);
+    lines.push(`  FS:        ${mode === "workspace" ? "workspace-rw" : "unrestricted"}`);
+    lines.push(`  Network:   ${permissionGate.getNetworkMode().toUpperCase()}`);
+
     addMessage("assistant", lines.join("\n"));
   },
 };

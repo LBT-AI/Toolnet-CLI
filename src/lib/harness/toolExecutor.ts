@@ -19,8 +19,21 @@
  */
 
 import { classifyToolCalls, type ToolCall } from "./toolPlanner";
+import { canonicalizeJson } from "../security/auditLogger";
 
 export type { ToolCall } from "./toolPlanner";
+
+/**
+ * Produces a stable tool-call signature that is insensitive to the JSON object
+ * key order in the arguments. Two calls with semantically identical args
+ * ({a:1,b:2} vs {b:2,a:1}) share the same signature, so dedup and loop
+ * detection are correct regardless of how the provider serialized the object.
+ */
+export function signatureForToolCall(name: string, args: any): string {
+  return `${name}:${canonicalizeJson(args ?? {})}`;
+}
+
+export { canonicalizeJson };
 
 export interface BatchRunResult {
   result: string;
@@ -68,7 +81,7 @@ export async function executeToolBatch(
   const order: { id: string; name: string; sig: string }[] = [];
   const firstBySig = new Map<string, ToolCall>();
   for (const c of calls) {
-    const sig = `${c.name}:${JSON.stringify(c.args)}`;
+    const sig = signatureForToolCall(c.name, c.args);
     if (!firstBySig.has(sig)) firstBySig.set(sig, c);
     order.push({ id: c.id, name: c.name, sig });
   }
@@ -82,7 +95,7 @@ export async function executeToolBatch(
   let executedCount = 0;
 
   const runOne = async (call: ToolCall): Promise<string> => {
-    const sig = `${call.name}:${JSON.stringify(call.args)}`;
+    const sig = signatureForToolCall(call.name, call.args);
     const n = (repeatCounts.get(sig) ?? 0) + 1;
     repeatCounts.set(sig, n);
 

@@ -18,6 +18,13 @@ import type {
 } from "./types";
 import { resolveApiKey } from "./registry";
 
+export const TOOLNET_DEFAULT_MODELS: ModelInfo[] = [
+  { id: "claude-3-5-sonnet", name: "Claude 3.5 Sonnet", object: "model", created: Date.now(), owned_by: "toolnet" },
+  { id: "claude-3-7-sonnet", name: "Claude 3.7 Sonnet", object: "model", created: Date.now(), owned_by: "toolnet" },
+  { id: "gpt-4o", name: "GPT-4o", object: "model", created: Date.now(), owned_by: "toolnet" },
+  { id: "deepseek-chat", name: "DeepSeek V3", object: "model", created: Date.now(), owned_by: "toolnet" },
+];
+
 /**
  * Normalizes ToolNet baseUrl into rootUrl (for /api/*) and v1Url (for /v1/*).
  */
@@ -67,18 +74,19 @@ export class ToolNetProvider implements Provider {
     try {
       const res = await fetch(`${this.v1Url}/models`, {
         headers: this.getHeaders(),
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(2000),
       });
-      if (!res.ok) return [];
+      if (!res.ok) return TOOLNET_DEFAULT_MODELS;
       const data = (await res.json()) as { data?: { id: string; object?: string; created?: number; owned_by?: string }[] };
-      return (data.data || []).map((m) => ({
+      const models = (data.data || []).map((m) => ({
         id: m.id,
         object: m.object || "model",
         created: m.created || 0,
         owned_by: m.owned_by || "toolnet",
       }));
+      return models.length > 0 ? models : TOOLNET_DEFAULT_MODELS;
     } catch {
-      return [];
+      return TOOLNET_DEFAULT_MODELS;
     }
   }
 

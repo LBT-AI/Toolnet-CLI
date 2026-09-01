@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pushSnapshot, commitSnapshot } from "./history";
 import { evaluatePermission, isPathInsideWorkspace, getSandboxMode } from "./permissions";
-import { applyStructuredPatch } from "./patchUtils";
+import { applyStructuredPatch, generateDiff } from "./patchUtils";
 
 export interface ToolResult {
   success: boolean;
@@ -377,7 +377,9 @@ export function toolEdit(filePath: string, oldString: string, newString: string)
     pushSnapshot(absPath, `edit: replace "${oldString.substring(0, 40)}" in ${path.basename(absPath)}`);
     fs.writeFileSync(absPath, newContent, "utf8");
     commitSnapshot(absPath);
-    return { success: true, data: `Edited ${path.relative(currentCwd, absPath)}: replaced "${oldString}" → "${newString}"` };
+    const rel = path.relative(currentCwd, absPath);
+    const diff = generateDiff(content, newContent, rel);
+    return { success: true, data: `Edited ${rel}:\n${diff}` };
   } catch (err: unknown) {
     return { success: false, error: `Edit error: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -400,7 +402,9 @@ export function toolReplaceAll(filePath: string, oldString: string, newString: s
     fs.writeFileSync(absPath, newContent, "utf8");
     commitSnapshot(absPath);
     const count = (content.match(new RegExp(oldString.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
-    return { success: true, data: `Replaced ${count} occurrence(s) in ${path.relative(currentCwd, absPath)}` };
+    const rel = path.relative(currentCwd, absPath);
+    const diff = generateDiff(content, newContent, rel);
+    return { success: true, data: `Replaced ${count} occurrence(s) in ${rel}:\n${diff}` };
   } catch (err: unknown) {
     return { success: false, error: `ReplaceAll error: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -415,21 +419,154 @@ export function toolWrite(filePath: string, content: string): ToolResult {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
+    let oldContent = "";
+    if (fs.existsSync(absPath)) {
+      try {
+        oldContent = fs.readFileSync(absPath, "utf8");
+      } catch {}
+    }
     pushSnapshot(absPath, `write: ${path.basename(absPath)}`);
     fs.writeFileSync(absPath, content, "utf8");
     commitSnapshot(absPath);
-    return { success: true, data: `Written ${content.length} bytes to ${path.relative(currentCwd, absPath)}` };
+    const rel = path.relative(currentCwd, absPath);
+    const diff = oldContent ? generateDiff(oldContent, content, rel) : "";
+    const msg = diff ? `Written ${content.length} bytes to ${rel}:\n${diff}` : `Written ${content.length} bytes to ${rel}`;
+    return { success: true, data: msg };
   } catch (err: unknown) {
     return { success: false, error: `Write error: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 
 export async function toolBash(command: string, timeoutMs = 30000): Promise<ToolResult> {
-  const { exec } = require("node:child_process");
+  const { exec, spawn } = require("node:child_process");
+  const { getSandboxMode } = require("./permissions");
+  const { buildSandboxedCommandLine } = require("./security/sandboxExecutor");
+  const { permissionGate } = require("./security/permissionGate");
+
+  // Pre-execution permission check via PermissionGate
+  const perm = permissionGate.evaluate("bash", { command }, {
+    cwd: currentCwd,
+    workspaceRoot,
+    mode: getSandboxMode(),
+  });
+
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: `Permission Denied: ${perm.reason || "Blocked by security policy"}`,
+      data: `Permission Denied: ${perm.reason || "Blocked by security policy"}`,
+      exitCode: 1,
+    };
+  }
+
+  // Inject a trap to capture the final PWD after the command executes
+  const wrappedCommand = `set -e\n${command}\necho "---CWD---"\npwd`;
+  const sandboxed = buildSandboxedCommandLine(wrappedCommand, {
+    workspaceRoot,
+    cwd: currentCwd,
+    sandboxMode: getSandboxMode(),
+    networkMode: permissionGate.getNetworkMode(),
+    toolName: "shell",
+    isMutation: true,
+  });
+
+  // Check if sandbox denied execution
+  if (sandboxed.denied) {
+    const { auditLogger } = require("./security/auditLogger");
+    const { getSandboxMode } = require("./permissions");
+    auditLogger.logEvent({
+      timestamp: Date.now(),
+      toolName: "shell",
+      args: { command },
+      riskLevel: "DANGEROUS",
+      category: "SHELL_EXECUTE",
+      capability: "EXECUTE",
+      mode: getSandboxMode(),
+      decision: "SANDBOX_BLOCK",
+      allowed: false,
+      cwd: currentCwd,
+      reason: sandboxed.reason || "OS sandbox unavailable; mutation blocked",
+    });
+    return {
+      success: false,
+      error: sandboxed.reason || "OS sandbox unavailable; mutation blocked",
+      data: sandboxed.reason || "OS sandbox unavailable; mutation blocked",
+      exitCode: 1,
+    };
+  }
+
   return new Promise((resolve) => {
-    // Inject a trap to capture the final PWD after the command executes
-    const wrappedCommand = `${command}\necho "---CWD---"\npwd`;
-    
+    let child: any;
+    if (sandboxed.isOsSandboxed) {
+      child = spawn(sandboxed.executable, sandboxed.args, {
+        cwd: workspaceRoot,
+        env: process.env,
+      });
+      let stdoutBuf = "";
+      let stderrBuf = "";
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, timeoutMs);
+
+      child.stdout.on("data", (d: Buffer) => { stdoutBuf += d.toString("utf8"); });
+      child.stderr.on("data", (d: Buffer) => { stderrBuf += d.toString("utf8"); });
+
+      child.on("close", (code: number) => {
+        clearTimeout(timer);
+        let finalStdout = stdoutBuf;
+        const cwdMarkerIdx = finalStdout.lastIndexOf("---CWD---");
+        if (cwdMarkerIdx !== -1) {
+          const afterMarker = finalStdout.substring(cwdMarkerIdx + 9).trim();
+          const newCwd = afterMarker.split("\n")[0].trim();
+          if (newCwd && newCwd.startsWith("/") && fs.existsSync(newCwd)) {
+            currentCwd = newCwd;
+          }
+          finalStdout = finalStdout.substring(0, cwdMarkerIdx).trim();
+        }
+
+        const exitCode = timedOut ? 124 : (code ?? 0);
+        const { data: stdoutData, truncated: stdoutTrunc } = truncateOutput(finalStdout);
+        const { data: stderrData, truncated: stderrTrunc } = truncateOutput(stderrBuf);
+
+        if (exitCode !== 0 || timedOut) {
+          const combined = [stderrData, stdoutData].filter(Boolean).join("\n").trim();
+          resolve({
+            success: false,
+            error: combined || (timedOut ? "Command timed out" : `Exited with code ${exitCode}`),
+            data: combined || (timedOut ? "Command timed out" : `Exited with code ${exitCode}`),
+            stdout: stdoutData,
+            stderr: stderrData,
+            exitCode,
+            truncated: stdoutTrunc || stderrTrunc,
+          });
+        } else {
+          const combined = [stderrData, stdoutData].filter(Boolean).join("\n").trim();
+          resolve({
+            success: true,
+            data: combined || "(no output)",
+            stdout: stdoutData,
+            stderr: stderrData,
+            exitCode: 0,
+            truncated: stdoutTrunc || stderrTrunc,
+          });
+        }
+      });
+
+      child.on("error", (err: Error) => {
+        clearTimeout(timer);
+        resolve({
+          success: false,
+          error: `Sandbox execution error: ${err.message}`,
+          data: `Sandbox execution error: ${err.message}`,
+          exitCode: 1,
+        });
+      });
+      return;
+    }
+
+    // Direct execution fallback
     exec(wrappedCommand, {
       encoding: "utf8",
       timeout: timeoutMs,
@@ -444,7 +581,7 @@ export async function toolBash(command: string, timeoutMs = 30000): Promise<Tool
         const newCwd = afterMarker.split("\n")[0].trim();
         if (newCwd && newCwd.startsWith("/")) {
           if (fs.existsSync(newCwd)) {
-            currentCwd = newCwd; // Sync the agent's virtual CWD with the bash session
+            currentCwd = newCwd;
           }
         }
         finalStdout = finalStdout.substring(0, cwdMarkerIdx).trim();
@@ -455,7 +592,7 @@ export async function toolBash(command: string, timeoutMs = 30000): Promise<Tool
       const { data: stderrData, truncated: stderrTrunc } = truncateOutput(stderr || "");
       
       if (error) {
-        const combined = [stderrData, stdoutData].filter(Boolean).join("\\n").trim();
+        const combined = [stderrData, stdoutData].filter(Boolean).join("\n").trim();
         resolve({
           success: false,
           error: combined || error.message,
@@ -466,10 +603,10 @@ export async function toolBash(command: string, timeoutMs = 30000): Promise<Tool
           truncated: stdoutTrunc || stderrTrunc
         });
       } else {
-        const data = stdoutData.trim() || "(no output)";
+        const combined = [stderrData, stdoutData].filter(Boolean).join("\n").trim();
         resolve({
           success: true,
-          data,
+          data: combined || "(no output)",
           stdout: stdoutData,
           stderr: stderrData,
           exitCode,

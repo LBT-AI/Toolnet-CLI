@@ -20,27 +20,12 @@ import {
   resolveApiKey,
   createProviderInstance,
   type ProviderConfig,
+  onProviderSwitch,
+  notifyProviderSwitch,
+  type ProviderSwitchListener,
 } from "../providers";
 
-// Provider switch event bus to avoid runtime circular dependency
-export type ProviderSwitchListener = (providerId: string, config: ReturnType<typeof getActiveProviderConfig>) => void;
-const switchListeners: ProviderSwitchListener[] = [];
-
-export function onProviderSwitch(listener: ProviderSwitchListener): () => void {
-  switchListeners.push(listener);
-  return () => {
-    const idx = switchListeners.indexOf(listener);
-    if (idx !== -1) switchListeners.splice(idx, 1);
-  };
-}
-
-export function notifyProviderSwitch(id: string, config: ReturnType<typeof getActiveProviderConfig>): void {
-  for (const listener of switchListeners) {
-    try {
-      listener(id, config);
-    } catch {}
-  }
-}
+export { onProviderSwitch, notifyProviderSwitch, type ProviderSwitchListener };
 
 export const providerCommand: Command = {
   name: "provider",

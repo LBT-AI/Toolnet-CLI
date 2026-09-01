@@ -38,11 +38,43 @@ export function renderConfirmationModal(
 }
 
 export function renderToast(cols: number, toastMsg: string): string[] {
+  if (!toastMsg) return [];
   const out: string[] = [];
-  const toastW = toastMsg.length + 4;
+  const isWarning =
+    toastMsg.includes("⚠️") ||
+    toastMsg.toLowerCase().includes("error") ||
+    toastMsg.toLowerCase().includes("glitch") ||
+    toastMsg.toLowerCase().includes("failed");
+
+  const isSuccess =
+    toastMsg.includes("✔") ||
+    toastMsg.includes("✓") ||
+    toastMsg.toLowerCase().includes("saved") ||
+    toastMsg.toLowerCase().includes("resumed") ||
+    toastMsg.toLowerCase().includes("switched");
+
+  let borderColor = A.fgCyan;
+  let fgColor = A.fgText;
+
+  if (isWarning) {
+    borderColor = A.fgYellow;
+    fgColor = A.fgYellow;
+  } else if (isSuccess) {
+    borderColor = A.fgGreen;
+    fgColor = A.fgGreen;
+  }
+
+  const toastText = ` ${toastMsg} `;
+  const toastW = toastText.length + 2;
   const toastR = 2;
   const toastC = Math.max(1, Math.floor((cols - toastW) / 2));
+
   out.push(T.goto(toastR, toastC));
-  out.push(A.bgOverlay + A.fgText + A.bold + "  " + toastMsg + "  " + A.reset);
+  out.push(borderColor + "╭" + "─".repeat(toastText.length) + "╮" + A.reset);
+  out.push(T.goto(toastR + 1, toastC));
+  out.push(borderColor + "│" + A.bgSurface + fgColor + A.bold + toastText + A.reset + borderColor + "│" + A.reset);
+  out.push(T.goto(toastR + 2, toastC));
+  out.push(borderColor + "╰" + "─".repeat(toastText.length) + "╯" + A.reset);
+
   return out;
 }

@@ -12,7 +12,9 @@ function getDataDir(): string {
   return path.join(os.homedir(), `.${APP_NAME}`);
 }
 
-const KEYS_FILE = path.join(getDataDir(), "cli-keys.json");
+function getKeysFile(): string {
+  return path.join(getDataDir(), "cli-keys.json");
+}
 const LEGACY_KEYS_FILE = path.join(os.homedir(), ".toolnetapi", "cli-keys.json");
 
 const PROVIDER_ALIASES: Record<string, string[]> = {
@@ -53,8 +55,9 @@ const ENV_KEY_MAP: Record<string, string[]> = {
 
 export function loadCliKeys(): Record<string, string> {
   try {
-    if (fs.existsSync(KEYS_FILE)) {
-      const raw = fs.readFileSync(KEYS_FILE, "utf8");
+    const keysFile = getKeysFile();
+    if (fs.existsSync(keysFile)) {
+      const raw = fs.readFileSync(keysFile, "utf8");
       return JSON.parse(raw);
     }
   } catch {}
@@ -74,8 +77,9 @@ export function saveCliKey(provider: string, key: string): void {
   const keys = loadCliKeys();
   keys[normProvider] = key.trim();
   try {
-    fs.mkdirSync(getDataDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(KEYS_FILE, JSON.stringify(keys, null, 2), { encoding: "utf8", mode: 0o600 });
+    const dataDir = getDataDir();
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(getKeysFile(), JSON.stringify(keys, null, 2), { encoding: "utf8", mode: 0o600 });
   } catch (err) {
     console.error("Failed to save CLI key:", err);
   }
@@ -96,8 +100,9 @@ export function deleteCliKey(provider: string): boolean {
 
   if (deleted) {
     try {
-      fs.mkdirSync(getDataDir(), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(KEYS_FILE, JSON.stringify(keys, null, 2), { encoding: "utf8", mode: 0o600 });
+      const dataDir = getDataDir();
+      fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(getKeysFile(), JSON.stringify(keys, null, 2), { encoding: "utf8", mode: 0o600 });
     } catch {}
   }
 

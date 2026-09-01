@@ -10,6 +10,7 @@ import {
 import { getGlobalTracker } from "./usage";
 import { validateAndLoadImage, isModelVisionSupported, type ValidatedImage, getImageMetadataSummary } from "./vision";
 import { redactOutputSecrets } from "./security/outputRedactor";
+import { getActiveDefaultModel } from "../providers";
 
 export interface NonInteractiveOptions {
   prompt: string;
@@ -29,7 +30,7 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
 
   const startTime = Date.now();
   const tracker = getGlobalTracker();
-  const model = options.model ?? "openai/gpt-4o";
+  const model = options.model || getActiveDefaultModel() || "";
 
   // Suppress background update notice in headless mode
   process.env.TOOLNET_HEADLESS = "1";
@@ -88,19 +89,19 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
       },
       onEvent: (event: string, data: any) => {
         if (!writer) return;
-        if (event === "agent:tool_start") {
+        if (event === "tool:start" || event === "agent:tool_start") {
           writer.write({
             type: "tool_start",
             toolCallId: data.id ?? `tc_${Date.now()}`,
             tool: data.toolName ?? "unknown",
             args: redactSecretArgs(data.toolArgs ?? {}),
           });
-        } else if (event === "agent:tool_end") {
+        } else if (event === "tool:complete" || event === "tool:error" || event === "agent:tool_end") {
           writer.write({
             type: "tool_result",
             toolCallId: data.id ?? `tc_${Date.now()}`,
             tool: data.toolName ?? "unknown",
-            exitCode: data.result?.exitCode ?? 0,
+            exitCode: data.result?.exitCode ?? (event === "tool:error" ? 1 : 0),
             cached: data.result?.cached ?? false,
             truncated: data.result?.truncated ?? false,
             durationMs: data.result?.durationMs ?? 0,

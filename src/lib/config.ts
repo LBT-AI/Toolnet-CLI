@@ -29,7 +29,7 @@ export const DEFAULT_CONFIG: CliConfig = {
   defaultModel: "",
   theme: "dark",
   rtkEnabled: true,
-  sandboxMode: "ask",
+  sandboxMode: "workspace",
   sessionNames: {},
   sessionOrder: [],
   lastSession: null,

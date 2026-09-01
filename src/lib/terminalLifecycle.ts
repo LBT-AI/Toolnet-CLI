@@ -124,16 +124,21 @@ export function setupTerminalLifecycle(): void {
 
 /**
  * A wrapper that catches any synchronous render errors in TUI,
- * restores terminal, logs the crash to .logs/crash-...log, and exits cleanly.
+ * attempts graceful recovery via onError callback, logs to .logs/crash-...log,
+ * and only restores terminal / exits if unrecoverable.
  */
 export function wrapErrorBoundary<T>(fn: () => T, onError?: (err: unknown) => void): T | undefined {
   try {
     return fn();
   } catch (error) {
-    restoreTerminal();
     writeCrashLog(error, "renderError");
+    restoreTerminal();
     if (onError) {
-      onError(error);
+      try {
+        onError(error);
+      } catch (innerErr) {
+        writeCrashLog(innerErr, "errorHandlerFailed");
+      }
     }
     return undefined;
   }

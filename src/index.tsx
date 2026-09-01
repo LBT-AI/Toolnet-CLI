@@ -4,21 +4,51 @@ import { initWorkspace } from "./lib/codingAgent";
 // ---- Version (single source of truth) ----
 import { getVersion, getVersionString, getVersionJson } from "./lib/version";
 import type { ShellName } from "./lib/completion";
-import { generateCompletionScript } from "./lib/completion";
+import { generateCompletionScript, getCompletionInstallHelp } from "./lib/completion";
 import { handleUpdate } from "./lib/updater";
 import { appConfigExists, loadAppConfig } from "./lib/appConfig";
 import { runSetupWizard, isTty, printSetupHint } from "./lib/setupWizard";
 
 const CLI_VERSION = getVersion();
 const args = process.argv.slice(2);
+const subCmd = args[0] ?? "";
 
-// ---- --version / --help (fast, exits immediately) ----
-if (args.includes("--version") || args.includes("-v")) {
-  console.log(getVersionString());
-  process.exit(0);
-}
-if (args.includes("--help") || args.includes("-h")) {
-  console.log(`
+const KNOWN_SUBCMDS = new Set([
+  "provider",
+  "providers",
+  "pr",
+  "issue",
+  "plugin",
+  "plugins",
+  "audit",
+  "telemetry",
+  "config",
+  "completion",
+  "update",
+  "usage",
+  "budget",
+  "doctor",
+  "session",
+  "sessions",
+  "resume",
+  "skills",
+  "tools",
+  "queue",
+  "version",
+]);
+
+// ---- Top-level --version / --help (only when not dispatching a known subcommand) ----
+if (!KNOWN_SUBCMDS.has(subCmd)) {
+  if (args.includes("--version") || args.includes("-v") || subCmd === "version") {
+    if (args.includes("--json")) {
+      console.log(getVersionJson());
+    } else {
+      console.log(getVersionString());
+    }
+    process.exit(0);
+  }
+  if (args.includes("--help") || args.includes("-h") || subCmd === "help") {
+    console.log(`
 ToolNet CLI — AI coding agent for the terminal
 
 USAGE:
@@ -39,9 +69,9 @@ OPTIONS:
   --verbose             Enable verbose output
   --json                JSON output with -p
   --format <fmt>        Output format: text, markdown, json, jsonl
-  --resume              Resume last session
-  --session <id>        Open a specific session
-  --model <name>        Default model override
+  --resume, -r          Resume last session
+  --session, -s <id>    Open a specific session
+  --model, -m <name>    Default model override
   --workspace <path>    Add workspace root directory (repeatable)
 
 SUBCOMMANDS:
@@ -63,25 +93,23 @@ SUBCOMMANDS:
   config path           Print config file path
   config get <key>      Get a config value
   config set <key> <v>  Set a config value
+  session [list|curr]   Manage saved sessions
+  resume [session-id]   Resume previous session
   usage [--json]        Show token usage for current session
   budget [show|set|clr] Manage spending budget
   doctor [--json]       Run diagnostic checks
-  completion bash       Output Bash completion script
-  completion zsh        Output Zsh completion script
-  completion fish       Output Fish completion script
+  completion [bash|zsh|fish|install] Shell auto-completion scripts
   update [--check]      Check for and apply updates
   version [--json]      Version and build metadata
 
 INTERACTIVE COMMANDS:
   /help     /provider /bypass   /status   /model
   /session  /sandbox  /doctor   /update   /compact
-  /attach   /config   /exit
+  /attach   /config   /skills   /queue    /exit
 `);
-  process.exit(0);
+    process.exit(0);
+  }
 }
-
-// ---- CLI subcommand dispatch ----
-const subCmd = args[0] ?? "";
 
 // ---- Provider subcommand ----
 if (subCmd === "provider" || subCmd === "providers") {
@@ -107,6 +135,13 @@ if (subCmd === "provider" || subCmd === "providers") {
 
 // ---- PR Review subcommand ----
 if (subCmd === "pr") {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`ToolNet PR — GitHub/GitLab Pull Request Review
+
+USAGE:
+  toolnet pr review <url|number> [--json] [--model <name>]`);
+    process.exit(0);
+  }
   const action = args[1] ?? "";
   const target = args[2] ?? "";
   if (action === "review" && target) {
@@ -117,12 +152,19 @@ if (subCmd === "pr") {
     await handlePrReviewCommand(target, { json, model });
     process.exit(0);
   }
-  console.error("Usage: toolnet pr review <url|number>");
+  console.error("Usage: toolnet pr review <url|number> [--json] [--model <name>]");
   process.exit(1);
 }
 
 // ---- Issue subcommand ----
 if (subCmd === "issue") {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`ToolNet Issue — GitHub/GitLab Issue Inspection
+
+USAGE:
+  toolnet issue <url|number> [--json] [--model <name>]`);
+    process.exit(0);
+  }
   const target = args[1] ?? "";
   if (target) {
     const { handleIssueCommand } = await import("./lib/scm");
@@ -132,13 +174,26 @@ if (subCmd === "issue") {
     await handleIssueCommand(target, { json, model });
     process.exit(0);
   }
-  console.error("Usage: toolnet issue <url|number>");
+  console.error("Usage: toolnet issue <url|number> [--json] [--model <name>]");
   process.exit(1);
 }
 
 // ---- Plugin subcommand ----
-if (subCmd === "plugin") {
+if (subCmd === "plugin" || subCmd === "plugins") {
   const action = args[1] ?? "list";
+  if (args.includes("--help") || args.includes("-h") || action === "help" || action === "--help") {
+    console.log(`ToolNet Plugin — Extension & Plugin System
+
+USAGE:
+  toolnet plugin [subcommand]
+
+SUBCOMMANDS:
+  list           List installed plugins and granted capabilities
+  install <dir>  Install a plugin from directory or package
+  remove <name>  Uninstall a plugin
+  info <name>    Show details of an installed plugin`);
+    process.exit(0);
+  }
   const { pluginManager } = await import("./lib/plugins/pluginManager");
 
   if (action === "list") {
@@ -203,6 +258,13 @@ if (subCmd === "plugin") {
 // ---- Audit subcommand ----
 if (subCmd === "audit") {
   const action = args[1] ?? "verify";
+  if (args.includes("--help") || args.includes("-h") || action === "help" || action === "--help") {
+    console.log(`ToolNet Audit — Security Audit Trail Verification
+
+USAGE:
+  toolnet audit verify [--json]`);
+    process.exit(0);
+  }
   if (action === "verify") {
     const { auditLogger } = await import("./lib/security/auditLogger");
     const result = auditLogger.verifyChain();
@@ -224,6 +286,13 @@ if (subCmd === "audit") {
 // ---- Telemetry subcommand ----
 if (subCmd === "telemetry") {
   const action = args[1] ?? "status";
+  if (args.includes("--help") || args.includes("-h") || action === "help" || action === "--help") {
+    console.log(`ToolNet Telemetry — Crash Reporting Telemetry
+
+USAGE:
+  toolnet telemetry [status|enable|disable]`);
+    process.exit(0);
+  }
   const { getTelemetryConfig, setTelemetryEnabled } = await import("./lib/telemetry");
 
   if (action === "status") {
@@ -248,6 +317,20 @@ if (subCmd === "telemetry") {
 
 if (subCmd === "config") {
   const subArg = args[1] ?? "";
+  if (args.includes("--help") || args.includes("-h") || subArg === "help" || subArg === "--help") {
+    console.log(`ToolNet Config — Configuration Management
+
+USAGE:
+  toolnet config [subcommand]
+
+SUBCOMMANDS:
+  init          Run the interactive first-run setup wizard
+  show          Display current configuration (JSON)
+  path          Print configuration file path
+  get <key>     Get a configuration value
+  set <key> <v> Set a configuration value`);
+    process.exit(0);
+  }
   if (subArg === "init") {
     if (!isTty()) {
       printSetupHint();
@@ -297,12 +380,61 @@ if (subCmd === "config") {
 
 if (subCmd === "completion") {
   const shell: string = args[1] ?? "";
+  if (args.includes("--help") || args.includes("-h") || shell === "help" || shell === "--help" || shell === "install" || !shell) {
+    console.log(getCompletionInstallHelp());
+    process.exit(0);
+  }
   if (!["bash", "zsh", "fish"].includes(shell)) {
-    console.error("Usage: toolnet completion [bash|zsh|fish]");
+    console.log(getCompletionInstallHelp());
     process.exit(1);
   }
   process.stdout.write(generateCompletionScript(shell as ShellName));
   process.exit(0);
+}
+
+if (subCmd === "session" || subCmd === "sessions") {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`ToolNet Session — Session Persistence & Recovery
+
+USAGE:
+  toolnet session [subcommand]
+
+SUBCOMMANDS:
+  current       Display detailed metadata of the active session
+  list          List all saved sessions sorted newest-first
+  resume <id>   Resume a specific saved session
+  delete <id>   Delete a saved session from disk`);
+    process.exit(0);
+  }
+  const { sessionCommand } = await import("./commands/session");
+  const subArgs = args.slice(1);
+  const outLines: string[] = [];
+  const ctx: any = {
+    getCurrentSessionId: () => "",
+    currentModel: () => "",
+    provider: { name: "" },
+    addMessage: (_role: string, content: string) => {
+      outLines.push(content);
+    },
+  };
+  await sessionCommand.handler(subArgs, ctx);
+  if (outLines.length > 0) {
+    console.log(outLines.join("\n"));
+  }
+  process.exit(0);
+}
+
+if (subCmd === "resume") {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`ToolNet Resume — Resume Previous Session
+
+USAGE:
+  toolnet resume [session-id]
+
+DESCRIPTION:
+  Resume the most recent session, or specify a session-id to restore.`);
+    process.exit(0);
+  }
 }
 
 if (subCmd === "update") {
@@ -311,6 +443,13 @@ if (subCmd === "update") {
 }
 
 if (subCmd === "usage") {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`ToolNet Usage — Token & Cost Tracker
+
+USAGE:
+  toolnet usage [--json] [--session <id>] [--today]`);
+    process.exit(0);
+  }
   const { getGlobalTracker } = await import("./lib/usage");
   const tracker = getGlobalTracker();
   const usage = tracker.getSessionUsage();
@@ -329,8 +468,15 @@ if (subCmd === "usage") {
 }
 
 if (subCmd === "budget") {
-  const { getBudgetConfig, saveBudgetConfig, clearBudget } = await import("./lib/usage");
   const budgetArg = args[1] ?? "show";
+  if (args.includes("--help") || args.includes("-h") || budgetArg === "help" || budgetArg === "--help") {
+    console.log(`ToolNet Budget — Spending Budget Management
+
+USAGE:
+  toolnet budget [show|set <amount-usd> [--enforce]|clear]`);
+    process.exit(0);
+  }
+  const { getBudgetConfig, saveBudgetConfig, clearBudget } = await import("./lib/usage");
   if (budgetArg === "show") {
     const cfg = getBudgetConfig();
     console.log(JSON.stringify(cfg, null, 2));
@@ -351,6 +497,13 @@ if (subCmd === "budget") {
 }
 
 if (subCmd === "doctor") {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`ToolNet Doctor — Diagnostic & Environment Health Check
+
+USAGE:
+  toolnet doctor [--json]`);
+    process.exit(0);
+  }
   const { runDoctor, formatDoctorReport } = await import("./lib/doctor");
   const report = runDoctor();
   if (args.includes("--json")) {

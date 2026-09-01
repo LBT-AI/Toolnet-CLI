@@ -42,6 +42,8 @@ export interface BypassConfig {
   prefixInjection: boolean;
 }
 
+export type BypassContext = BypassConfig;
+
 export interface RefusalCheckResult {
   isRefusal: boolean;
   reason?: string;

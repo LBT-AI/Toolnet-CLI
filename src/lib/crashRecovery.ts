@@ -29,7 +29,7 @@ function getRecoveryFile(): string {
 
 let activeCrashState: CrashState | null = null;
 
-export function initCrashRecovery(sessionId: string, cwd = process.cwd(), model = "openai/gpt-4o"): CrashState {
+export function initCrashRecovery(sessionId: string, cwd = process.cwd(), model = ""): CrashState {
   activeCrashState = {
     sessionId,
     timestamp: Date.now(),

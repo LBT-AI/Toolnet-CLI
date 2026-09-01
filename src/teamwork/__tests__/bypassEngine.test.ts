@@ -9,6 +9,7 @@ import {
   BYPASS_SYSTEM_PROMPTS,
 } from "../../lib/bypass";
 import { getCwdInfo } from "../../lib/codingAgent";
+import { setSandboxMode } from "../../lib/permissions";
 
 describe("Bypass 2.0 Engine & Anti-Refusal Subsystem", () => {
   beforeEach(() => {
@@ -105,13 +106,16 @@ describe("Bypass 2.0 Engine & Anti-Refusal Subsystem", () => {
 
   describe("4. Force Execution Mode & Sandbox Policy", () => {
     test("force execution mode toggles bypassPolicy in getCwdInfo", () => {
+      setSandboxMode("workspace");
       bypassEngine.setBypass(true, "godmode");
       bypassEngine.setForceExecution(false);
       expect(getCwdInfo().bypassPolicy).toBe(false);
 
+      setSandboxMode("full-access");
       bypassEngine.setForceExecution(true);
       expect(getCwdInfo().bypassPolicy).toBe(true);
 
+      setSandboxMode("workspace");
       bypassEngine.setBypass(false);
       expect(getCwdInfo().bypassPolicy).toBe(false);
     });

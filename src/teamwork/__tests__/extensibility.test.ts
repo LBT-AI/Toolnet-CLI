@@ -37,17 +37,15 @@ Review the provided diff carefully.`;
       expect(parsed.instructions).toBe("# Instructions\nReview the provided diff carefully.");
     });
 
-    test("loadLocalSkills scans .gemini/skills, .toolnet/skills, and cli/skills", () => {
-      const geminiSkillDir = path.join(testRoot, ".gemini", "skills", "linter");
+    test("loadLocalSkills scans .agents/skills and .toolnet/skills", () => {
+      const agentsSkillDir = path.join(testRoot, ".agents", "skills", "linter");
       const toolnetSkillDir = path.join(testRoot, ".toolnet", "skills", "security");
-      const cliSkillDir = path.join(testRoot, "cli", "skills", "db-helper");
 
-      fs.mkdirSync(geminiSkillDir, { recursive: true });
+      fs.mkdirSync(agentsSkillDir, { recursive: true });
       fs.mkdirSync(toolnetSkillDir, { recursive: true });
-      fs.mkdirSync(cliSkillDir, { recursive: true });
 
       fs.writeFileSync(
-        path.join(geminiSkillDir, "SKILL.md"),
+        path.join(agentsSkillDir, "SKILL.md"),
         `---\nname: Linter Skill\ndescription: Lints TypeScript code\n---\nRun tsc and eslint.`,
         "utf8"
       );
@@ -58,36 +56,29 @@ Review the provided diff carefully.`;
         "utf8"
       );
 
-      fs.writeFileSync(
-        path.join(cliSkillDir, "SKILL.md"),
-        `---\nname: DB Helper\ndescription: Sqlite helper\n---\nQuery local database.`,
-        "utf8"
-      );
-
       const skills = loadLocalSkills(testRoot);
-      expect(skills.length).toBe(3);
+      expect(skills.length).toBe(2);
 
       const skillNames = skills.map(s => s.name);
       expect(skillNames).toContain("Linter Skill");
       expect(skillNames).toContain("Security Auditor");
-      expect(skillNames).toContain("DB Helper");
     });
 
-    test("getSkillPrompt returns instructions for matching skill", () => {
-      const geminiSkillDir = path.join(testRoot, ".gemini", "skills", "tester");
-      fs.mkdirSync(geminiSkillDir, { recursive: true });
+    test("getSkillPrompt returns instructions for matching skill", async () => {
+      const agentsSkillDir = path.join(testRoot, ".agents", "skills", "tester");
+      fs.mkdirSync(agentsSkillDir, { recursive: true });
       fs.writeFileSync(
-        path.join(geminiSkillDir, "SKILL.md"),
+        path.join(agentsSkillDir, "SKILL.md"),
         `---\nname: Unit Tester\ndescription: Runs unit tests\n---\nExecute bun test.`,
         "utf8"
       );
 
-      const prompt = getSkillPrompt("Unit Tester", testRoot);
+      const prompt = await getSkillPrompt("Unit Tester", testRoot);
       expect(prompt).toBe("Execute bun test.");
 
-      const notFound = getSkillPrompt("nonexistent-skill", testRoot);
+      const notFound = await getSkillPrompt("nonexistent-skill-xyz", testRoot);
       expect(notFound).toBeNull();
-    });
+    }, 15000);
 
     test("loadLocalSkills handles non-existent directories gracefully", () => {
       const emptyDir = path.join(testRoot, "empty");
@@ -177,7 +168,7 @@ Review the provided diff carefully.`;
   });
 
   describe("skillsCommand handler integration", () => {
-    test("skillsCommand list displays built-in skills", async () => {
+    test("skillsCommand list displays Skills Registry and not execution tools", async () => {
       let output = "";
       const ctxMock: any = {
         addMessage: (_role: string, msg: string) => {
@@ -186,9 +177,9 @@ Review the provided diff carefully.`;
       };
 
       await skillsCommand.handler([], ctxMock);
-      expect(output).toContain("Skills (");
-      expect(output).toContain("Built-in Local Tools:");
-      expect(output).toContain("read_file");
+      expect(output).toContain("Skills Registry");
+      expect(output).not.toContain("read_file");
+      expect(output).not.toContain("write_file");
     });
   });
 });

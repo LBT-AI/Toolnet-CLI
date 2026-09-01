@@ -403,13 +403,12 @@ export function isDangerousCommand(name: string, args: any, cwd: string): boolea
 export interface ExecuteToolOptions {
   cwd?: string;
   workspaceRoot?: string;
-  skipPermission?: boolean;
 }
 
 // ── Raw tool execution (no cache, no compression) ──────────────────────────
 // All the actual tool dispatch logic lives here.
 
-async function _executeToolRaw(name: string, args: any, options?: ExecuteToolOptions): Promise<string> {
+export async function _executeToolRaw(name: string, args: any, options?: ExecuteToolOptions): Promise<string> {
   try {
     if (name === "get_cwd") {
       const res = toolGetCwd();
@@ -518,7 +517,6 @@ async function _executeToolRaw(name: string, args: any, options?: ExecuteToolOpt
 
 export async function executeTool(name: string, args: any, options?: ExecuteToolOptions): Promise<string> {
   try {
-    const skipPermission = options?.skipPermission ?? false;
     const perm = evaluatePermission(name, args, getSandboxMode(), options?.cwd, options?.workspaceRoot);
     if (!perm.allowed) {
       return JSON.stringify({ stdout: "", stderr: perm.reason || "Permission denied by sandbox policy.", exitCode: 1 });

@@ -3,11 +3,11 @@
  * Target File: src/lib/harness/agentHarness.ts
  */
 
-import { getActiveProvider, getActiveBaseUrl, OpenAICompatibleProvider, type Provider } from "../../providers";
+import { getActiveProvider, getActiveBaseUrl, getActiveDefaultModel, OpenAICompatibleProvider, type Provider } from "../../providers";
 import { agentTools, getMergedAgentTools, executeTool } from "../agentTools";
 import { workspaceRoot, currentCwd, initWorkspace } from "../codingAgent";
 import { contextEngine, type ContextMessage, sessionMemory } from "../context";
-import { securityEngine, redactSecrets, type SandboxMode } from "../security";
+import { securityEngine, redactSecrets, type SandboxMode, getPermissionContextPrompt, clampSandboxMode } from "../security";
 import { getSandboxMode, setSandboxMode } from "../permissions";
 import { saveSession, loadSession } from "../sessionPersistence";
 import { detectProjectFramework } from "../projectDetector";
@@ -15,7 +15,7 @@ import { getCliKey } from "../keys";
 import { bypassEngine } from "../bypass";
 import { ToolCache, createMetrics, type ToolCall, type DispatchResult, type ToolPlannerMetrics } from "./toolPlanner";
 import { compressToolResult } from "./toolOutputCompressor";
-import { executeToolBatch } from "./toolExecutor";
+import { executeToolBatch, signatureForToolCall } from "./toolExecutor";
 import type {
   ExecutionMode,
   ExecutionOptions,
@@ -36,18 +36,20 @@ export class AgentHarness {
   private initializedAt = Date.now();
   private toolCache = new ToolCache();
   private metrics = createMetrics();
+  private toolCallHistory: string[] = [];
+  private loopAbortController: (AbortController & { aborted?: boolean }) | null = null;
+  private activeMode: ExecutionMode = "HEADLESS";
 
   constructor(config: HarnessConfig = {}) {
     this.config = {
       workspaceRoot: config.workspaceRoot || workspaceRoot || process.cwd(),
       currentCwd: config.currentCwd || currentCwd || process.cwd(),
       sessionId: config.sessionId || `session-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      model: config.model || "openai/gpt-4o",
+      model: config.model || getActiveDefaultModel() || "default",
       sandboxMode: config.sandboxMode || getSandboxMode(),
       gatewayUrl: config.gatewayUrl || "",
       maxTurns: config.maxTurns || 10,
       timeoutMs: config.timeoutMs || 120000,
-      bypassSecurity: config.bypassSecurity || false,
     };
 
     if (config.sandboxMode) {
@@ -88,51 +90,51 @@ export class AgentHarness {
   async dispatchTool(
     name: string,
     args: any,
-    options: { skipPermission?: boolean; cwd?: string } = {}
+    options: { cwd?: string; userApproved?: boolean; agentRole?: string; agentDepth?: number } = {}
   ): Promise<{ result: string; allowed: boolean; reason?: string }> {
     const cwd = options.cwd || this.config.currentCwd || process.cwd();
     const mode = this.config.sandboxMode || getSandboxMode();
 
     this.metrics.toolCallsRequested++;
 
-    const isForceBypass = this.config.bypassSecurity || (bypassEngine.isEnabled() && bypassEngine.getConfig().forceExecution);
-    const skipPermission = options.skipPermission || isForceBypass;
+    // Single Tool Execution Chokepoint: ToolGateway evaluates SecurityEngine,
+    // checks permissions fail-closed, gates approval, caches, and audits.
+    const { ToolGateway } = await import("../security/toolGateway");
+    const gatewayRes = await ToolGateway.execute({ name, args }, {
+      cwd,
+      workspaceRoot: this.config.workspaceRoot,
+      sandboxMode: mode,
+      userApproved: options.userApproved,
+      agentRole: options.agentRole || (this.activeMode === "SUBAGENT" ? "subagent" : undefined),
+      agentDepth: options.agentDepth || (this.activeMode === "SUBAGENT" ? 1 : 0),
+    });
 
-    if (!skipPermission) {
-      const perm = securityEngine.evaluate(name, args, mode, cwd, this.config.workspaceRoot);
-      if (!perm.allowed) {
-        this.metrics.toolCallsExecuted++;
-        return {
-          result: JSON.stringify({ error: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}` }),
-          allowed: false,
-          reason: perm.reason,
-        };
-      }
-      if (perm.needsApproval) {
-        this.metrics.toolCallsExecuted++;
-        return {
-          result: JSON.stringify({
-            stdout: "",
-            stderr: `Approval Required: ${perm.reason || `Tool ${name} requires interactive approval.`}`,
-            exitCode: 1,
-            approvalRequired: true,
-          }),
-          allowed: false,
-          reason: perm.reason,
-        };
-      }
+    if (gatewayRes.needsApproval) {
+      this.metrics.toolCallsExecuted++;
+      this.emitEvent("tool:approval_required", this.activeMode, { toolName: name, toolArgs: args, reason: gatewayRes.reason });
+      return {
+        result: JSON.stringify({
+          stdout: "",
+          stderr: gatewayRes.stderr || `Approval Required: ${gatewayRes.reason || `Tool ${name} requires interactive approval.`}`,
+          exitCode: 1,
+          approvalRequired: true,
+        }),
+        allowed: false,
+        reason: gatewayRes.reason,
+      };
+    }
+
+    if (!gatewayRes.allowed) {
+      this.metrics.toolCallsExecuted++;
+      return {
+        result: JSON.stringify({ error: `Permission Denied: ${gatewayRes.reason || "Blocked by sandbox policy."}` }),
+        allowed: false,
+        reason: gatewayRes.reason,
+      };
     }
 
     this.totalToolCalls++;
     this.metrics.toolCallsExecuted++;
-    const rawResult = await executeTool(name, args, {
-      cwd,
-      workspaceRoot: this.config.workspaceRoot,
-      skipPermission,
-    });
-
-    this.metrics.rawToolOutputChars += rawResult.length;
-    this.metrics.retainedToolOutputChars += rawResult.length;
 
     // Track file access for context engine
     const isWriteTool = name === "write_file" || name === "edit_file" || name === "replace_all" || name === "apply_patch";
@@ -143,9 +145,12 @@ export class AgentHarness {
       );
     }
 
-    const sanitizedResult = redactSecrets(rawResult);
+    const output = gatewayRes.stdout || JSON.stringify({ success: true });
+    this.metrics.rawToolOutputChars += output.length;
+    this.metrics.retainedToolOutputChars += output.length;
+
     return {
-      result: sanitizedResult,
+      result: output,
       allowed: true,
     };
   }
@@ -158,7 +163,7 @@ export class AgentHarness {
     mode: ExecutionMode = "HEADLESS"
   ): Promise<HarnessResult> {
     const startTime = Date.now();
-    const model = options.model || this.config.model || "openai/gpt-4o";
+    const model = options.model || this.config.model || getActiveDefaultModel() || "default";
     const maxTurns = options.maxTurns || this.config.maxTurns || 10;
     const timeoutMs = options.timeoutMs || this.config.timeoutMs || 120000;
     const sessionId = options.sessionId || this.config.sessionId || "session";
@@ -187,6 +192,24 @@ export class AgentHarness {
     let toolCallsCount = 0;
     let turnsUsed = 0;
     let accumulatedTokens = 0;
+
+    // Cross-turn loop detection is scoped per-loop invocation.
+    this.toolCallHistory = [];
+
+    this.activeMode = mode;
+
+    // Support for cancel(): each loop installs a fresh AbortController so a
+    // concurrent cancel() can stop the provider request.
+    const abort = new AbortController() as AbortController & { aborted?: boolean };
+    this.loopAbortController = abort;
+
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const signals = [timeoutSignal];
+    if (abort.signal) signals.push(abort.signal);
+    const combinedSignal =
+      typeof AbortSignal.any === "function"
+        ? AbortSignal.any(signals as AbortSignal[])
+        : timeoutSignal;
 
     const extraHeaders: Record<string, string> = {};
     if (bypassEngine.isEnabled()) {
@@ -233,12 +256,27 @@ export class AgentHarness {
           model,
           messages: prep.messages as any,
           tools: options.toolsOverride || getMergedAgentTools(),
-          tool_choice: "auto",
+          tool_choice: options.toolChoice || "auto",
           headers: extraHeaders,
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: combinedSignal,
         });
       } catch (netErr: any) {
-        const errorMsg = `Network/Gateway connection failed: ${netErr?.message || String(netErr)}`;
+        if (abort.signal?.aborted) {
+          this.emitEvent("agent:error", mode, { error: "Execution cancelled by user" });
+          return {
+            success: false,
+            output: "",
+            messages,
+            toolCallsCount,
+            turnsUsed,
+            tokensUsed: accumulatedTokens,
+            durationMs: Date.now() - startTime,
+            mode,
+            sessionId,
+            error: "Execution cancelled by user",
+          };
+        }
+        const errorMsg = `Gateway network error: Network/Gateway connection failed: ${netErr?.message || String(netErr)}`;
         this.emitEvent("agent:error", mode, { error: errorMsg });
         return {
           success: false,
@@ -304,12 +342,18 @@ export class AgentHarness {
         const finalOutput = assistantMsg.content || "";
         this.emitEvent("agent:complete", mode, { output: finalOutput, turnsUsed, toolCallsCount });
 
+        if (this.loopAbortController) {
+          try { this.loopAbortController.abort(); } catch {}
+          this.loopAbortController = null;
+        }
+
         saveSession(sessionId, messages, {
           model,
           mode,
           turnsUsed,
           tokensUsed: accumulatedTokens,
         });
+        this.emitEvent("session:saved", mode, { sessionId, turnsUsed, toolCallsCount });
 
         return {
           success: true,
@@ -340,16 +384,41 @@ export class AgentHarness {
         return perm.needsApproval || !perm.allowed;
       };
 
+      let loopAborted = false;
       const outcome = await executeToolBatch(parsedCalls, {
         cwd: this.config.currentCwd || process.cwd(),
         needsApproval,
         maxRepeat: 2,
         runTool: async (name, args, id) => {
-          this.emitEvent("agent:tool_start", mode, { toolName: name, toolArgs: args, id });
+          // Cross-turn infinite-loop detection using canonical (key-order
+          // insensitive) signatures. Abort after 3 identical invocations.
+          const sig = signatureForToolCall(name, args);
+          if (this.toolCallHistory.filter((s) => s === sig).length >= 2) {
+            loopAborted = true;
+            return {
+              result: JSON.stringify({
+                stdout: "",
+                stderr: `Infinite loop detected: tool '${name}' was called 3 times with identical arguments. Aborting loop.`,
+                exitCode: 1,
+              }),
+              allowed: false,
+              reason: "loop",
+            };
+          }
+          this.toolCallHistory.push(sig);
+
+          this.emitEvent("tool:queued", mode, { toolName: name, toolArgs: args, id });
+          this.emitEvent("tool:start", mode, { toolName: name, toolArgs: args, id });
+
           const res = await this.dispatchTool(name, args);
-          this.emitEvent("agent:tool_end", mode, {
-            toolName: name, toolArgs: args, result: res.result, id,
-          });
+
+          if (res.allowed) {
+            this.emitEvent("tool:complete", mode, { toolName: name, toolArgs: args, result: res.result, id });
+          } else {
+            this.emitEvent("tool:error", mode, {
+              toolName: name, toolArgs: args, result: res.result, reason: res.reason, id,
+            });
+          }
           return res;
         },
         onMessage: (m) => {
@@ -360,6 +429,24 @@ export class AgentHarness {
 
       this.metrics.toolCallsDeduplicated += outcome.deduplicatedCount;
       this.metrics.toolCallsBatched += outcome.parallelCalls;
+
+      if (loopAborted) {
+        this.emitEvent("agent:error", mode, { error: "Infinite loop detected: exceeded maximum repetition of identical tool calls." });
+        return {
+          success: false,
+          output: "",
+          messages,
+          toolCallsCount,
+          turnsUsed,
+          tokensUsed: accumulatedTokens,
+          durationMs: Date.now() - startTime,
+          mode,
+          sessionId,
+          error: "Infinite loop detected: exceeded maximum repetition of identical tool calls.",
+        };
+      }
+
+      this.emitEvent("agent:thinking", mode, { turnsUsed, toolCallsCount });
     }
 
     return {
@@ -376,7 +463,56 @@ export class AgentHarness {
     };
   }
 
+  /**
+   * Cancels the currently-running loop (if any) by aborting the active
+   * provider request and any subsequent turns.
+   */
+  cancel(): void {
+    const ctrl = this.loopAbortController;
+    if (ctrl) {
+      try { ctrl.abort(); } catch {}
+    }
+  }
+
   // ── High-Level Orchestration Entry Points ─────────────────────────────────
+
+  /**
+   * Sends a user prompt and runs the full ReAct loop until a final answer or
+   * the turn budget is exhausted. This is the single entry point used by the
+   * semantic wrappers (headless, turbo, subagent) and by AgentRuntime.
+   */
+  async run(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
+    const mode = options.mode || "HEADLESS";
+    const memoryPrompt = contextEngine.getMemoryPromptSnippet();
+    const toolRules = contextEngine.getToolUsageRulesSnippet();
+    const permissionContext = getPermissionContextPrompt(this.config.sandboxMode || getSandboxMode());
+    const baseSystemPrompt =
+      options.systemPrompt ||
+      `You are ToolNet API CLI Agent. Complete the user request using available tools with maximum efficiency.
+
+${permissionContext}
+
+Your access is strictly limited to the policy described in [RUNTIME PERMISSION CONTEXT] above.
+
+${memoryPrompt}${toolRules}`;
+    const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
+
+    const messages: ContextMessage[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: prompt },
+    ];
+
+    return this.executeLoop(messages, options, mode);
+  }
+
+  /**
+   * Resumes the ReAct loop from an existing message history (e.g. a persisted
+   * or previously-returned conversation), optionally appending a new user turn.
+   */
+  async resume(messages: ContextMessage[], options: ExecutionOptions = {}): Promise<HarnessResult> {
+    const mode = options.mode || "HEADLESS";
+    return this.executeLoop([...messages], options, mode);
+  }
 
   /**
    * Runs headless 1-turn task (equivalent to toolnet -p "...")
@@ -384,9 +520,16 @@ export class AgentHarness {
   async runHeadless(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
     const memoryPrompt = contextEngine.getMemoryPromptSnippet();
     const toolRules = contextEngine.getToolUsageRulesSnippet();
+    const permissionContext = getPermissionContextPrompt(this.config.sandboxMode || getSandboxMode());
     const baseSystemPrompt =
       options.systemPrompt ||
-      `You are ToolNet API CLI Agent. Complete the user request using available tools with maximum efficiency.\n\n${memoryPrompt}${toolRules}`;
+      `You are ToolNet API CLI Agent. Complete the user request using available tools with maximum efficiency.
+
+${permissionContext}
+
+Your access is strictly limited to the policy described in [RUNTIME PERMISSION CONTEXT] above.
+
+${memoryPrompt}${toolRules}`;
     const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
 
     const messages: ContextMessage[] = [
@@ -401,7 +544,12 @@ export class AgentHarness {
    * Runs hyper-optimized Turbo single-pass execution.
    */
   async runTurbo(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
-    const baseSystemPrompt = `You are ToolNet Turbo Agent. Execute the user request immediately with minimal latency. Use tools directly and summarize outcome.`;
+    const permissionContext = getPermissionContextPrompt(this.config.sandboxMode || getSandboxMode());
+    const baseSystemPrompt = `You are ToolNet Turbo Agent. Execute the user request immediately with minimal latency. Use tools directly and summarize outcome.
+
+${permissionContext}
+
+Your access is strictly limited to the policy described in [RUNTIME PERMISSION CONTEXT] above.`;
     const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
     const messages: ContextMessage[] = [
       { role: "system", content: systemPrompt },
@@ -421,14 +569,27 @@ export class AgentHarness {
   ): Promise<HarnessResult> {
     const { getSubagentRolePrompt, getSubagentTools } = await import("../../teamwork/subagentRuntime");
     const rolePrompt = getSubagentRolePrompt(role, task.slice(0, 50));
-    const tools = getSubagentTools(role);
+    const tools = options.toolsOverride || getSubagentTools(role);
+
+    // Subagent security inheritance: a child agent can never be granted more
+    // than its parent (childPolicy <= parentPolicy). It inherits the parent harness's
+    // sandbox mode or clamped to it, preventing any self-elevation.
+    const parentMode = this.config.sandboxMode || getSandboxMode();
+    const effectiveSandboxMode = clampSandboxMode(options.sandboxMode, parentMode);
+    const permissionContext = getPermissionContextPrompt(effectiveSandboxMode);
+    const inheritedRolePrompt = `${rolePrompt}
+
+[RUNTIME PERMISSION CONTEXT (inherited)]
+${permissionContext}
+
+Your access is strictly limited to the policy described in [RUNTIME PERMISSION CONTEXT] above. A child agent cannot self-elevate filesystem, network, shell, or MCP permissions.`;
 
     const messages: ContextMessage[] = [
-      { role: "system", content: rolePrompt },
+      { role: "system", content: inheritedRolePrompt },
       { role: "user", content: task },
     ];
 
-    this.emitEvent("subagent:spawn", "SUBAGENT", { role, task });
+    this.emitEvent("subagent:spawn", "SUBAGENT", { role, task, parentMode, effectiveSandboxMode });
 
     const res = await this.executeLoop(
       messages,
@@ -488,7 +649,7 @@ export class AgentHarness {
       sessionId: this.config.sessionId || "default",
       workspaceRoot: this.config.workspaceRoot || process.cwd(),
       currentCwd: this.config.currentCwd || process.cwd(),
-      currentModel: this.config.model || "openai/gpt-4o",
+      currentModel: this.config.model || getActiveDefaultModel() || "default",
       sandboxMode: this.config.sandboxMode || getSandboxMode(),
       activeFramework: detected?.framework || "unknown",
       totalTokensUsed: this.totalTokensUsed,

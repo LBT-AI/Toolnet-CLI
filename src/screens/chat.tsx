@@ -756,7 +756,9 @@ export function ChatScreen() {
         <box flexDirection="row" justifyContent="space-between" paddingLeft={2} paddingRight={2} borderStyle="single" borderColor={T.overlay}>
           <box flexDirection="row">
             <text fg={T.cyan} attributes={B}>Model: </text>
-            <text fg={T.text}>{selectedModel()}</text>
+            <text fg={selectedModel() && selectedModel() !== "default" ? T.text : T.yellow}>
+              {selectedModel() && selectedModel() !== "default" ? selectedModel() : "Not selected"}
+            </text>
           </box>
           <box flexDirection="row">
             <text fg={canUndoFlag() ? T.yellow : T.overlay}>Undo</text>

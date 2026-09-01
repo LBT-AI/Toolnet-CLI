@@ -6,18 +6,44 @@ import type {
   PermissionResult,
   RiskLevel,
   SandboxMode,
+  ToolExecutionContext,
 } from "./types";
 import { isSensitiveFile } from "./secretGuard";
 import { classifyShellCommand } from "./commandClassifier";
 import { policyEngine } from "./policyEngine";
 import { sessionTrust } from "./sessionTrust";
 import { auditLogger } from "./auditLogger";
+import {
+  isPathInsideWorkspace,
+  resolveRealPath,
+  getRealWorkspaceRoot,
+  evaluateWorkspacePolicy,
+  type PathCheckResult,
+} from "./workspacePolicy";
 
 export class SecurityEngine {
-  private currentMode: SandboxMode = "ask";
+  private currentMode: SandboxMode = "workspace";
+  private pluginTools = new Set<string>();
 
   setMode(mode: SandboxMode) {
     this.currentMode = mode;
+  }
+
+  /**
+   * Registers a tool name as plugin-governed. Plugin tools are validated by the
+   * plugin's own capability-grant model (see PluginManager.executePluginTool), so
+   * the generic external-MCP-tool heuristic must not blanket-block them.
+   */
+  registerPluginTool(name: string): void {
+    if (name) this.pluginTools.add(name);
+  }
+
+  unregisterPluginTool(name: string): void {
+    this.pluginTools.delete(name);
+  }
+
+  isPluginTool(name: string): boolean {
+    return this.pluginTools.has(name);
   }
 
   getMode(): SandboxMode {
@@ -32,64 +58,55 @@ export class SecurityEngine {
     args: any,
     mode: SandboxMode = this.currentMode,
     cwd?: string,
-    workspaceRoot?: string
+    workspaceRoot?: string,
+    context?: ToolExecutionContext
   ): PermissionResult {
     const baseCwd = cwd || process.cwd();
     const wsRoot = workspaceRoot || process.cwd();
-
-    // 1. Full access mode (Allows all actions)
-    if (mode === "full-access") {
-      auditLogger.logEvent({
-        timestamp: Date.now(),
-        toolName,
-        args,
-        riskLevel: "SAFE_READ",
-        category: this.categorizeTool(toolName),
-        capability: "SYSTEM",
-        mode,
-        decision: "ALLOWED",
-        reason: "Full-access sandbox mode active",
-      });
-      return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability: "SYSTEM" };
-    }
-
     const category = this.categorizeTool(toolName);
 
-    // 2. Shell Command Evaluation
+    // ── Subagent Recursion & Role Isolation Gates ───────────────────────────
+    if (context?.agentDepth !== undefined && context.agentDepth >= 1) {
+      if (toolName === "spawn_subagent" || toolName === "delegate_task") {
+        return {
+          decision: "DENY",
+          allowed: false,
+          needsApproval: false,
+          riskLevel: "CRITICAL_DENY",
+          capability: "SYSTEM",
+          reason: "Nested subagent spawning is prohibited for subagents (depth limit reached).",
+        };
+      }
+    }
+
+    if (context?.agentRole) {
+      const canonicalRole = String(context.agentRole).toLowerCase();
+      const mutatingTools = new Set([
+        "write_file", "edit_file", "replace_all", "apply_patch", "patch",
+        "delete_file", "create_artifact", "update_artifact", "shell", "run_command", "bash"
+      ]);
+
+      if (canonicalRole === "researcher" || canonicalRole === "reviewer") {
+        if (mutatingTools.has(toolName)) {
+          return {
+            decision: "DENY",
+            allowed: false,
+            needsApproval: false,
+            riskLevel: "CRITICAL_DENY",
+            capability: "MODIFY",
+            reason: `Role '${context.agentRole}' is read-only and cannot execute mutating or shell tool '${toolName}'.`,
+          };
+        }
+      }
+    }
+
+    // ── 1. STEP 1: CRITICAL_DENY (INVIOLABLE — NEVER OVERRIDDEN BY WHITELIST, TRUST, OR FULL-ACCESS) ──
     if (category === "SHELL_EXECUTE") {
       const command = String(args?.command || args?.cmd || "").trim();
-      const targetKey = command;
-
-      // Classify command capability
+      const analysis = classifyShellCommand(command, wsRoot, baseCwd);
       const capability = this.determineShellCapability(command);
 
-      // Check Session Trust
-      if (sessionTrust.isTrustedForSession(toolName, targetKey)) {
-        return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability };
-      }
-      if (sessionTrust.isDeniedForSession(toolName, targetKey)) {
-        return { allowed: false, needsApproval: false, reason: "Command was previously denied for this session.", capability };
-      }
-
-      // Check Policy Whitelist
-      if (policyEngine.isCommandWhitelisted(command)) {
-        auditLogger.logEvent({
-          timestamp: Date.now(),
-          toolName,
-          args,
-          riskLevel: "SAFE_BUILD",
-          category,
-          capability,
-          mode,
-          decision: "ALLOWED",
-          reason: "Command is explicitly whitelisted in security policy",
-        });
-        return { allowed: true, needsApproval: false, riskLevel: "SAFE_BUILD", capability, matchedRule: "whitelist" };
-      }
-
-      // Check Policy Blacklist
-      const blacklisted = policyEngine.isCommandBlacklisted(command);
-      if (blacklisted.isBlacklisted) {
+      if (analysis.riskLevel === "CRITICAL_DENY" || analysis.isCritical) {
         auditLogger.logEvent({
           timestamp: Date.now(),
           toolName,
@@ -99,96 +116,256 @@ export class SecurityEngine {
           capability,
           mode,
           decision: "BLOCKED_BY_POLICY",
-          reason: blacklisted.reason,
-        });
-        return { allowed: false, needsApproval: false, reason: blacklisted.reason, riskLevel: "CRITICAL_DENY", capability };
-      }
-
-      // Check Capability Permissions (e.g. DELETE, RESET, SYSTEM)
-      if (!policyEngine.isCapabilityAllowed(capability)) {
-        const capReason = `Action requires '${capability}' permission which is protected by policy.`;
-        if (mode === "workspace") {
-          return {
-            allowed: false,
-            needsApproval: false,
-            riskLevel: "DANGEROUS",
-            capability,
-            reason: capReason,
-          };
-        }
-        if (mode === "ask") {
-          return {
-            allowed: true,
-            needsApproval: true,
-            riskLevel: "DANGEROUS",
-            capability,
-            reason: capReason,
-          };
-        }
-      }
-
-      // Classify command semantics & risk
-      const analysis = classifyShellCommand(command);
-
-      if (analysis.riskLevel === "CRITICAL_DENY") {
-        auditLogger.logEvent({
-          timestamp: Date.now(),
-          toolName,
-          args,
-          riskLevel: analysis.riskLevel,
-          category,
-          capability,
-          mode,
-          decision: "BLOCKED_BY_POLICY",
-          reason: analysis.reason,
+          reason: analysis.reason || "Catastrophic command blocked by invariant security policy.",
         });
         return {
+          decision: "DENY",
           allowed: false,
           needsApproval: false,
-          riskLevel: analysis.riskLevel,
+          riskLevel: "CRITICAL_DENY",
           capability,
-          reason: `Blocked by Security Policy: ${analysis.reason}`,
+          reason: `Blocked by Security Policy: ${analysis.reason || "Catastrophic destruction command blocked."}`,
         };
       }
-
-      if (analysis.riskLevel === "DANGEROUS") {
-        if (mode === "workspace") {
-          auditLogger.logEvent({
-            timestamp: Date.now(),
-            toolName,
-            args,
-            riskLevel: analysis.riskLevel,
-            category,
-            capability,
-            mode,
-            decision: "BLOCKED_BY_POLICY",
-            reason: analysis.reason,
-          });
-          return {
-            allowed: false,
-            needsApproval: false,
-            riskLevel: analysis.riskLevel,
-            capability,
-            reason: `Blocked in 'workspace' sandbox mode: ${analysis.reason}`,
-          };
-        }
-
-        // Mode 'ask' -> Prompt user
-        return {
-          allowed: true,
-          needsApproval: true,
-          riskLevel: analysis.riskLevel,
-          capability,
-          reason: analysis.reason,
-          suggestedAction: analysis.suggestedAction,
-        };
-      }
-
-      // Safe commands in workspace or ask mode
-      return { allowed: true, needsApproval: false, riskLevel: analysis.riskLevel, capability };
     }
 
-    // 3. File & Resource Tool Evaluation
+    if (category === "FILE_READ" || category === "FILE_WRITE" || category === "FILE_DELETE") {
+      const isDelete = category === "FILE_DELETE" || toolName.includes("delete") || toolName.includes("remove");
+      const targetPath = toolName.includes("artifact")
+        ? `.artifacts/${args?.name || ""}`
+        : (args?.path || args?.root || args?.query || ".");
+      const pathCheck = this.checkPathInsideWorkspace(targetPath, wsRoot, baseCwd);
+
+      if (isDelete && (pathCheck.resolvedPath === "/" || pathCheck.resolvedPath === wsRoot + "/.git" || pathCheck.resolvedPath.endsWith("/.git"))) {
+        return {
+          decision: "DENY",
+          allowed: false,
+          needsApproval: false,
+          riskLevel: "CRITICAL_DENY",
+          capability: "DELETE",
+          reason: "Destruction of root directory or .git repository is permanently blocked.",
+        };
+      }
+    }
+
+    let fileCapability: PermissionCapability = "READ";
+    // ── 2. STEP 2: SECRET / PATH TRAVERSAL / PATH POLICY ────────────────────
+    if (category === "FILE_READ" || category === "FILE_WRITE" || category === "FILE_DELETE") {
+      const isWrite = category === "FILE_WRITE";
+      const isDelete = category === "FILE_DELETE" || toolName.includes("delete") || toolName.includes("remove");
+      const targetPath = toolName.includes("artifact")
+        ? `.artifacts/${args?.name || ""}`
+        : (args?.path || args?.root || args?.query || ".");
+      const pathCheck = this.checkPathInsideWorkspace(targetPath, wsRoot, baseCwd);
+      const isSecret = isSensitiveFile(pathCheck.resolvedPath);
+      const fileExists = fs.existsSync(pathCheck.resolvedPath);
+
+      if (isDelete) fileCapability = "DELETE";
+      else if (isWrite) fileCapability = fileExists ? "MODIFY" : "CREATE";
+      else fileCapability = "READ";
+
+      // Blacklisted / path policy check
+      if (!policyEngine.isPathAllowedByPolicy(pathCheck.resolvedPath, isWrite || isDelete ? "write" : "read")) {
+        return {
+          decision: "DENY",
+          allowed: false,
+          needsApproval: false,
+          riskLevel: "CRITICAL_DENY",
+          capability: fileCapability,
+          reason: `Access to path '${targetPath}' is blocked by project security policy.`,
+        };
+      }
+
+      // Secret check in workspace mode
+      if (isSecret.isSensitive && mode === "workspace") {
+        return {
+          decision: "DENY",
+          allowed: false,
+          needsApproval: false,
+          riskLevel: "DANGEROUS",
+          capability: fileCapability,
+          reason: `Access to sensitive credential file blocked by security sandbox: ${isSecret.reason}`,
+        };
+      }
+
+      // Outside workspace in workspace mode
+      if (!pathCheck.isInside && mode === "workspace") {
+        return {
+          decision: "DENY",
+          allowed: false,
+          needsApproval: false,
+          riskLevel: "DANGEROUS",
+          capability: fileCapability,
+          reason: `Path traversal blocked: "${targetPath}" resolves outside workspace (${pathCheck.realWorkspaceRoot}). In 'workspace' mode, accessing files outside the workspace is strictly prohibited.`,
+        };
+      }
+    }
+
+    // ── 3. STEP 3: CAPABILITY LOCKS ─────────────────────────────────────────
+    let toolCap: PermissionCapability = fileCapability;
+    if (category === "SHELL_EXECUTE") toolCap = this.determineShellCapability(String(args?.command || args?.cmd || ""));
+    else if (category === "FILE_DELETE") toolCap = "DELETE";
+    else if (category === "FILE_WRITE") toolCap = fileCapability;
+    else if (category === "FILE_READ") toolCap = "READ";
+    else if (category === "NETWORK_FETCH" || category === "BROWSER_AUTOMATION") toolCap = "NETWORK";
+    else if (category === "SYSTEM_ADMIN") toolCap = "SYSTEM";
+    else if (category === "MCP_TOOL") toolCap = "EXECUTE";
+
+    // 2.5. PATH CHECK FOR SHELL EXECUTE: block absolute paths outside workspace
+    let shellPathsInsideWorkspace = true;
+    if (category === "SHELL_EXECUTE") {
+      const command = String(args?.command || args?.cmd || "").trim();
+      const analysis = classifyShellCommand(command, wsRoot, baseCwd);
+      const candidatePaths: string[] = [];
+      if (analysis.ast) {
+        for (const node of analysis.ast.nodes) {
+          for (const arg of node.args) {
+            if (arg.startsWith("/") && !arg.includes("://")) {
+              candidatePaths.push(arg);
+            }
+          }
+          for (const redir of node.redirections) {
+            if (redir.target.startsWith("/") && !redir.target.includes("://")) {
+              candidatePaths.push(redir.target);
+            }
+          }
+          for (const sub of node.subCommands) {
+            for (const arg of sub.args) {
+              if (arg.startsWith("/") && !arg.includes("://")) {
+                candidatePaths.push(arg);
+              }
+            }
+          }
+        }
+      }
+      for (const p of candidatePaths) {
+        const pathCheck = this.checkPathInsideWorkspace(p, wsRoot, baseCwd);
+        if (!pathCheck.isInside) {
+          return {
+            decision: "DENY",
+            allowed: false,
+            needsApproval: false,
+            riskLevel: "DANGEROUS",
+            capability: toolCap,
+            reason: `Path traversal blocked: "${p}" resolves outside workspace (${pathCheck.realWorkspaceRoot}). In 'workspace' mode, accessing files outside the workspace is strictly prohibited.`,
+          };
+        }
+      }
+      shellPathsInsideWorkspace = candidatePaths.length > 0;
+    }
+
+    if (mode !== "full-access" && !policyEngine.isCapabilityAllowed(toolCap)) {
+      // Allow file operations inside the workspace for shell commands with explicit workspace paths
+      if (mode === "workspace" && category === "SHELL_EXECUTE" && shellPathsInsideWorkspace && ["DELETE", "MODIFY", "CREATE"].includes(toolCap)) {
+        // Allow
+      } else if (mode === "workspace") {
+        return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "DANGEROUS", capability: toolCap, reason: `Action requires '${toolCap}' capability which is currently locked by security policy.` };
+      }
+      if (mode === "ask") {
+        return { decision: "ASK", allowed: false, needsApproval: true, riskLevel: "DANGEROUS", capability: toolCap, reason: `Action requires '${toolCap}' capability which is currently locked by security policy.` };
+      }
+    }
+
+    // ── 4. STEP 4: POLICY BLACKLIST ─────────────────────────────────────────
+    if (category === "SHELL_EXECUTE") {
+      const command = String(args?.command || args?.cmd || "").trim();
+      const blacklisted = policyEngine.isCommandBlacklisted(command);
+      if (blacklisted.isBlacklisted) {
+        return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "CRITICAL_DENY", capability: toolCap, reason: blacklisted.reason };
+      }
+    }
+
+    // ── 5. STEP 5: SHELL / CLASSIFIER RISK ──────────────────────────────────
+    let analysisRisk: RiskLevel = "SAFE_READ";
+    let analysisReason: string | undefined;
+    let analysisSuggested: string | undefined;
+
+    if (category === "SHELL_EXECUTE") {
+      const command = String(args?.command || args?.cmd || "").trim();
+      const analysis = classifyShellCommand(command, wsRoot, baseCwd);
+      analysisRisk = analysis.riskLevel;
+      analysisReason = analysis.reason;
+      analysisSuggested = analysis.suggestedAction;
+    }
+
+    // ── 6. STEP 6: POLICY WHITELIST ─────────────────────────────────────────
+    if (category === "SHELL_EXECUTE") {
+      const command = String(args?.command || args?.cmd || "").trim();
+      if (policyEngine.isCommandWhitelisted(command)) {
+        return { decision: "ALLOW", allowed: true, needsApproval: false, riskLevel: "SAFE_BUILD", capability: toolCap, matchedRule: "whitelist" };
+      }
+    }
+
+    // ── 7. STEP 7: SESSION TRUST ────────────────────────────────────────────
+    const targetKey = category === "SHELL_EXECUTE"
+      ? String(args?.command || args?.cmd || "").trim()
+      : (args?.path || args?.name || args?.url || "");
+
+    if (sessionTrust.isDeniedForSession(toolName, targetKey)) {
+      return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "DANGEROUS", capability: toolCap, reason: "Action was previously denied for this session." };
+    }
+
+    if (sessionTrust.isTrustedForSession(toolName, targetKey, mode)) {
+      return { decision: "ALLOW", allowed: true, needsApproval: false, riskLevel: analysisRisk === "DANGEROUS" ? "SAFE_BUILD" : analysisRisk, capability: toolCap };
+    }
+
+    // ── 8. STEP 8: FINAL POLICY DECISION ────────────────────────────────────
+    if (mode === "full-access") {
+      const intrinsic = this.assessIntrinsicRisk(toolName, args, category, wsRoot, baseCwd);
+      return { decision: "ALLOW", allowed: true, needsApproval: false, riskLevel: intrinsic.riskLevel, capability: intrinsic.capability };
+    }
+
+    if (mode === "ask") {
+      // In ask mode, dangerous shell, sensitive secrets, or out-of-workspace need user approval
+      if (category === "SHELL_EXECUTE" && analysisRisk === "DANGEROUS") {
+        return { decision: "ASK", allowed: false, needsApproval: true, riskLevel: "DANGEROUS", capability: toolCap, reason: analysisReason || "Command requires user confirmation.", suggestedAction: analysisSuggested };
+      }
+      if (category === "FILE_READ" || category === "FILE_WRITE" || category === "FILE_DELETE") {
+        const targetPath = args?.path || args?.root || ".";
+        const pathCheck = this.checkPathInsideWorkspace(targetPath, wsRoot, baseCwd);
+        const isSecret = isSensitiveFile(pathCheck.resolvedPath);
+        if (!pathCheck.isInside || isSecret.isSensitive) {
+          return { decision: "ASK", allowed: false, needsApproval: true, riskLevel: "DANGEROUS", capability: toolCap, reason: isSecret.isSensitive ? `Access to sensitive file: ${isSecret.reason}` : `Access outside workspace: ${pathCheck.resolvedPath}` };
+        }
+      }
+      if (category === "MCP_TOOL" && !this.isPluginTool(toolName)) {
+        return { decision: "ASK", allowed: false, needsApproval: true, riskLevel: "DANGEROUS", capability: toolCap, reason: `External MCP tool '${toolName}' requires user confirmation.` };
+      }
+      return { decision: "ALLOW", allowed: true, needsApproval: false, riskLevel: analysisRisk, capability: toolCap };
+    }
+
+    // workspace mode
+    if (category === "SHELL_EXECUTE" && analysisRisk === "DANGEROUS") {
+      return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "DANGEROUS", capability: toolCap, reason: `Blocked in 'workspace' sandbox mode: ${analysisReason || "Dangerous command"}` };
+    }
+
+    if (category === "MCP_TOOL" && !this.isPluginTool(toolName)) {
+      const isReadOnly = /^(read|list|get|inspect|search|find|view|query)/i.test(toolName);
+      if (!isReadOnly) {
+        return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "DANGEROUS", capability: toolCap, reason: `Mutating external MCP tool '${toolName}' is blocked in workspace mode.` };
+      }
+    }
+
+    return { decision: "ALLOW", allowed: true, needsApproval: false, riskLevel: analysisRisk, capability: toolCap };
+  }
+
+  assessIntrinsicRisk(
+    toolName: string,
+    args: any,
+    category: ActionCategory,
+    wsRoot?: string,
+    baseCwd?: string
+  ): { riskLevel: RiskLevel; capability: PermissionCapability } {
+    const root = wsRoot || process.cwd();
+    const cwd = baseCwd || process.cwd();
+
+    if (category === "SHELL_EXECUTE") {
+      const command = String(args?.command || args?.cmd || "").trim();
+      const analysis = classifyShellCommand(command, root, cwd);
+      const cap = this.determineShellCapability(command);
+      return { riskLevel: analysis.riskLevel, capability: cap };
+    }
+
     if (category === "FILE_READ" || category === "FILE_WRITE" || category === "FILE_DELETE") {
       const isWrite = category === "FILE_WRITE";
       const isDelete = category === "FILE_DELETE" || toolName.includes("delete") || toolName.includes("remove");
@@ -196,149 +373,28 @@ export class SecurityEngine {
         ? `.artifacts/${args?.name || ""}`
         : (args?.path || args?.root || args?.query || ".");
 
-      const pathCheck = this.checkPathInsideWorkspace(targetPath, wsRoot, baseCwd);
+      const pathCheck = this.checkPathInsideWorkspace(targetPath, root, cwd);
       const isSecret = isSensitiveFile(pathCheck.resolvedPath);
-      const fileExists = fs.existsSync(pathCheck.resolvedPath);
+      let cap: PermissionCapability = "READ";
+      if (isDelete) cap = "DELETE";
+      else if (isWrite) cap = "MODIFY";
 
-      // Determine file capability: READ vs CREATE vs MODIFY vs DELETE
-      let capability: PermissionCapability = "READ";
-      if (isDelete) {
-        capability = "DELETE";
-      } else if (isWrite) {
-        capability = fileExists ? "MODIFY" : "CREATE";
+      if (isSecret.isSensitive || !pathCheck.isInside || isDelete) {
+        return { riskLevel: "DANGEROUS", capability: cap };
       }
-
-      // Check Capability Permission for file operations
-      if (!policyEngine.isCapabilityAllowed(capability)) {
-        const capReason = `Action requires '${capability}' permission which is currently locked by policy.`;
-        if (mode === "workspace") {
-          return {
-            allowed: false,
-            needsApproval: false,
-            riskLevel: "DANGEROUS",
-            capability,
-            reason: capReason,
-          };
-        }
-        if (mode === "ask") {
-          return {
-            allowed: true,
-            needsApproval: true,
-            riskLevel: "DANGEROUS",
-            capability,
-            reason: capReason,
-          };
-        }
-      }
-
-      // Secret Protection
-      if (isSecret.isSensitive) {
-        if (mode === "workspace") {
-          return {
-            allowed: false,
-            needsApproval: false,
-            riskLevel: "DANGEROUS",
-            capability,
-            reason: `Access to sensitive file blocked by security sandbox: ${isSecret.reason}`,
-          };
-        }
-        if (mode === "ask") {
-          if (sessionTrust.isTrustedForSession(toolName, pathCheck.resolvedPath)) {
-            return { allowed: true, needsApproval: false, riskLevel: "MODERATE_WRITE", capability };
-          }
-          return {
-            allowed: true,
-            needsApproval: true,
-            riskLevel: "DANGEROUS",
-            capability,
-            reason: `Warning: Tool "${toolName}" targets sensitive secret credentials (${isSecret.reason})`,
-          };
-        }
-      }
-
-      // Path Traversal Check
-      if (!pathCheck.isInside) {
-        if (mode === "workspace") {
-          return {
-            allowed: false,
-            needsApproval: false,
-            riskLevel: "DANGEROUS",
-            capability,
-            reason: `Path traversal blocked: "${targetPath}" resolves outside workspace (${pathCheck.realWorkspaceRoot}). In 'workspace' mode, accessing files outside the workspace is strictly prohibited.`,
-          };
-        }
-        if (mode === "ask") {
-          if (sessionTrust.isTrustedForSession(toolName, pathCheck.resolvedPath)) {
-            return { allowed: true, needsApproval: false, riskLevel: "MODERATE_WRITE", capability };
-          }
-          return {
-            allowed: true,
-            needsApproval: true,
-            riskLevel: isWrite ? "DANGEROUS" : "MODERATE_WRITE",
-            capability,
-            reason: `Tool "${toolName}" accesses path outside workspace: "${pathCheck.resolvedPath}"`,
-          };
-        }
-      }
-
-      // Project File Integrity Protection (Anti-Accidental-Wipe)
-      const baseName = path.basename(pathCheck.resolvedPath).toLowerCase();
-      const isCriticalProjectFile = ["package.json", "tsconfig.json", "cargo.toml", "go.mod", "pom.xml", ".gitignore"].includes(baseName);
-      if (isWrite && isCriticalProjectFile && fileExists) {
-        const content = String(args?.content || args?.replacement || "").trim();
-        if (content.length === 0) {
-          if (mode === "workspace") {
-            return {
-              allowed: false,
-              needsApproval: false,
-              riskLevel: "DANGEROUS",
-              capability,
-              reason: `Emptying/blanking critical project configuration file "${baseName}" is blocked by security policy.`,
-            };
-          }
-          if (mode === "ask") {
-            return {
-              allowed: true,
-              needsApproval: true,
-              riskLevel: "DANGEROUS",
-              capability,
-              reason: `Warning: Tool "${toolName}" is attempting to write empty content to critical project file "${baseName}".`,
-            };
-          }
-        }
-      }
-
-      return { allowed: true, needsApproval: false, riskLevel: isWrite ? "MODERATE_WRITE" : "SAFE_READ", capability };
+      return { riskLevel: isWrite ? "MODERATE_WRITE" : "SAFE_READ", capability: cap };
     }
 
-    // 4. Web & Browser Tools
     if (category === "NETWORK_FETCH" || category === "BROWSER_AUTOMATION") {
-      const capability: PermissionCapability = "NETWORK";
-      const action = args?.action || "fetch";
-      if (mode === "ask" && (action === "click" || action === "fill" || action === "evaluate")) {
-        return {
-          allowed: true,
-          needsApproval: true,
-          riskLevel: "MODERATE_WRITE",
-          capability,
-          reason: `Browser automation action '${action}' requires user confirmation.`,
-        };
-      }
-      return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability };
+      return { riskLevel: "MODERATE_WRITE", capability: "NETWORK" };
     }
 
-    // 5. MCP Tools Evaluation
     if (category === "MCP_TOOL") {
-      const capability: PermissionCapability = "EXECUTE";
-      if (mode === "ask") {
-        if (sessionTrust.isTrustedForSession(toolName)) {
-          return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability };
-        }
-      }
-      return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability };
+      const isReadOnly = /^(read|list|get|inspect|search|find|view|query)/i.test(toolName);
+      return { riskLevel: isReadOnly ? "SAFE_READ" : "MODERATE_WRITE", capability: "EXECUTE" };
     }
 
-    return { allowed: true, needsApproval: false, riskLevel: "SAFE_READ", capability: "READ" };
+    return { riskLevel: "SAFE_READ", capability: "READ" };
   }
 
   private determineShellCapability(command: string): PermissionCapability {
@@ -355,21 +411,79 @@ export class SecurityEngine {
     if (/\b(curl|wget|ping|ssh|scp)\b/i.test(trimmed)) {
       return "NETWORK";
     }
+    // Check for dynamic execution patterns
+    if (this.isDynamicExecution(trimmed)) {
+      return "DYNAMIC_EXECUTION";
+    }
     return "EXECUTE";
   }
 
+  /**
+   * Detects dynamic execution patterns that require DYNAMIC_EXECUTION capability.
+   * These are patterns where command behavior depends on runtime expansion
+   * that static analysis cannot fully determine.
+   */
+  private isDynamicExecution(command: string): boolean {
+    // eval
+    if (/\beval\s+/.test(command)) return true;
+
+    // bash -c, sh -c, zsh -c, dash -c
+    if (/\b(bash|sh|zsh|dash)\s+-c\s+/.test(command)) return true;
+
+    // python -c, python3 -c
+    if (/\bpython3?\s+-c\s+/.test(command)) return true;
+
+    // node -e
+    if (/\bnode\s+-e\s+/.test(command)) return true;
+
+    // perl -e
+    if (/\bperl\s+-e\s+/.test(command)) return true;
+
+    // ruby -e
+    if (/\bruby\s+-e\s+/.test(command)) return true;
+
+    // env VAR=value sh -c or env VAR=value bash -c
+    if (/\benv\s+[A-Z_]+\s*=\s*.*\s+(bash|sh)\s+-c/.test(command)) return true;
+
+    // command ... (command wrapper)
+    if (/\bcommand\s+/.test(command)) return true;
+
+    // exec ... (exec wrapper)
+    if (/\bexec\s+/.test(command)) return true;
+
+    // nohup ...
+    if (/\bnohup\s+/.test(command)) return true;
+
+    // sudo, nice, timeout as wrappers
+    if (/\b(sudo|nice|timeout)\s+/.test(command)) return true;
+
+    // xargs sh -c, xargs bash -c
+    if (/\bxargs\s+.*\s+(bash|sh)\s+-c/.test(command)) return true;
+
+    // find -exec, find -execdir
+    if (/\bfind\s+.*\s+-exec(dir)?\s+/.test(command)) return true;
+
+    // find -delete
+    if (/\bfind\s+.*\s+-delete\b/.test(command)) return true;
+
+    // Variable in command position: $CMD, ${CMD}
+    if (/\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*\s+/.test(command)) return true;
+
+    return false;
+  }
+
   categorizeTool(toolName: string): ActionCategory {
-    if (toolName === "run_command" || toolName === "shell") return "SHELL_EXECUTE";
+    if (["run_command", "shell", "bash", "exec", "terminal"].includes(toolName)) return "SHELL_EXECUTE";
     if (["write_file", "edit_file", "replace_all", "apply_patch", "create_artifact", "update_artifact"].includes(toolName)) {
       return "FILE_WRITE";
     }
     if (["delete_file", "remove_file", "file_delete"].includes(toolName)) {
       return "FILE_DELETE";
     }
-    if (["read_file", "file_exists", "list_dir", "tree", "grep", "glob", "find_path", "git_status", "git_diff"].includes(toolName)) {
+    if (["read_file", "file_exists", "list_dir", "tree", "grep", "glob", "glob_search", "grep_search", "find_path", "git_status", "git_diff", "get_cwd"].includes(toolName)) {
       return "FILE_READ";
     }
-    if (["web_fetch", "audit_url"].includes(toolName)) return "NETWORK_FETCH";
+    if (["web_fetch", "audit_url", "curl", "wget", "fetch", "network"].includes(toolName)) return "NETWORK_FETCH";
     if (["browser", "browser_action"].includes(toolName)) return "BROWSER_AUTOMATION";
     return "MCP_TOOL";
   }

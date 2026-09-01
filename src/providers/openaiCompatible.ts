@@ -43,6 +43,27 @@ export function normalizeOpenAiBaseUrl(rawUrl: string): string {
   return `${clean}/v1`;
 }
 
+const DEFAULT_OPENAI_MODELS: Record<string, ModelInfo[]> = {
+  openai: [
+    { id: "gpt-4o", name: "GPT-4o", object: "model", created: Date.now(), owned_by: "openai" },
+    { id: "gpt-4o-mini", name: "GPT-4o Mini", object: "model", created: Date.now(), owned_by: "openai" },
+    { id: "o1", name: "o1", object: "model", created: Date.now(), owned_by: "openai" },
+    { id: "o3-mini", name: "o3-mini", object: "model", created: Date.now(), owned_by: "openai" },
+  ],
+  deepseek: [
+    { id: "deepseek-chat", name: "DeepSeek Chat (V3)", object: "model", created: Date.now(), owned_by: "deepseek" },
+    { id: "deepseek-reasoner", name: "DeepSeek Reasoner (R1)", object: "model", created: Date.now(), owned_by: "deepseek" },
+  ],
+  groq: [
+    { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B", object: "model", created: Date.now(), owned_by: "groq" },
+    { id: "mixtral-8x7b-32768", name: "Mixtral 8x7B", object: "model", created: Date.now(), owned_by: "groq" },
+  ],
+  openrouter: [
+    { id: "anthropic/claude-3.5-sonnet", name: "Claude 3.5 Sonnet", object: "model", created: Date.now(), owned_by: "openrouter" },
+    { id: "openai/gpt-4o", name: "GPT-4o", object: "model", created: Date.now(), owned_by: "openrouter" },
+  ],
+};
+
 export class OpenAICompatibleProvider implements Provider {
   readonly id: string;
   readonly name: string;
@@ -74,21 +95,23 @@ export class OpenAICompatibleProvider implements Provider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
+    const fallback = DEFAULT_OPENAI_MODELS[this.id.toLowerCase()] || [];
     try {
       const res = await fetch(`${this.baseUrl}/models`, {
         headers: this.getHeaders(),
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(2000),
       });
-      if (!res.ok) return [];
+      if (!res.ok) return fallback;
       const data = (await res.json()) as { data?: { id: string; object?: string; created?: number; owned_by?: string }[] };
-      return (data.data || []).map((m) => ({
+      const models = (data.data || []).map((m) => ({
         id: m.id,
         object: m.object || "model",
         created: m.created || 0,
         owned_by: m.owned_by || this.id,
       }));
+      return models.length > 0 ? models : fallback;
     } catch {
-      return [];
+      return fallback;
     }
   }
 

@@ -1,5 +1,6 @@
 import type { Command, CommandContext } from "./index";
 import { saveCliKey, deleteCliKey, listAllCliKeys } from "../lib/keys";
+import { syncProviderOnKeySave, getActiveProviderConfig } from "../providers";
 
 const KNOWN_PROVIDERS = [
   "alibaba",
@@ -54,10 +55,17 @@ export const keyCommand: Command = {
       }
 
       saveCliKey(provider, key);
+      syncProviderOnKeySave(provider, key);
+      const activeCfg = getActiveProviderConfig();
+      const activeNotice = activeCfg?.id.toLowerCase() === provider.toLowerCase()
+        ? `\n• **${activeCfg.name || provider}** is now your active provider!`
+        : "";
+
       addMessage(
         "assistant",
         `✅ **API key for \`${provider}\` saved successfully!**\n\n` +
-          `• Stored securely in \`~/.toolnetcli/cli-keys.json\` (mode 0600)\n` +
+          `• Stored securely in \`~/.toolnetcli/cli-keys.json\` (mode 0600)` +
+          activeNotice + `\n` +
           `• You can now use models under provider \`${provider}/*\` (e.g. \`alibaba/qwen-max\`, \`alibaba/qwen-2.5-coder\`).`
       );
       return;

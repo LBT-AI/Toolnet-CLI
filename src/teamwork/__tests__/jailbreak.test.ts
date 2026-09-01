@@ -102,11 +102,13 @@ describe("Unified Guardrail Bypass & Jailbreak Subsystem 2.0", () => {
   });
 
   test("7. /bypass retry and /bypass force toggle anti-refusal and execution bypass", async () => {
+    setSandboxMode("full-access");
     await dispatchCommand("/bypass retry on", mockContext);
     expect(bypassEngine.getConfig().autoEscalate).toBe(true);
 
     await dispatchCommand("/bypass force on", mockContext);
     expect(bypassEngine.getConfig().forceExecution).toBe(true);
+    setSandboxMode("workspace");
   });
 
   test("8. Sandbox full-access mode automatically reflects in getCwdInfo bypassPolicy", () => {

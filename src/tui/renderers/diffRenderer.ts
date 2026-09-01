@@ -1,5 +1,5 @@
 import { A } from "../../term";
-import { truncate } from "../layout";
+import { truncate, stripAnsi } from "../layout";
 
 export interface DiffStat {
   fileName: string;
@@ -44,22 +44,34 @@ export function renderCompactDiffSummary(diffStat: DiffStat): string {
   return `${A.bold}${diffStat.fileName}${A.reset}  ${addStr}${spacer}${delStr}`;
 }
 
-export function renderUnifiedDiffLines(diffText: string, maxLines = 30, maxColWidth = 90): string[] {
+/**
+ * Renders a clean, beautifully formatted unified diff with syntax colors
+ * for additions (+), deletions (-), hunks (@@), and file headers.
+ */
+export function renderUnifiedDiffLines(
+  diffText: string,
+  maxLines = 30,
+  maxColWidth = 90
+): string[] {
   if (!diffText.trim()) return [];
+
   const lines = diffText.trim().split("\n");
   const output: string[] = [];
-
   const limit = Math.min(lines.length, maxLines);
+
   for (let i = 0; i < limit; i++) {
-    const lineContent = truncate(lines[i], maxColWidth);
+    const rawLine = lines[i];
+    const lineContent = truncate(rawLine, maxColWidth);
     let color = A.fgSubtext + A.dim;
 
-    if (lineContent.startsWith("+") && !lineContent.startsWith("+++")) {
-      color = A.fgGreen;
-    } else if (lineContent.startsWith("-") && !lineContent.startsWith("---")) {
-      color = A.fgRed;
-    } else if (lineContent.startsWith("@@")) {
-      color = A.fgCyan;
+    if (rawLine.startsWith("+") && !rawLine.startsWith("+++")) {
+      color = A.bold + A.fgGreen;
+    } else if (rawLine.startsWith("-") && !rawLine.startsWith("---")) {
+      color = A.bold + A.fgRed;
+    } else if (rawLine.startsWith("@@")) {
+      color = A.bold + A.fgCyan;
+    } else if (rawLine.startsWith("---") || rawLine.startsWith("+++") || rawLine.startsWith("diff --git")) {
+      color = A.bold + A.fgSubtext;
     }
 
     output.push("    " + color + lineContent + A.reset);

@@ -6,6 +6,10 @@ import { renderWorkingStatus, renderInputArea, renderFooter } from "../statusRen
 import { renderConfirmationModal, renderToast } from "../modalRenderer";
 import { renderModelPickerBox } from "../modelPickerRenderer";
 import { renderKeyManagerBox } from "../keyManagerRenderer";
+import { renderSkillsPickerBox } from "../skillsPickerRenderer";
+import { renderQueueManagerBox } from "../queueManagerRenderer";
+import { renderQueuedMessagesPreview } from "../queuePreviewRenderer";
+import { renderSessionPickerBox } from "../sessionPickerRenderer";
 import { renderSuggestionsPopup } from "../suggestRenderer";
 import { stripAnsi } from "../../layout";
 
@@ -176,5 +180,120 @@ describe("TUI Renderers Unit Tests", () => {
     const stripped = stripAnsi(popup.join("\n"));
     expect(stripped).toContain("/model");
     expect(stripped).toContain("/provider");
+  });
+
+  it("renderSkillsPickerBox renders skills list and detail views", () => {
+    const listBox = renderSkillsPickerBox(80, 24, {
+      filteredSkills: [
+        {
+          id: "autocad-drafting",
+          name: "autocad-drafting",
+          description: "AutoCAD 2D/3D drafting",
+          source: "toolnet",
+          instructions: "Draft AIA standard drawings",
+          enabled: true,
+        },
+        {
+          id: "my-custom-skill",
+          name: "My Custom Skill",
+          description: "Workspace local skill",
+          source: "workspace",
+          instructions: "Custom workflow",
+          enabled: false,
+        },
+      ],
+      skillsPickerIdx: 0,
+      skillsSearchQuery: "",
+      selectedSkillDetail: null,
+    });
+    const strippedList = stripAnsi(listBox);
+    expect(strippedList).toContain("Skills (2 skills)");
+    expect(strippedList).toContain("autocad-drafting");
+    expect(strippedList).toContain("my-custom-skill");
+    expect(strippedList).toContain("workspace");
+    expect(strippedList).toContain("toolnet");
+
+    const detailBox = renderSkillsPickerBox(80, 24, {
+      filteredSkills: [],
+      skillsPickerIdx: 0,
+      skillsSearchQuery: "",
+      selectedSkillDetail: {
+        id: "autocad-drafting",
+        name: "autocad-drafting",
+        description: "AutoCAD 2D/3D drafting",
+        source: "toolnet",
+        filepath: undefined,
+        instructions: "Draft AIA standard drawings",
+        enabled: true,
+      },
+    });
+    const strippedDetail = stripAnsi(detailBox);
+    expect(strippedDetail).toContain("Skill: autocad-drafting");
+    expect(strippedDetail).toContain("Enabled");
+    expect(strippedDetail).toContain("Draft AIA standard drawings");
+  });
+
+  it("renderQueueManagerBox and renderQueuedMessagesPreview render accurately", () => {
+    const preview = renderQueuedMessagesPreview(80, [
+      { id: "1", text: "First task in queue", timestamp: Date.now() },
+      { id: "2", text: "Second task in queue", timestamp: Date.now() },
+    ]);
+    const strippedPreview = stripAnsi(preview);
+    expect(strippedPreview).toContain("2 queued messages");
+    expect(strippedPreview).toContain("First task in queue");
+    expect(strippedPreview).toContain("Second task in queue");
+
+    const queueBox = renderQueueManagerBox(80, 24, {
+      queue: [
+        { id: "1", text: "First task", timestamp: Date.now() },
+        { id: "2", text: "Second task", timestamp: Date.now() },
+      ],
+      queueIdx: 0,
+      editing: null,
+    });
+    const strippedQueueBox = stripAnsi(queueBox);
+    expect(strippedQueueBox).toContain("Queue (2 tasks)");
+    expect(strippedQueueBox).toContain("1. First task");
+    expect(strippedQueueBox).toContain("2. Second task");
+    expect(strippedQueueBox).toContain("Ctrl+↑/↓ Reorder");
+  });
+
+  it("renderSessionPickerBox renders sessions list and metadata accurately", () => {
+    const sessionBox = renderSessionPickerBox(90, 20, {
+      filteredSessions: [
+        {
+          sessionId: "sess_1234567890_abc",
+          model: "openai/gpt-4o",
+          provider: "toolnet",
+          messagesCount: 8,
+          updatedAt: new Date(Date.now() - 60000).toISOString(),
+          isCurrent: true,
+          workspace: "/root/toolnet-cli",
+        },
+        {
+          sessionId: "sess_9876543210_xyz",
+          model: "anthropic/claude-3-5-sonnet",
+          provider: "anthropic",
+          messagesCount: 3,
+          updatedAt: new Date(Date.now() - 3600000).toISOString(),
+          isCurrent: false,
+          workspace: "/root/other-project",
+        },
+      ],
+      sessionPickerIdx: 0,
+      sessionSearchQuery: "",
+      currentSessionId: "sess_1234567890_abc",
+      currentWorkspace: "/root/toolnet-cli",
+    });
+    const stripped = stripAnsi(sessionBox);
+    expect(stripped).toContain("Sessions (2 sessions)");
+    expect(stripped).toContain("sess_1234567890_abc");
+    expect(stripped).toContain("(current)");
+    expect(stripped).toContain("toolnet/openai/gpt-4o");
+    expect(stripped).toContain("8 msgs");
+    expect(stripped).toContain("sess_9876543210_xyz");
+    expect(stripped).toContain("root/other-project");
+    expect(stripped).toContain("Enter Resume");
+    expect(stripped).toContain("D Delete");
   });
 });

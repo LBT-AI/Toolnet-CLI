@@ -20,9 +20,9 @@ export type {
 } from "./types";
 
 export { OpenAICompatibleProvider, normalizeOpenAiBaseUrl } from "./openaiCompatible";
-export { ToolNetProvider, normalizeToolNetBaseUrl } from "./toolnet";
-export { AnthropicProvider, normalizeAnthropicBaseUrl } from "./anthropic";
-export { GeminiProvider, normalizeGeminiBaseUrl } from "./gemini";
+export { ToolNetProvider, normalizeToolNetBaseUrl, TOOLNET_DEFAULT_MODELS } from "./toolnet";
+export { AnthropicProvider, normalizeAnthropicBaseUrl, ANTHROPIC_DEFAULT_MODELS } from "./anthropic";
+export { GeminiProvider, normalizeGeminiBaseUrl, GEMINI_DEFAULT_MODELS } from "./gemini";
 
 export {
   loadProvidersConfig,
@@ -39,5 +39,11 @@ export {
   getActiveApiKey,
   getActiveDefaultModel,
   resolveApiKey,
+  getDefaultProviderConfig,
+  syncProviderOnKeySave,
+  autoRestoreActiveProvider,
+  onProviderSwitch,
+  notifyProviderSwitch,
+  type ProviderSwitchListener,
   PROVIDERS_CONFIG_FILE,
 } from "./registry";

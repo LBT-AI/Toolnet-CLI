@@ -29,8 +29,10 @@ export function renderSidebar(currentModel: string, startTime: number, panelWidt
   panelLines.push(A.bgSurface + A.fgCyan + A.bold + pad(" Token & Usage Metrics") + A.reset);
   panelLines.push(A.bgSurface + pad("─".repeat(panelWidth)) + A.reset);
 
-  const modelShort = truncate(currentModel, panelWidth - 8);
-  panelLines.push(A.bgSurface + pad(` Model: ${A.fgText}${modelShort}${A.reset}`) + A.reset);
+  const isModelValid = Boolean(currentModel && currentModel !== "default" && currentModel !== "none" && currentModel !== "Not selected");
+  const modelShort = truncate(isModelValid ? currentModel : "Not selected", panelWidth - 8);
+  const modelColor = isModelValid ? A.fgText : A.fgYellow;
+  panelLines.push(A.bgSurface + pad(` Model: ${modelColor}${modelShort}${A.reset}`) + A.reset);
 
   const totalTokens = usage.totalTokens || 0;
   const inTokens = usage.inputTokens || 0;

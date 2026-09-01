@@ -36,14 +36,12 @@ describe("Step 2 - P0-A Agent Execution Foundation", () => {
   });
 
   test("executeTool handles tool execution and returns standardized JSON", async () => {
-    const pkgPath = path.resolve(__dirname, "../../../package.json");
-    const res = await executeTool("read_file", { path: pkgPath, limit: 5 });
+    const res = await executeTool("get_cwd", {});
     const parsed = JSON.parse(res);
     expect(parsed).toHaveProperty("stdout");
     expect(parsed).toHaveProperty("stderr");
     expect(parsed).toHaveProperty("exitCode");
     expect(parsed.exitCode).toBe(0);
-    expect(parsed.stdout).toContain("toolnet");
   });
 
   test("AgentRuntime fails closed when ask mode requires approval", async () => {

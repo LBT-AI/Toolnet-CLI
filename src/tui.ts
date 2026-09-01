@@ -9,6 +9,6 @@
  */
 
 export { main, getInputState, setInputState, resetInputState } from "./tui/app";
-export { handleKey } from "./tui/input/inputHandler";
+export { handleKey, handlePaste } from "./tui/input/inputHandler";
 export { requestApprovalModal } from "./tui/permissions/permissionModal";
 export { executeToolBatch } from "./lib/harness/toolExecutor";

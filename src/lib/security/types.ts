@@ -28,11 +28,15 @@ export type PermissionCapability =
   | "EXECUTE"    // Run safe builds, unit tests, scripts (Auto-allowed for build/test)
   | "RESET"      // git reset --hard, git clean, restore, wiping uncommitted changes (Locked / Approval required)
   | "NETWORK"    // Web fetch, API calls, browser testing (Auto-allowed for GET/fetch)
-  | "SYSTEM";    // Sudo, system configs, process termination, hardware (Strictly Locked / Critical Deny)
+  | "SYSTEM"     // Sudo, system configs, process termination, hardware (Strictly Locked / Critical Deny)
+  | "DYNAMIC_EXECUTION"; // eval, bash -c, sh -c, python -c, node -e, interpreter inline scripts
 
-export type TrustDuration = "ONCE" | "SESSION" | "DENIED" | "ALWAYS";
+export type TrustDuration = "ONCE" | "SESSION" | "DENIED";
+
+export type PolicyDecisionType = "ALLOW" | "ASK" | "DENY";
 
 export interface PermissionResult {
+  decision?: PolicyDecisionType;
   allowed: boolean;
   needsApproval: boolean;
   riskLevel?: RiskLevel;
@@ -44,6 +48,31 @@ export interface PermissionResult {
   suggestedAction?: string;
 }
 
+export interface ToolExecutionContext {
+  cwd?: string;
+  workspaceRoot?: string;
+  sandboxMode?: SandboxMode;
+  userApproved?: boolean;
+  agentRole?: string;
+  agentDepth?: number;
+  sessionId?: string;
+}
+
+export interface ToolGatewayResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  allowed: boolean;
+  needsApproval?: boolean;
+  approvalRequired?: boolean;
+  reason?: string;
+  decision: PolicyDecisionType;
+  riskLevel?: RiskLevel;
+  capability?: PermissionCapability;
+  cached?: boolean;
+  durationMs?: number;
+}
+
 export interface CapabilityConfig {
   read?: boolean;
   create?: boolean;
@@ -53,6 +82,7 @@ export interface CapabilityConfig {
   reset?: boolean;
   network?: boolean;
   system?: boolean;
+  dynamicExecution?: boolean;
 }
 
 export interface SecurityPolicyConfig {
@@ -70,6 +100,22 @@ export interface SecurityPolicyConfig {
   auditLogging?: boolean;
 }
 
+export type SecurityAuditDecision =
+  | "ALLOW"
+  | "DENY"
+  | "ASK"
+  | "APPROVED"
+  | "USER_DENIED"
+  | "SANDBOX_BLOCK"
+  | "EXECUTION_ERROR"
+  | "ALLOWED"
+  | "APPROVED_BY_USER"
+  | "DENIED_BY_USER"
+  | "BLOCKED_BY_POLICY"
+  | "POLICY_EVALUATED"
+  | "EXECUTION_START"
+  | "EXECUTION_COMPLETE";
+
 export interface SecurityAuditEvent {
   timestamp?: number | string;
   toolName?: string;
@@ -79,12 +125,13 @@ export interface SecurityAuditEvent {
   category?: ActionCategory;
   capability?: PermissionCapability;
   mode: SandboxMode;
-  decision?: "ALLOWED" | "APPROVED_BY_USER" | "DENIED_BY_USER" | "BLOCKED_BY_POLICY";
+  decision?: SecurityAuditDecision;
   allowed?: boolean;
   cwd?: string;
   reason?: string;
   target?: string;
   userSessionId?: string;
+  correlationId?: string;
   metadata?: Record<string, unknown>;
 }
 

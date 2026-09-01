@@ -17,9 +17,13 @@ export type ExecutionMode =
 export type HarnessEventType =
   | "harness:init"
   | "agent:start"
+  | "agent:thinking"
   | "agent:stream_chunk"
-  | "agent:tool_start"
-  | "agent:tool_end"
+  | "tool:queued"
+  | "tool:approval_required"
+  | "tool:start"
+  | "tool:complete"
+  | "tool:error"
   | "agent:compact"
   | "agent:complete"
   | "agent:error"
@@ -47,7 +51,6 @@ export interface HarnessConfig {
   baseUrl?: string;
   maxTurns?: number;
   timeoutMs?: number;
-  bypassSecurity?: boolean;
 }
 
 export interface ExecutionOptions {
@@ -60,6 +63,9 @@ export interface ExecutionOptions {
   systemPrompt?: string;
   stream?: boolean;
   toolsOverride?: any[];
+  toolChoice?: "auto" | "required" | "none";
+  sandboxMode?: SandboxMode;
+  mode?: ExecutionMode;
   onChunk?: (chunk: string) => void;
   onEvent?: (event: string, data: any) => void;
 }

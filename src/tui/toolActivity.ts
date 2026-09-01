@@ -1,4 +1,5 @@
 import { printToolStart, printToolEnd } from "../lib/tool-format";
+export { mapToolToAction, StatusManager, statusManager } from "./statusService";
 
 export function formatToolStart(toolName: string, args: any): string {
   return printToolStart(toolName, args);

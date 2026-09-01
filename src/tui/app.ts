@@ -7,8 +7,12 @@ import { renderWorkingStatus, renderInputArea, renderFooter } from "./renderers/
 import { renderConfirmationModal, renderToast } from "./renderers/modalRenderer";
 import { renderModelPickerBox } from "./renderers/modelPickerRenderer";
 import { renderKeyManagerBox } from "./renderers/keyManagerRenderer";
+import { renderSkillsPickerBox } from "./renderers/skillsPickerRenderer";
+import { renderQueueManagerBox } from "./renderers/queueManagerRenderer";
+import { renderQueuedMessagesPreview } from "./renderers/queuePreviewRenderer";
+import { renderSessionPickerBox } from "./renderers/sessionPickerRenderer";
 import { renderSuggestionsPopup } from "./renderers/suggestRenderer";
-import { handleKey, getSuggestions, getInputState, setInputState, resetInputState } from "./input/inputHandler";
+import { handleKey, handlePaste, getSuggestions, getInputState, setInputState, resetInputState } from "./input/inputHandler";
 import { sendMessage } from "./events/agentWiring";
 import { A, T, write, getSize } from "../term";
 import { BracketedPasteParser, ENABLE_BRACKETED_PASTE } from "../lib/bracketedPaste";
@@ -16,12 +20,14 @@ import { setupTerminalLifecycle, restoreTerminal, wrapErrorBoundary, onTerminalR
 import { initWorkspace } from "../lib/codingAgent";
 import { playSplashAnimation } from "../splash";
 import { loadConfig } from "../lib/config";
-import { parseSessionArgs, loadSession, getLastSessionId } from "../lib/sessionPersistence";
+import { parseSessionArgs, loadSession, getLastSessionId, formatExitMessage } from "../lib/sessionPersistence";
 import { providerPicker } from "../components/ProviderPicker";
 import { checkPendingRecovery, clearPendingRecovery, markCleanExit } from "../lib/crashRecovery";
 import { pluginManager } from "../lib/plugins/pluginManager";
-import { getActiveProviderConfig, getActiveProvider } from "../providers";
+import { getActiveProviderConfig, getActiveProvider, autoRestoreActiveProvider } from "../providers";
 import { onProviderSwitch } from "../commands/provider";
+import { statusManager } from "./statusService";
+import { messageQueue } from "../lib/messageQueue";
 
 setupTerminalLifecycle();
 onTerminalResize(() => {
@@ -30,29 +36,25 @@ onTerminalResize(() => {
 });
 
 onProviderSwitch((id, config) => {
-  const providerName = config?.name || id;
-  const defaultModel = config?.defaultModel || "";
+  if (!config) {
+    tuiState.providerName = "";
+    tuiState.gatewayUrl = null;
+    tuiState.currentModel = "";
+    tuiState.availableModels = [];
+    tuiState.filteredModels = [];
+    tuiState.setStatus("Provider: Not configured │ Model: Not selected");
+    tuiState.requestRender();
+    return;
+  }
+  const providerName = config.name || id;
+  const defaultModel = config.defaultModel || "";
   tuiState.providerName = providerName;
-  tuiState.gatewayUrl = config?.baseUrl || null;
-  if (defaultModel) {
-    tuiState.currentModel = defaultModel;
-  }
-  tuiState.setStatus(`Active Provider: ${providerName} │ Model: ${tuiState.currentModel || "none"}`);
+  tuiState.gatewayUrl = config.baseUrl || null;
+  tuiState.currentModel = defaultModel;
+  tuiState.availableModels = [];
+  tuiState.filteredModels = [];
+  tuiState.setStatus(`Active Provider: ${providerName} │ Model: ${tuiState.currentModel || "Not selected"}`);
   tuiState.requestRender();
-
-  const prov = getActiveProvider();
-  if (prov && typeof prov.listModels === "function") {
-    prov.listModels().then((models: any[]) => {
-      if (models && models.length > 0) {
-        tuiState.availableModels = models.map((m: any) => m.id);
-        tuiState.filteredModels = [...tuiState.availableModels];
-        if (!defaultModel && !tuiState.availableModels.includes(tuiState.currentModel)) {
-          tuiState.currentModel = tuiState.availableModels[0] || "";
-        }
-        tuiState.requestRender();
-      }
-    }).catch(() => {});
-  }
 });
 
 export function renderAll(): void {
@@ -134,7 +136,14 @@ export function renderAll(): void {
       statusText: tuiState.statusText,
       elapsedDisplay: tuiState.elapsedDisplay,
       primaryColor,
+      queuedCount: messageQueue.size(),
+      nextQueuedText: messageQueue.peek()?.text,
     }));
+
+    // 8B. Dimmed Queued Messages Preview (like Agy)
+    if (messageQueue.size() > 0) {
+      out.push(renderQueuedMessagesPreview(cols, messageQueue.getAll()));
+    }
 
     // 9. Input Area (Enter a coding task or / for commands)
     out.push(renderInputArea(cols, tuiState.inputBuffer, primaryColor));
@@ -147,7 +156,7 @@ export function renderAll(): void {
     }));
 
     // Cursor position
-    if (!tuiState.showHelp && !tuiState.showModelPicker && !tuiState.showKeyManager && !providerPicker.show) {
+    if (!tuiState.showHelp && !tuiState.showModelPicker && !tuiState.showKeyManager && !tuiState.showSkillsPicker && !tuiState.showQueueManager && !tuiState.showSessionPicker && !providerPicker.show) {
       out.push(T.goto(layout.cursorRow, layout.cursorCol) + T.show);
     } else {
       out.push(T.hide);
@@ -176,9 +185,54 @@ export function renderAll(): void {
       write(keyBox);
     }
 
+    // 12. Skills Picker Modal Popup
+    if (tuiState.showSkillsPicker) {
+      const skillsBox = renderSkillsPickerBox(cols, rows, {
+        filteredSkills: tuiState.filteredSkills,
+        skillsPickerIdx: tuiState.skillsPickerIdx,
+        skillsSearchQuery: tuiState.skillsSearchQuery,
+        selectedSkillDetail: tuiState.selectedSkillDetail,
+        isLoading: tuiState.isLoadingSkillDetail,
+      });
+      write(skillsBox);
+    }
+
+    // 13. Queue Manager Modal Popup
+    if (tuiState.showQueueManager) {
+      const queueBox = renderQueueManagerBox(cols, rows, {
+        queue: messageQueue.getAll(),
+        queueIdx: tuiState.queueManagerIdx,
+        editing: tuiState.queueManagerEditing,
+      });
+      write(queueBox);
+    }
+
+    // 14. Session Picker Modal Popup
+    if (tuiState.showSessionPicker) {
+      const sessionBox = renderSessionPickerBox(cols, rows, {
+        filteredSessions: tuiState.filteredSessions,
+        sessionPickerIdx: tuiState.sessionPickerIdx,
+        sessionSearchQuery: tuiState.sessionSearchQuery,
+        currentSessionId: tuiState.currentSessionId,
+        currentWorkspace: process.cwd(),
+      });
+      write(sessionBox);
+    }
+
     if (providerPicker.show) {
       providerPicker.render();
     }
+  }, (err: unknown) => {
+    // UI-level error recovery: close popups and update status
+    tuiState.showModelPicker = false;
+    tuiState.showKeyManager = false;
+    tuiState.showSkillsPicker = false;
+    tuiState.showQueueManager = false;
+    tuiState.showSessionPicker = false;
+    tuiState.showHelp = false;
+    if (providerPicker.show) providerPicker.show = false;
+    tuiState.setStatus(`⚠️ UI recovered from render glitch (${err instanceof Error ? err.message : String(err)})`);
+    tuiState.showToast(`⚠️ UI recovered: ${err instanceof Error ? err.message : String(err)}`, 3000);
   });
 }
 
@@ -193,10 +247,16 @@ export function openKeyManager(): void {
 }
 
 function exitApp(): void {
-  if (tuiState.spinnerTimer) clearInterval(tuiState.spinnerTimer);
+  statusManager.stop();
+  const hasContent = (tuiState.messages && tuiState.messages.length > 0) || messageQueue.size() > 0;
+  const sessionId = tuiState.currentSessionId;
+  if (hasContent && sessionId) {
+    tuiState.saveCurrentSession();
+  }
   markCleanExit();
   restoreTerminal();
-  process.stdout.write("Goodbye!\r\n");
+  const msg = formatExitMessage(sessionId, hasContent);
+  process.stdout.write(msg.replace(/\n/g, "\r\n"));
   process.exit(0);
 }
 
@@ -214,11 +274,14 @@ export async function main(): Promise<void> {
   if (pendingRecovery && pendingRecovery.lastUserGoal) {
     tuiState.setStatus(`Recovered session from previous unexpected exit (${pendingRecovery.sessionId})`);
     tuiState.currentSessionId = pendingRecovery.sessionId;
-    if (pendingRecovery.model) tuiState.currentModel = pendingRecovery.model;
+    if (pendingRecovery.model && pendingRecovery.model !== "openai/gpt-4o" && pendingRecovery.model !== "none" && pendingRecovery.model !== "default") {
+      tuiState.currentModel = pendingRecovery.model;
+    }
     if (pendingRecovery.agentMode) tuiState.agentMode = pendingRecovery.agentMode;
   }
 
   // Resolve provider configuration from app config and provider registry
+  autoRestoreActiveProvider();
   const providerConfig = getActiveProviderConfig();
   if (providerConfig) {
     tuiState.gatewayUrl = providerConfig.baseUrl;
@@ -227,24 +290,22 @@ export async function main(): Promise<void> {
   } else {
     tuiState.gatewayUrl = null;
     tuiState.providerName = "";
+    tuiState.currentModel = "";
   }
 
-  // Load model from legacy config as fallback
+  // Load model from legacy config as fallback only if provider is configured
   try {
     const cfg = loadConfig();
-    if (cfg.defaultModel && !tuiState.currentModel) {
+    if (providerConfig && cfg.defaultModel && !tuiState.currentModel) {
       tuiState.currentModel = cfg.defaultModel;
-    }
-    if (cfg.baseUrl && !tuiState.gatewayUrl) {
-      tuiState.gatewayUrl = cfg.baseUrl;
     }
   } catch {}
 
   // Set status based on provider state
   if (providerConfig) {
-    tuiState.setStatus(`Provider: ${providerConfig.name} | Model: ${tuiState.currentModel || "none"}`);
+    tuiState.setStatus(`Provider: ${providerConfig.name} │ Model: ${tuiState.currentModel || "Not selected"}`);
   } else {
-    tuiState.setStatus("No provider configured — use /provider add to set one up");
+    tuiState.setStatus("Provider: Not configured │ Model: Not selected");
   }
 
   if (!process.argv.includes("--no-splash")) {
@@ -259,6 +320,9 @@ export async function main(): Promise<void> {
       tuiState.messages = loaded.messages as any;
       if (loaded.metadata?.model) tuiState.currentModel = loaded.metadata.model;
       if (loaded.metadata?.agentMode) tuiState.agentMode = loaded.metadata.agentMode;
+      if (loaded.metadata?.queuedMessages && Array.isArray(loaded.metadata.queuedMessages)) {
+        messageQueue.restore(loaded.metadata.queuedMessages);
+      }
       tuiState.setStatus(`Loaded session: ${tuiState.currentSessionId}`);
     } else {
       tuiState.currentSessionId = requestedSessionId;
@@ -273,6 +337,9 @@ export async function main(): Promise<void> {
         tuiState.messages = loaded.messages as any;
         if (loaded.metadata?.model) tuiState.currentModel = loaded.metadata.model;
         if (loaded.metadata?.agentMode) tuiState.agentMode = loaded.metadata.agentMode;
+        if (loaded.metadata?.queuedMessages && Array.isArray(loaded.metadata.queuedMessages)) {
+          messageQueue.restore(loaded.metadata.queuedMessages);
+        }
         tuiState.setStatus(`Resumed session: ${tuiState.currentSessionId}`);
       }
     }
@@ -294,39 +361,34 @@ export async function main(): Promise<void> {
     const chunks = pasteParser.parse(data);
     for (const chunk of chunks) {
       if (chunk.type === "paste") {
-        // Multi-line paste into buffer without auto-submitting
-        const currentBuf = tuiState.inputBuffer;
-        const cur = tuiState.cursorPos;
-        const newBuf = currentBuf.slice(0, cur) + chunk.content + currentBuf.slice(cur);
-        setInputState(newBuf, cur + chunk.content.length);
-        tuiState.cmdSuggestIdx = 0;
-        renderAll();
-      } else {
-        const buf = Buffer.from(chunk.content);
-        let i = 0;
-        while (i < buf.length) {
-          if (buf[i] === 0x1b) {
-            if (i + 1 < buf.length && (buf[i + 1] === 0x5b || buf[i + 1] === 0x4f)) {
-              let j = i + 2;
-              while (j < buf.length && !(buf[j] >= 0x40 && buf[j] <= 0x7e)) j++;
-              handleKey(buf.slice(i, j + 1), { renderAll, sendMessage, exitApp, openModelPicker });
-              i = j + 1;
-            } else if (i + 1 < buf.length) {
-              handleKey(buf.slice(i, i + 2), { renderAll, sendMessage, exitApp, openModelPicker });
-              i += 2;
-            } else {
-              handleKey(buf.slice(i, i + 1), { renderAll, sendMessage, exitApp, openModelPicker });
-              i++;
-            }
+        handlePaste(chunk.content, { renderAll, sendMessage, exitApp, openModelPicker });
+        continue;
+      }
+
+      const buf = Buffer.from(chunk.content);
+      let i = 0;
+      while (i < buf.length) {
+        if (buf[i] === 0x1b) {
+          if (i + 1 < buf.length && (buf[i + 1] === 0x5b || buf[i + 1] === 0x4f)) {
+            let j = i + 2;
+            while (j < buf.length && !(buf[j] >= 0x40 && buf[j] <= 0x7e)) j++;
+            handleKey(buf.slice(i, j + 1), { renderAll, sendMessage, exitApp, openModelPicker });
+            i = j + 1;
+          } else if (i + 1 < buf.length) {
+            handleKey(buf.slice(i, i + 2), { renderAll, sendMessage, exitApp, openModelPicker });
+            i += 2;
           } else {
-            const b = buf[i];
-            let len = 1;
-            if ((b & 0xe0) === 0xc0) len = 2;
-            else if ((b & 0xf0) === 0xe0) len = 3;
-            else if ((b & 0xf8) === 0xf0) len = 4;
-            handleKey(buf.slice(i, i + len), { renderAll, sendMessage, exitApp, openModelPicker });
-            i += len;
+            handleKey(buf.slice(i, i + 1), { renderAll, sendMessage, exitApp, openModelPicker });
+            i++;
           }
+        } else {
+          const b = buf[i];
+          let len = 1;
+          if ((b & 0xe0) === 0xc0) len = 2;
+          else if ((b & 0xf0) === 0xe0) len = 3;
+          else if ((b & 0xf8) === 0xf0) len = 4;
+          handleKey(buf.slice(i, i + len), { renderAll, sendMessage, exitApp, openModelPicker });
+          i += len;
         }
       }
     }
@@ -339,4 +401,4 @@ export async function main(): Promise<void> {
   process.on("SIGTERM", exitApp);
 }
 
-export { getInputState, setInputState, resetInputState };
+export { getInputState, setInputState, resetInputState, handlePaste };

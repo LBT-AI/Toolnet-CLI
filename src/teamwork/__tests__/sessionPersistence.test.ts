@@ -65,7 +65,7 @@ describe("Session Persistence Tests", () => {
     expect(data.messages[0]).toEqual({ role: "user", content: "Hello AI" });
     expect(data.messages[1].tool_calls).toEqual([{ id: "tc_1", type: "function", function: { name: "search", arguments: "{}" } }]);
     expect(data.messages[2]).toEqual({ role: "tool", tool_call_id: "tc_1", name: "search", content: "Result data" });
-    expect(data.metadata).toEqual(metadata);
+    expect(data.metadata).toMatchObject(metadata);
   });
 
   test("loadSession loads an existing session and handles non-existent session", () => {

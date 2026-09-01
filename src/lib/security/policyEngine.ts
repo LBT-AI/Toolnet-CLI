@@ -11,7 +11,42 @@ const DEFAULT_CAPABILITIES: Required<CapabilityConfig> = {
   reset: false,    // Locked: git reset/clean requires explicit confirmation
   network: true,   // Auto-allow web fetch & docs lookup
   system: false,   // Locked: OS admin & system tampering blocked
+  dynamicExecution: false, // Locked: eval, interpreter inline execution requires explicit confirmation
 };
+
+const MAX_REGEX_LENGTH = 200;
+const SUSPICIOUS_REDOS_PATTERNS = [
+  /\([^)]*(\+|\*)\)[+*]/,      // Nested quantifiers like (a+)+ or (a*)*
+  /\([^)]*(\+|\*)\)\{/,        // Nested range like (a+){2,}
+  /([a-zA-Z0-9_\-\s]+)\+\1\+/, // Overlapping plus repetition
+];
+
+export function compileSafeRegex(pattern: string): RegExp | null {
+  if (!pattern || typeof pattern !== "string") return null;
+  if (pattern.length > MAX_REGEX_LENGTH) return null;
+
+  for (const sus of SUSPICIOUS_REDOS_PATTERNS) {
+    if (sus.test(pattern)) return null;
+  }
+
+  try {
+    return new RegExp(pattern);
+  } catch {
+    return null;
+  }
+}
+
+export function isSubpathOrEqual(parentPath: string, childPath: string): boolean {
+  const normParent = path.resolve(parentPath);
+  const normChild = path.resolve(childPath);
+  let realParent = normParent;
+  let realChild = normChild;
+  try { realParent = fs.realpathSync(normParent); } catch {}
+  try { realChild = fs.realpathSync(normChild); } catch {}
+
+  const rel = path.relative(realParent, realChild);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
 
 export class PolicyEngine {
   private workspacePolicy: SecurityPolicyConfig | null = null;
@@ -45,29 +80,31 @@ export class PolicyEngine {
     return null;
   }
 
-  isCapabilityAllowed(capability: PermissionCapability): boolean {
-    if (!this.loaded) this.reload();
+   isCapabilityAllowed(capability: PermissionCapability): boolean {
+     if (!this.loaded) this.reload();
 
-    const key = capability.toLowerCase() as keyof CapabilityConfig;
+     const key = capability.toLowerCase() as string;
+     const normalizedKey = key === "dynamic_execution" ? "dynamicExecution" : (key as keyof CapabilityConfig);
 
-    // 1. Check in-memory dynamic override (session)
-    if (this.dynamicCapabilities[key] !== undefined) {
-      return Boolean(this.dynamicCapabilities[key]);
-    }
+     // 1. Check in-memory dynamic override (session)
+     if (this.dynamicCapabilities[normalizedKey] !== undefined) {
+       return Boolean(this.dynamicCapabilities[normalizedKey]);
+     }
 
-    // 2. Check project policy file (.toolnet/permissions.json)
-    if (this.workspacePolicy?.capabilities && this.workspacePolicy.capabilities[key] !== undefined) {
-      return Boolean(this.workspacePolicy.capabilities[key]);
-    }
+     // 2. Check project policy file (.toolnet/permissions.json)
+     if (this.workspacePolicy?.capabilities && this.workspacePolicy.capabilities[normalizedKey] !== undefined) {
+       return Boolean(this.workspacePolicy.capabilities[normalizedKey]);
+     }
 
-    // 3. Fallback to safe built-in default
-    return DEFAULT_CAPABILITIES[key];
-  }
+     // 3. Fallback to safe built-in default
+     return DEFAULT_CAPABILITIES[normalizedKey];
+   }
 
-  setCapability(capability: PermissionCapability, allowed: boolean) {
-    const key = capability.toLowerCase() as keyof CapabilityConfig;
-    this.dynamicCapabilities[key] = allowed;
-  }
+   setCapability(capability: PermissionCapability, allowed: boolean) {
+     const key = capability.toLowerCase() as string;
+     const normalizedKey = key === "dynamic_execution" ? "dynamicExecution" : (key as keyof CapabilityConfig);
+     this.dynamicCapabilities[normalizedKey] = allowed;
+   }
 
   getAllCapabilities(): Record<PermissionCapability, boolean> {
     return {
@@ -79,6 +116,7 @@ export class PolicyEngine {
       RESET: this.isCapabilityAllowed("RESET"),
       NETWORK: this.isCapabilityAllowed("NETWORK"),
       SYSTEM: this.isCapabilityAllowed("SYSTEM"),
+      DYNAMIC_EXECUTION: this.isCapabilityAllowed("DYNAMIC_EXECUTION"),
     };
   }
 
@@ -89,13 +127,12 @@ export class PolicyEngine {
 
     const trimmed = command.trim();
     for (const item of policy.allowedCommands) {
+      if (!item) continue;
       if (item === trimmed || (item.endsWith("*") && trimmed.startsWith(item.slice(0, -1)))) {
         return true;
       }
-      try {
-        const regex = new RegExp(item);
-        if (regex.test(trimmed)) return true;
-      } catch {}
+      const regex = compileSafeRegex(item);
+      if (regex && regex.test(trimmed)) return true;
     }
     return false;
   }
@@ -109,15 +146,14 @@ export class PolicyEngine {
 
     const trimmed = command.trim();
     for (const item of policy.blockedCommands) {
+      if (!item) continue;
       if (item === trimmed || (item.endsWith("*") && trimmed.startsWith(item.slice(0, -1)))) {
         return { isBlacklisted: true, reason: `Command matches blocked policy rule: "${item}"` };
       }
-      try {
-        const regex = new RegExp(item);
-        if (regex.test(trimmed)) {
-          return { isBlacklisted: true, reason: `Command matches blocked policy rule: "${item}"` };
-        }
-      } catch {}
+      const regex = compileSafeRegex(item);
+      if (regex && regex.test(trimmed)) {
+        return { isBlacklisted: true, reason: `Command matches blocked policy rule: "${item}"` };
+      }
     }
     return { isBlacklisted: false };
   }
@@ -127,19 +163,27 @@ export class PolicyEngine {
     const policy = this.workspacePolicy;
     if (!policy) return true;
 
-    const normalized = path.normalize(targetPath);
+    const absTarget = path.resolve(targetPath);
 
-    // Check blacklist first
+    // Check blacklist first with canonical subtree/exact boundary matching
     if (policy.blockedPaths && Array.isArray(policy.blockedPaths)) {
       for (const bp of policy.blockedPaths) {
-        if (normalized.includes(bp)) return false;
+        if (!bp) continue;
+        const absBp = path.resolve(bp);
+        if (isSubpathOrEqual(absBp, absTarget)) {
+          return false;
+        }
       }
     }
 
     // Check whitelist if configured
     const allowList = mode === "write" ? policy.allowedWritePaths : policy.allowedReadPaths;
     if (allowList && Array.isArray(allowList) && allowList.length > 0) {
-      return allowList.some((ap) => normalized.startsWith(path.normalize(ap)));
+      return allowList.some((ap) => {
+        if (!ap) return false;
+        const absAp = path.resolve(ap);
+        return isSubpathOrEqual(absAp, absTarget);
+      });
     }
 
     return true;

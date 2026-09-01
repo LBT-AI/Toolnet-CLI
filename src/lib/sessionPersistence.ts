@@ -32,6 +32,13 @@ export function getSessionsDir(): string {
   return path.join(os.homedir(), ".toolnetcli", "sessions");
 }
 
+export function formatExitMessage(sessionId?: string, hasContent = false): string {
+  if (hasContent && sessionId && !sessionId.startsWith("turbo-") && !sessionId.startsWith("temp-")) {
+    return `\n\x1b[32mSession saved.\x1b[0m\n\nResume with:\n\x1b[1m\x1b[36mtoolnet resume ${sessionId}\x1b[0m\n\nGoodbye!\n`;
+  }
+  return "Goodbye!\n";
+}
+
 export function saveSession(sessionId: string, messages: any[], metadata?: any): void {
   if (!sessionId) return;
   const sessionsDir = getSessionsDir();
@@ -50,18 +57,29 @@ export function saveSession(sessionId: string, messages: any[], metadata?: any):
     return item;
   });
 
+  const existing = loadSession(sessionId);
+  const now = new Date().toISOString();
+  const sessionMetadata = {
+    workspace: process.cwd(),
+    createdAt: existing?.metadata?.createdAt || now,
+    ...(existing?.metadata || {}),
+    ...(metadata || {}),
+  };
+
   const sessionData: SavedSession = {
     sessionId,
     messages: formattedMessages,
-    metadata: metadata || {},
-    updatedAt: new Date().toISOString(),
+    metadata: sessionMetadata,
+    updatedAt: now,
   };
 
   const filePath = path.join(sessionsDir, `${sessionId}.json`);
   fs.writeFileSync(filePath, JSON.stringify(sessionData, null, 2), "utf8");
 
-  const lastSessionFile = path.join(sessionsDir, "last_session.txt");
-  fs.writeFileSync(lastSessionFile, sessionId.trim(), "utf8");
+  if (!sessionId.startsWith("turbo-") && !sessionId.startsWith("temp-")) {
+    const lastSessionFile = path.join(sessionsDir, "last_session.txt");
+    fs.writeFileSync(lastSessionFile, sessionId.trim(), "utf8");
+  }
 }
 
 export function loadSession(sessionId: string): SavedSession | null {
@@ -141,9 +159,15 @@ export function parseSessionArgs(argv: string[]): { resume: boolean; sessionId?:
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--resume") {
+    if (arg === "resume") {
       resume = true;
-    } else if (arg === "--session" && i + 1 < argv.length) {
+      if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
+        sessionId = argv[i + 1];
+        i++;
+      }
+    } else if (arg === "--resume" || arg === "-r") {
+      resume = true;
+    } else if ((arg === "--session" || arg === "-s") && i + 1 < argv.length) {
       sessionId = argv[i + 1];
       i++;
     } else if (arg.startsWith("--session=")) {
@@ -158,11 +182,15 @@ export function listAllSessions(): SavedSession[] {
   const sessionsDir = getSessionsDir();
   if (!fs.existsSync(sessionsDir)) return [];
   try {
-    const files = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".json"));
+    const files = fs.readdirSync(sessionsDir).filter(
+      f => f.endsWith(".json") && !f.startsWith("turbo-") && !f.startsWith("temp-")
+    );
     const list: SavedSession[] = [];
     for (const file of files) {
       const loaded = loadSession(file);
-      if (loaded) list.push(loaded);
+      if (loaded && !loaded.sessionId.startsWith("turbo-") && !loaded.sessionId.startsWith("temp-")) {
+        list.push(loaded);
+      }
     }
     list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
     return list;

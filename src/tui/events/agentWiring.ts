@@ -11,12 +11,16 @@ import { evaluatePermission, getSandboxMode } from "../../lib/permissions";
 import { executeToolBatch, type ToolCall, type BatchRunResult } from "../../lib/harness/toolExecutor";
 import { requestApprovalModal } from "../permissions/permissionModal";
 import { dispatchCommand } from "../../commands";
-import { loadSession } from "../../lib/sessionPersistence";
+import { loadSession, formatExitMessage } from "../../lib/sessionPersistence";
 import { A } from "../../term";
-import { updateCrashToolResult } from "../../lib/crashRecovery";
+import { updateCrashToolResult, markCleanExit } from "../../lib/crashRecovery";
+import { restoreTerminal } from "../../lib/terminalLifecycle";
 import { getGlobalTracker } from "../../lib/usage";
 import { pluginManager } from "../../lib/plugins/pluginManager";
 import { getActiveProvider, getActiveApiKey, getActiveDefaultModel } from "../../providers";
+import { statusManager } from "../statusService";
+import { messageQueue } from "../../lib/messageQueue";
+import { providerPicker } from "../../components/ProviderPicker";
 
 const PLANNER_SYSTEM_PROMPT = `You are ToolNet Planner. Your goal is to analyze the user request, explore the codebase using read-only tools, and create a step-by-step plan. Do not execute the plan yourself. Use the save_plan tool to save the plan.`;
 
@@ -45,30 +49,18 @@ export async function sendMessage(text: string): Promise<void> {
     return;
   }
 
+  messageQueue.setIsProcessing(true);
+
   tuiState.messages.push({ role: "user", content: text });
   tuiState.messages.push({ role: "assistant", content: "" });
   tuiState.saveCurrentSession();
   let assistantIdx = tuiState.messages.length - 1;
 
   tuiState.scrollOffset = 0;
-  tuiState.startTime = Date.now();
-  tuiState.elapsedDisplay = "";
-  tuiState.setStatus("Thinking…");
-  tuiState.isStreaming = true;
+  statusManager.start("Thinking…");
   let isReceivingStream = false;
 
   tuiState.abortController = new AbortController();
-
-  tuiState.spinnerTimer = setInterval(() => {
-    tuiState.spinnerIdx = (tuiState.spinnerIdx + 1) % 10;
-    const elapsed = ((Date.now() - tuiState.startTime) / 1000).toFixed(1);
-    tuiState.elapsedDisplay = "  " + elapsed + "s";
-    if (!isReceivingStream) {
-      tuiState.messages[assistantIdx].content =
-        A.fgYellow + ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"][tuiState.spinnerIdx] + " " + A.fgSubtext + tuiState.statusText + A.reset;
-    }
-    tuiState.requestRender();
-  }, 100);
 
   pluginManager.triggerAgentStart({ sessionId: tuiState.currentSessionId, prompt: text });
 
@@ -235,18 +227,10 @@ export async function sendMessage(text: string): Promise<void> {
         });
 
         const runTool = async (name: string, args: any, id: string): Promise<BatchRunResult> => {
+          statusManager.updateTool(name, args);
           if (name === "save_plan") {
             const r = await handleSavePlan(args);
             return { result: r, allowed: true };
-          }
-
-          // Check if it's a plugin tool
-          if (pluginTools.some((pt) => pt.function.name === name)) {
-            const pluginRes = await pluginManager.executePluginTool(name, args, cwd);
-            if (pluginRes.error) {
-              return { result: JSON.stringify({ error: pluginRes.error }), allowed: false };
-            }
-            return { result: typeof pluginRes.result === "string" ? pluginRes.result : JSON.stringify(pluginRes.result), allowed: true };
           }
 
           const perm = evaluatePermission(name, args, getSandboxMode(), cwd);
@@ -265,7 +249,17 @@ export async function sendMessage(text: string): Promise<void> {
               return { result: JSON.stringify({ error: "User denied permission." }), allowed: false };
             }
           }
-          const result = await executeTool(name, args, { cwd, skipPermission: true });
+
+          // Check if it's a plugin tool
+          if (pluginTools.some((pt) => pt.function.name === name)) {
+            const pluginRes = await pluginManager.executePluginTool(name, args, cwd);
+            if (pluginRes.error) {
+              return { result: JSON.stringify({ error: pluginRes.error }), allowed: false };
+            }
+            return { result: typeof pluginRes.result === "string" ? pluginRes.result : JSON.stringify(pluginRes.result), allowed: true };
+          }
+
+          const result = await executeTool(name, args, { cwd });
           updateCrashToolResult(name, 0, `Executed ${name}`);
 
           if (args?.path) {
@@ -304,38 +298,46 @@ export async function sendMessage(text: string): Promise<void> {
         const finalContent = fullText || "(empty response)";
         tuiState.messages[assistantIdx] = { role: "assistant", content: finalContent };
         tuiState.saveCurrentSession();
-        tuiState.setStatus("● Ready");
         tuiState.requestRender();
       }
     }
 
     tuiState.scrollOffset = 0;
-    stopSpinner();
-    const elapsed = ((Date.now() - tuiState.startTime) / 1000).toFixed(1);
-    tuiState.setStatus(`✔ Done in ${elapsed}s`);
-    tuiState.elapsedDisplay = "";
+    statusManager.done();
   } catch (err: any) {
-    stopSpinner();
     if (err?.name === "AbortError") {
+      statusManager.cancel();
       tuiState.messages.push({ role: "assistant", content: "(cancelled)" });
     } else {
+      statusManager.failed(err?.message || String(err));
       tuiState.messages.push({ role: "assistant", content: "✖ Error: " + (err?.message || String(err)) });
+      tuiState.showToast("⚠️ " + (err?.message || String(err)), 3500);
     }
     tuiState.saveCurrentSession();
   } finally {
     tuiState.abortController = null;
     pluginManager.triggerAgentEnd({ sessionId: tuiState.currentSessionId });
+
+    if (messageQueue.size() > 0) {
+      const nextTask = messageQueue.dequeue();
+      if (nextTask) {
+        tuiState.setStatus(`Processing next queued message (${messageQueue.size()} remaining)…`);
+        tuiState.saveCurrentSession();
+        tuiState.requestRender();
+        setTimeout(() => {
+          sendMessage(nextTask.text).catch(() => {});
+        }, 50);
+        return;
+      }
+    }
+    messageQueue.setIsProcessing(false);
   }
 
   tuiState.requestRender();
 }
 
 function stopSpinner(): void {
-  if (tuiState.spinnerTimer) {
-    clearInterval(tuiState.spinnerTimer);
-    tuiState.spinnerTimer = null;
-  }
-  tuiState.isStreaming = false;
+  statusManager.stop();
 }
 
 export function buildTuiCommandContext(): any {
@@ -355,6 +357,10 @@ export function buildTuiCommandContext(): any {
     currentModel: () => tuiState.currentModel,
     openModelPicker: () => tuiState.openModelPicker(),
     openKeyManager: () => tuiState.openKeyManager(),
+    openProviderPicker: () => providerPicker.open((s) => tuiState.setStatus(s), () => tuiState.requestRender()),
+    openSkillsPicker: (initialSkillName?: string) => tuiState.openSkillsPicker(initialSkillName),
+    openQueueManager: () => tuiState.openQueueManager(),
+    openSessionPicker: () => tuiState.openSessionPicker(),
     setBypassMode: (enabled: boolean, level?: string) => {
       tuiState.bypassMode = enabled;
       if (level) tuiState.bypassLevel = level as any;
@@ -374,6 +380,9 @@ export function buildTuiCommandContext(): any {
       tuiState.messages = loaded.messages as any;
       if (loaded.metadata?.model) tuiState.currentModel = loaded.metadata.model;
       if (loaded.metadata?.agentMode) tuiState.agentMode = loaded.metadata.agentMode;
+      if (loaded.metadata?.queuedMessages && Array.isArray(loaded.metadata.queuedMessages)) {
+        messageQueue.restore(loaded.metadata.queuedMessages);
+      }
       tuiState.saveCurrentSession();
       tuiState.setStatus(`Session: ${tuiState.currentSessionId}`);
       return true;
@@ -390,101 +399,163 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
   const name = parts[0].toLowerCase();
   const ctx = buildTuiCommandContext();
 
-  switch (name) {
-    case "/exit":
-    case "/quit":
-      process.stdout.write("Goodbye!\r\n");
-      process.exit(0);
-      break;
-
-    case "/model":
-    case "/models":
-    case "/m": {
-      const modelArg = parts.slice(1).join(" ").trim();
-      if (modelArg && modelArg !== "--help") {
-        tuiState.currentModel = modelArg;
-        tuiState.setStatus("Model: " + modelArg);
-        tuiState.showToast("Model switched to " + modelArg);
-        tuiState.messages.push({ role: "assistant", content: `Model set to: ${modelArg}` });
-      } else if (modelArg === "--help") {
-        tuiState.messages.push({
-          role: "assistant",
-          content: "/model — Model Selection\n\n  /model               Open model picker\n  /model <model-id>    Select model\n  /model --help        Show this help\n\nCurrent: " + (tuiState.currentModel || "none"),
-        });
-      } else {
-        await tuiState.openModelPicker();
+  try {
+    switch (name) {
+      case "/exit":
+      case "/quit": {
+        const hasContent = (tuiState.messages && tuiState.messages.length > 0) || messageQueue.size() > 0;
+        const sessionId = tuiState.currentSessionId;
+        if (hasContent && sessionId) {
+          tuiState.saveCurrentSession();
+        }
+        markCleanExit();
+        restoreTerminal();
+        const msg = formatExitMessage(sessionId, hasContent);
+        process.stdout.write(msg.replace(/\n/g, "\r\n"));
+        process.exit(0);
+        break;
       }
-      break;
-    }
 
-    case "/help":
-    case "/?":
-      await dispatchCommand("/help", ctx);
-      tuiState.showHelp = !tuiState.showHelp;
-      break;
-
-    case "/clear":
-      tuiState.messages = [];
-      tuiState.saveCurrentSession();
-      tuiState.showToast("Chat history cleared");
-      tuiState.setStatus("Chat cleared");
-      break;
-
-    case "/agent": {
-      tuiState.agentMode = tuiState.agentMode === "Build" ? "Plan" : "Build";
-      const modeName = tuiState.agentMode === "Plan" ? "Planner" : "Builder";
-      tuiState.showToast("Switched to " + modeName + " Mode");
-      tuiState.setStatus("Mode: " + modeName);
-      break;
-    }
-
-    case "/plan": {
-      tuiState.agentMode = "Plan";
-      tuiState.showToast("Switched to Planner Mode");
-      tuiState.setStatus("Mode: Planner");
-      tuiState.messages.push({ role: "system", content: "→ Switched to Plan Mode. Generating plan..." });
-      tuiState.requestRender();
-      setTimeout(() => sendMessage("Please create a detailed checklist for the task in .toolnet/plan.md and wait for my /approve command before executing anything."), 50);
-      return;
-    }
-
-    case "/approve": {
-      tuiState.agentMode = "Build";
-      tuiState.showToast("Plan Approved - Switched to Builder Mode");
-      tuiState.setStatus("Mode: Builder");
-      tuiState.messages.push({ role: "system", content: "→ Plan approved. Switched to execution mode." });
-      tuiState.requestRender();
-      setTimeout(() => sendMessage("I approve the plan. You may now shift into execution mode and execute the checklist."), 50);
-      return;
-    }
-
-    case "/build": {
-      tuiState.agentMode = "Build";
-      tuiState.showToast("Switched to Builder Mode");
-      tuiState.setStatus("Mode: Builder");
-      break;
-    }
-
-    case "/key":
-    case "/keys":
-    case "/apikey":
-    case "/apikeys": {
-      const rest = parts.slice(1).join(" ").trim();
-      if (!rest) {
-        tuiState.openKeyManager();
-      } else {
-        await dispatchCommand(cmd, ctx);
+      case "/model":
+      case "/models":
+      case "/m": {
+        const modelArg = parts.slice(1).join(" ").trim();
+        if (modelArg && modelArg !== "--help") {
+          tuiState.currentModel = modelArg;
+          tuiState.setStatus("Model: " + modelArg);
+          tuiState.showToast("Model switched to " + modelArg);
+          tuiState.messages.push({ role: "assistant", content: `Model set to: ${modelArg}` });
+        } else if (modelArg === "--help") {
+          tuiState.messages.push({
+            role: "assistant",
+            content: "/model — Model Selection\n\n  /model               Open model picker\n  /model <model-id>    Select model\n  /model --help        Show this help\n\nCurrent: " + (tuiState.currentModel || "none"),
+          });
+        } else {
+          await tuiState.openModelPicker();
+        }
+        break;
       }
-      break;
-    }
 
-    default: {
-      const handled = await dispatchCommand(cmd, ctx);
-      if (!handled) {
-        tuiState.messages.push({ role: "system", content: "Unknown command: " + name + "  (type /help)" });
+      case "/help":
+      case "/?":
+        await dispatchCommand("/help", ctx);
+        tuiState.showHelp = !tuiState.showHelp;
+        break;
+
+      case "/clear":
+        tuiState.messages = [];
+        tuiState.saveCurrentSession();
+        tuiState.showToast("Chat history cleared");
+        tuiState.setStatus("Chat cleared");
+        break;
+
+      case "/agent": {
+        tuiState.agentMode = tuiState.agentMode === "Build" ? "Plan" : "Build";
+        const modeName = tuiState.agentMode === "Plan" ? "Planner" : "Builder";
+        tuiState.showToast("Switched to " + modeName + " Mode");
+        tuiState.setStatus("Mode: " + modeName);
+        break;
       }
-      break;
+
+      case "/plan": {
+        tuiState.agentMode = "Plan";
+        tuiState.showToast("Switched to Planner Mode");
+        tuiState.setStatus("Mode: Planner");
+        tuiState.messages.push({ role: "system", content: "→ Switched to Plan Mode. Generating plan..." });
+        tuiState.requestRender();
+        setTimeout(() => sendMessage("Please create a detailed checklist for the task in .toolnet/plan.md and wait for my /approve command before executing anything."), 50);
+        return;
+      }
+
+      case "/approve": {
+        tuiState.agentMode = "Build";
+        tuiState.showToast("Plan Approved - Switched to Builder Mode");
+        tuiState.setStatus("Mode: Builder");
+        tuiState.messages.push({ role: "system", content: "→ Plan approved. Switched to execution mode." });
+        tuiState.requestRender();
+        setTimeout(() => sendMessage("I approve the plan. You may now shift into execution mode and execute the checklist."), 50);
+        return;
+      }
+
+      case "/build": {
+        tuiState.agentMode = "Build";
+        tuiState.showToast("Switched to Builder Mode");
+        tuiState.setStatus("Mode: Builder");
+        break;
+      }
+
+      case "/key":
+      case "/keys":
+      case "/apikey":
+      case "/apikeys": {
+        const rest = parts.slice(1).join(" ").trim();
+        if (!rest) {
+          tuiState.openKeyManager();
+        } else {
+          await dispatchCommand(cmd, ctx);
+        }
+        break;
+      }
+
+      case "/provider":
+      case "/providers": {
+        const rest = parts.slice(1).join(" ").trim();
+        if (!rest) {
+          providerPicker.open((s) => tuiState.setStatus(s), () => tuiState.requestRender());
+        } else {
+          await dispatchCommand(cmd, ctx);
+        }
+        break;
+      }
+
+      case "/skills":
+      case "/skill": {
+        const rest = parts.slice(1).join(" ").trim();
+        if (rest === "--help" || rest === "help") {
+          await dispatchCommand(cmd, ctx);
+        } else {
+          tuiState.openSkillsPicker(rest || undefined);
+        }
+        break;
+      }
+
+      case "/queue":
+      case "/q":
+      case "/tasks": {
+        const rest = parts.slice(1).join(" ").trim();
+        if (!rest) {
+          tuiState.openQueueManager();
+        } else {
+          await dispatchCommand(cmd, ctx);
+        }
+        break;
+      }
+
+      case "/session":
+      case "/sessions":
+      case "/tab": {
+        const rest = parts.slice(1).join(" ").trim();
+        if (!rest) {
+          tuiState.openSessionPicker();
+        } else {
+          await dispatchCommand(cmd, ctx);
+        }
+        break;
+      }
+
+      default: {
+        const handled = await dispatchCommand(cmd, ctx);
+        if (!handled) {
+          tuiState.messages.push({ role: "system", content: "Unknown command: " + name + "  (type /help)" });
+        }
+        break;
+      }
     }
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    tuiState.setStatus(`⚠️ Command failed: ${errMsg}`);
+    tuiState.showToast(`⚠️ Command error: ${errMsg}`, 3000);
+    tuiState.messages.push({ role: "system", content: `✖ Command error: ${errMsg}` });
   }
 
   tuiState.requestRender();
