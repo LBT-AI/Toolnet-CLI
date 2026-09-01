@@ -10,7 +10,7 @@ import { wrapErrorBoundary, restoreTerminal } from "../../lib/terminalLifecycle"
 import { MultilineInputBuffer } from "../../tui/input/multilineInput";
 import { handleKey, getInputState, setInputState, resetInputState } from "../../tui/input/inputHandler";
 import { tuiState } from "../../tui/state";
-import { initWorkspace, toolEdit, toolReplaceAll, toolWrite } from "../../lib/codingAgent";
+import { initWorkspace, setWorkspaceRoots, setCwd, toolEdit, toolReplaceAll, toolWrite } from "../../lib/codingAgent";
 import { helpCommand } from "../../commands/help";
 import { stripAnsi } from "../../tui/layout";
 
@@ -37,6 +37,8 @@ describe("CLI UX Enhancements Regression Suite", () => {
     try {
       process.chdir(originalCwd);
     } catch {}
+    setWorkspaceRoots([originalCwd]);
+    setCwd(originalCwd);
     try {
       fs.rmSync(testCwd, { recursive: true, force: true });
     } catch {}

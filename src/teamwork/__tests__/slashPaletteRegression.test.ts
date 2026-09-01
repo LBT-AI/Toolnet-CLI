@@ -5,10 +5,13 @@ import { handleKey, getInputState, setInputState, resetInputState, getSuggestion
 describe("Slash Command Palette Enter & Navigation Regression Tests", () => {
   beforeEach(() => {
     resetInputState();
+    tuiState.pendingConfirmation = null;
     tuiState.showHelp = false;
     tuiState.showModelPicker = false;
     tuiState.showKeyManager = false;
-    tuiState.keyManagerInput = null;
+    tuiState.showSkillsPicker = false;
+    tuiState.showQueueManager = false;
+    tuiState.showSessionPicker = false;
     tuiState.messages = [];
     tuiState.cmdSuggestIdx = 0;
   });

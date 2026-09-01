@@ -155,6 +155,18 @@ describe("P4.20 & P4.21 — Terminal Resize & NO_COLOR", () => {
 });
 
 describe("P4.22 — Keyboard UX & Abort", () => {
+  beforeEach(() => {
+    tuiState.pendingConfirmation = null;
+    tuiState.showHelp = false;
+    tuiState.showModelPicker = false;
+    tuiState.showKeyManager = false;
+    tuiState.showSkillsPicker = false;
+    tuiState.showQueueManager = false;
+    tuiState.showSessionPicker = false;
+    tuiState.ctrlCCount = 0;
+    tuiState.isStreaming = false;
+  });
+
   it("Ctrl+C aborts streaming session first", () => {
     tuiState.isStreaming = true;
     let aborted = false;
