@@ -2,6 +2,7 @@ import path from "node:path";
 import type { RiskLevel } from "./types";
 import { parseShellCommand, type ShellCommandNode, type ShellParseResult } from "./shellParser";
 import { isPathInsideWorkspace } from "./workspacePolicy";
+import { isSensitiveFile } from "./secretGuard";
 
 export interface CommandAnalysis {
   riskLevel: RiskLevel;
@@ -132,6 +133,21 @@ export function classifyShellCommand(
 
   // 4. Check Redirection Targets for Workspace Boundary Violation or System Files
   for (const target of ast.allRedirectTargets) {
+    // Credential directories are protected independently of the host username
+    // (/root, /home/runner, etc.); this must remain portable across CI/users.
+    const sensitiveTarget = isSensitiveFile(target);
+    if (sensitiveTarget.isSensitive) {
+      return {
+        riskLevel: "CRITICAL_DENY",
+        isDangerous: true,
+        isCritical: true,
+        category: "SENSITIVE_FILE_ACCESS",
+        reason: `Output redirection targets protected credential path: ${sensitiveTarget.reason}`,
+        suggestedAction: "Permanently blocked by security policy.",
+        ast,
+      };
+    }
+
     for (const sysPrefix of SENSITIVE_SYSTEM_PREFIXES) {
       if (target === sysPrefix || target.startsWith(sysPrefix + "/")) {
         return {
