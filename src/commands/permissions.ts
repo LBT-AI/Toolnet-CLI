@@ -2,7 +2,7 @@ import type { Command, CommandContext } from "./index";
 import { getSandboxMode, setSandboxMode, type SandboxMode } from "../lib/permissions";
 import { getSandboxStatusBadge, detectSandboxCapability } from "../lib/security/sandboxExecutor";
 import { permissionGate } from "../lib/security/permissionGate";
-import { sessionTrust } from "../lib/security/sessionTrust";
+import { SessionTrustManager } from "../lib/security/sessionTrust";
 
 export const permissionsCommand: Command = {
   name: "permissions",
@@ -38,7 +38,7 @@ export const permissionsCommand: Command = {
     const currentMode = getSandboxMode();
     const badgeInfo = getSandboxStatusBadge(currentMode, permissionGate.getNetworkMode());
     const cap = detectSandboxCapability();
-    const trusted = sessionTrust.listTrusted();
+    const trusted = new SessionTrustManager().listTrusted(ctx.getCurrentSessionId?.() || "");
 
     const lines: string[] = [
       `🛡️ **ToolNet Security Sandbox & Isolation Status**`,

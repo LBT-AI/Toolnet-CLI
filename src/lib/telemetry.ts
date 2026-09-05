@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { getToolnetTelemetryDir } from "./toolnetHome";
 import { getVersion, getPlatform } from "./version";
 import { redactOutputSecrets } from "./security/outputRedactor";
 
@@ -22,8 +23,8 @@ export interface CrashReportPayload {
 }
 
 function getTelemetryDir(): string {
-  const base = process.env.DATA_DIR || path.join(os.homedir(), ".toolnet");
-  return path.join(base, "telemetry");
+  // Phase 3: canonical home telemetry dir.
+  return getToolnetTelemetryDir();
 }
 
 function getConfigFile(): string {

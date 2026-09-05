@@ -3,15 +3,18 @@ import { auditLogger } from "./auditLogger";
 import { redactSecrets } from "./secretGuard";
 import { getSandboxMode } from "../permissions";
 import { _executeToolRaw, getToolCache } from "../agentTools";
+import { compressToolResult } from "../harness/toolOutputCompressor";
 import type { ToolExecutionContext, ToolGatewayResult, SandboxMode } from "./types";
 import { randomUUID } from "node:crypto";
 
 export class ToolGateway {
   /**
    * Universal Single Chokepoint for all tool executions across ToolNet CLI.
-   * Enforces mandatory SecurityEngine evaluation, fail-closed guard clauses,
-   * approval gating, sandbox isolation, output compression, secret redaction,
-   * and security audit logging.
+   * Layer 4 Phase 1 contract:
+   *  - SecurityEngine.evaluate is the ONLY policy decision point.
+   *  - CRITICAL_DENY can NEVER be overridden (not by userApproved, not by mode).
+   *  - ASK returns needsApproval unless context.userApproved is true.
+   *  - _executeToolRaw is the internal executor and re-gates nothing.
    */
   static async execute(
     call: { name: string; args: any; id?: string },
@@ -22,7 +25,7 @@ export class ToolGateway {
     const args = call.args || {};
     const cwd = context.cwd || process.cwd();
     const wsRoot = context.workspaceRoot || process.cwd();
-    const mode = context.sandboxMode || getSandboxMode();
+    const mode: SandboxMode = context.sandboxMode || getSandboxMode();
     const correlationId = call.id || randomUUID();
 
     // 0. POLICY_EVALUATED
@@ -38,12 +41,23 @@ export class ToolGateway {
       allowed: true,
       cwd,
       correlationId,
+      metadata: {
+        sessionId: context.sessionId,
+        agentRole: context.agentRole,
+        agentDepth: context.agentDepth,
+        source: context.source,
+      },
     });
 
-    // 1. Mandatory Security Pre-Evaluation (8-Step Order)
+    // 1. Mandatory Security Pre-Evaluation (8-Step Order) — the single decision.
     const decision = securityEngine.evaluate(name, args, mode, cwd, wsRoot, context);
 
-    if (decision.decision === "DENY" || (!decision.allowed && !decision.needsApproval)) {
+    // Guard 1: CRITICAL_DENY or hard DENY — never executable, userApproved cannot override.
+    if (
+      decision.riskLevel === "CRITICAL_DENY" ||
+      decision.decision === "DENY" ||
+      (!decision.allowed && !decision.needsApproval)
+    ) {
       const reason = decision.reason || "Blocked by security sandbox policy.";
       auditLogger.logEvent({
         timestamp: Date.now(),
@@ -73,9 +87,45 @@ export class ToolGateway {
       };
     }
 
+    // Guard 2: ASK without prior user approval — return needsApproval (fail-closed).
+    if ((decision.decision === "ASK" || decision.needsApproval) && !context.userApproved) {
+      const reason = decision.reason || `Tool ${name} requires interactive approval.`;
+      auditLogger.logEvent({
+        timestamp: Date.now(),
+        toolName: name,
+        args,
+        riskLevel: decision.riskLevel || "DANGEROUS",
+        category: decision.category,
+        capability: decision.capability,
+        mode,
+        decision: "ASK",
+        allowed: false,
+        cwd,
+        reason,
+        correlationId,
+      });
+
+      return {
+        stdout: "",
+        stderr: `Approval Required: ${reason}`,
+        exitCode: 1,
+        allowed: false,
+        needsApproval: true,
+        approvalRequired: true,
+        decision: "ASK",
+        reason,
+        riskLevel: decision.riskLevel,
+        capability: decision.capability,
+        durationMs: Date.now() - startTime,
+      };
+    }
+
     if (decision.decision === "ASK" || decision.needsApproval) {
-      if (!context.userApproved) {
-        const reason = decision.reason || `Tool ${name} requires interactive approval.`;
+      // Guard 3: userApproved=true but the action is session-denied or session-trusted
+      // already re-evaluated. If the user previously DENIED this exact action for the
+      // session, honor the denial even when userApproved=true.
+      const targetKey = securityEngine.getSessionTrustTargetKey(name, args);
+      if (targetKey && securityEngine.isSessionDenied(name, targetKey, context.sessionId)) {
         auditLogger.logEvent({
           timestamp: Date.now(),
           toolName: name,
@@ -84,22 +134,19 @@ export class ToolGateway {
           category: decision.category,
           capability: decision.capability,
           mode,
-          decision: "ASK",
+          decision: "DENIED_BY_USER",
           allowed: false,
           cwd,
-          reason,
+          reason: "Action was previously denied for this session.",
           correlationId,
         });
-
         return {
           stdout: "",
-          stderr: `Approval Required: ${reason}`,
+          stderr: "Permission Denied: Action was previously denied for this session.",
           exitCode: 1,
           allowed: false,
-          needsApproval: true,
-          approvalRequired: true,
-          decision: "ASK",
-          reason,
+          decision: "DENY",
+          reason: "Action was previously denied for this session.",
           riskLevel: decision.riskLevel,
           capability: decision.capability,
           durationMs: Date.now() - startTime,
@@ -154,10 +201,19 @@ export class ToolGateway {
       correlationId,
     });
 
-    // 4. Execution via _executeToolRaw
+    // 4. Execution via internal raw executor (no re-gating inside).
     try {
-      const rawJson = await _executeToolRaw(name, args, { cwd, workspaceRoot: wsRoot });
-      const sanitizedJson = redactSecrets(rawJson);
+      const rawJson = await _executeToolRaw(name, args, {
+        cwd,
+        workspaceRoot: wsRoot,
+        sandboxMode: mode,
+        userApproved: context.userApproved,
+        sessionId: context.sessionId,
+        agentRole: context.agentRole,
+        agentDepth: context.agentDepth,
+        source: context.source,
+      });
+      const sanitizedJson = compressToolResult(redactSecrets(rawJson), name);
       let exitCode = 0;
       try {
         const parsed = JSON.parse(rawJson);
@@ -203,7 +259,7 @@ export class ToolGateway {
       };
     } catch (err: any) {
       const errMsg = err?.message || String(err);
-      
+
       // EXECUTION_ERROR
       auditLogger.logEvent({
         timestamp: Date.now(),

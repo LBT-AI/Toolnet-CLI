@@ -7,10 +7,20 @@ import {
   closeMcpClients,
   loadLocalMcpConfig,
   spawnMcpServer,
+  getLocalMcpServers,
+  mcpTrustManager,
+  getMcpAgentTools,
 } from "../../lib/mcpRunner";
 import { getMergedAgentTools, executeTool } from "../../lib/agentTools";
 import { setSandboxMode } from "../../lib/permissions";
 
+/**
+ * Layer 4 Phase 3 updated integration flow:
+ *  - workspace mcp.json is DISCOVERED but NOT auto-spawned (untrusted);
+ *  - explicit trust (enableServer) is required before spawn;
+ *  - tools appear under canonical names mcp__<serverId>__<tool>;
+ *  - execution routes through executeTool → ToolGateway (SecurityEngine).
+ */
 describe("MCP Integration Tests", () => {
   let tempDir: string;
 
@@ -53,24 +63,48 @@ describe("MCP Integration Tests", () => {
     child.kill();
   });
 
-  test("b) Mock server tools (get_weather) are dynamically fetched via initMcpClients and appear in getMergedAgentTools()", async () => {
+  test("a2) Workspace server discovered but NOT auto-spawned while untrusted", async () => {
+    const servers = getLocalMcpServers(tempDir);
+    expect(servers.length).toBe(1);
+    expect(servers[0].sourceKind).toBe("USER_CONFIG");
+
+    const status = await initMcpClients(tempDir);
+    expect(status.connectedServers).toHaveLength(0);
+    expect(status.skippedServers.map(s => s.name)).toContain("mock-weather-server");
+    // No tools leak from an untrusted server.
+    expect(getMcpAgentTools()).toHaveLength(0);
+  });
+
+  test("b) After explicit enable, tools are fetched under canonical namespace", async () => {
+    const servers = getLocalMcpServers(tempDir);
+    const server = servers[0];
+    // Simulate the /mcp enable <name> user decision.
+    mcpTrustManager.enableServer(server.serverId, server.config, server.sourceFile);
+
     const status = await initMcpClients(tempDir);
     expect(status.connectedServers).toContain("mock-weather-server");
     expect(status.totalTools).toBeGreaterThanOrEqual(1);
     expect(status.failedServers).toHaveLength(0);
 
+    // Canonical namespaced tool name — raw name never exposed.
     const mergedTools = getMergedAgentTools();
     const weatherTool = mergedTools.find(
-      (t: any) => t.function?.name === "get_weather"
+      (t: any) => t.function?.name === `mcp__${server.serverId}__get_weather`
     );
     expect(weatherTool).toBeDefined();
-    expect(weatherTool.function.description).toContain("weather");
+    expect(weatherTool.function.description.toLowerCase()).toContain("weather");
+    // No raw-name tool leaks into the merged registry.
+    expect(mergedTools.some((t: any) => t.function?.name === "get_weather")).toBe(false);
   });
 
-  test("c) Calling executeTool('get_weather', { location: 'Hanoi' }) successfully routes to mock MCP server", async () => {
+  test("c) Calling executeTool('mcp__<id>__get_weather') routes through ToolGateway to the mock server", async () => {
+    const servers = getLocalMcpServers(tempDir);
+    const server = servers[0];
+    mcpTrustManager.enableServer(server.serverId, server.config, server.sourceFile);
     await initMcpClients(tempDir);
 
-    const rawResult = await executeTool("get_weather", { location: "Hanoi" });
+    const canonical = `mcp__${server.serverId}__get_weather`;
+    const rawResult = await executeTool(canonical, { location: "Hanoi" });
     expect(rawResult).toBeDefined();
 
     const parsedResult = JSON.parse(rawResult);
@@ -84,12 +118,16 @@ describe("MCP Integration Tests", () => {
   });
 
   test("d) Clean shutdown (closeMcpClients) terminates client and removes tools", async () => {
+    const servers = getLocalMcpServers(tempDir);
+    mcpTrustManager.enableServer(servers[0].serverId, servers[0].config, servers[0].sourceFile);
     await initMcpClients(tempDir);
+
+    const canonical = `mcp__${servers[0].serverId}__get_weather`;
     let mergedTools = getMergedAgentTools();
-    expect(mergedTools.some((t: any) => t.function?.name === "get_weather")).toBe(true);
+    expect(mergedTools.some((t: any) => t.function?.name === canonical)).toBe(true);
 
     await closeMcpClients();
     mergedTools = getMergedAgentTools();
-    expect(mergedTools.some((t: any) => t.function?.name === "get_weather")).toBe(false);
+    expect(mergedTools.some((t: any) => t.function?.name === canonical)).toBe(false);
   });
 });

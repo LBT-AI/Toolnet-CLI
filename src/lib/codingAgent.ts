@@ -3,6 +3,7 @@ import path from "node:path";
 import { pushSnapshot, commitSnapshot } from "./history";
 import { evaluatePermission, isPathInsideWorkspace, getSandboxMode } from "./permissions";
 import { applyStructuredPatch, generateDiff } from "./patchUtils";
+import { redactSecrets } from "./security/secretGuard";
 
 export interface ToolResult {
   success: boolean;
@@ -82,13 +83,24 @@ export function initWorkspace(customPath?: string, customRoots?: string[]) {
   }
 }
 
+/**
+ * DEPRECATED (Layer 4 Phase 1): kept for API compatibility only. Setting this
+ * flag NO LONGER bypasses any filesystem invariant — workspace boundary checks
+ * run regardless of its value (they were already keyed on sandboxMode).
+ */
 export function setBypassPolicy(enabled: boolean) {
   bypassPolicy = enabled;
 }
 
+/**
+ * DEPRECATED (Layer 4 Phase 1): `bypassPolicy` is no longer a second security
+ * state machine. File tool invariants (realpath + workspace boundary) are now
+ * gated ONLY by sandboxMode via SecurityEngine. This flag purely reflects the
+ * active sandbox mode for UI display and can never widen filesystem access.
+ */
 export function getCwdInfo() {
   const isFullAccess = getSandboxMode() === "full-access";
-  return { currentCwd, workspaceRoot, workspaceRoots: [...workspaceRoots], bypassPolicy: bypassPolicy || isFullAccess };
+  return { currentCwd, workspaceRoot, workspaceRoots: [...workspaceRoots], bypassPolicy: isFullAccess };
 }
 
 export function setWorkspaceRoot(newPath: string): boolean {
@@ -121,7 +133,7 @@ export function resolvePath(filePath: string): string {
 }
 
 function checkPathTraversal(filePath: string, absPath: string, isReadAction = false): { allowed: boolean; error?: string } {
-  if (bypassPolicy) return { allowed: true };
+  if (bypassPolicy && getSandboxMode() === "full-access") return { allowed: true };
   const mode = getSandboxMode();
   if (mode === "full-access") return { allowed: true };
 
@@ -437,35 +449,146 @@ export function toolWrite(filePath: string, content: string): ToolResult {
   }
 }
 
-export async function toolBash(command: string, timeoutMs = 30000): Promise<ToolResult> {
-  const { exec, spawn } = require("node:child_process");
-  const { getSandboxMode } = require("./permissions");
+/**
+ * Explicit execution context for the raw shell executor (toolBash).
+ * Provided by the ToolGateway execution layer; the executor MUST NOT fall back
+ * to module-global state when a caller supplies a context.
+ */
+export interface ShellExecContext {
+  cwd?: string;
+  workspaceRoot?: string;
+  sandboxMode?: "workspace" | "ask" | "full-access";
+  env?: Record<string, string>;
+  outputCapBytes?: number;
+}
+
+const DEFAULT_SHELL_OUTPUT_CAP = 512 * 1024; // hard byte cap per stream
+
+/**
+ * Resolve the effective cwd for a shell execution against explicit context.
+ * Guard Clauses — each rule short-circuits to a rejection.
+ * The resolved cwd is a REAL path (symlink escape resistant).
+ *
+ * Fallback chain when the caller passes NO context: explicit ctx.cwd → module
+ * workspaceRoot (legacy default) → process.cwd(). A stale module root (e.g.
+ * deleted by another test) self-heals to process.cwd() instead of failing.
+ */
+function resolveShellExecCwd(ctx: ShellExecContext): { ok: true; cwd: string } | { ok: false; error: string } {
+  const mode = ctx.sandboxMode || getSandboxMode();
+
+  const candidates: string[] = [];
+  if (ctx.cwd) candidates.push(ctx.cwd);
+  candidates.push(workspaceRoot, process.cwd());
+
+  let requested: string | null = null;
+  for (const c of candidates) {
+    if (c && fs.existsSync(c) && fs.statSync(c).isDirectory()) {
+      requested = c;
+      break;
+    }
+  }
+  if (!requested) {
+    return { ok: false, error: "cwd does not exist or is not a directory (no valid fallback available)" };
+  }
+
+  // Realpath resolve (symlink escape resistant)
+  let realCwd = requested;
+  try { realCwd = fs.realpathSync(requested); } catch {}
+
+  if (mode === "full-access") return { ok: true, cwd: realCwd };
+
+  // workspace/ask: cwd MUST be inside an allowed workspace root
+  const rootsToCheck = new Set<string>([ctx.workspaceRoot || workspaceRoot, ...workspaceRoots, process.cwd()]);
+  for (const r of rootsToCheck) {
+    let realR = r;
+    try { realR = fs.realpathSync(r); } catch { realR = path.resolve(r); }
+    const rRel = path.relative(realR, realCwd);
+    if (rRel === "" || (!rRel.startsWith("..") && !path.isAbsolute(rRel))) {
+      return { ok: true, cwd: realCwd };
+    }
+  }
+
+  return { ok: false, error: `cwd '${requested}' is outside the allowed workspace roots (sandbox: ${mode})` };
+}
+
+/**
+ * Kill a child process AND its entire process group.
+ * POSIX: the child is spawned with `detached: true` so it leads its own
+ * process group; killing -pid takes down grandchildren (sleep, daemons, etc.).
+ * Windows: falls back to `taskkill /PID <pid> /T /F`.
+ */
+function killProcessTree(childPid: number): void {
+  const { spawn } = require("node:child_process");
+  try {
+    if (process.platform === "win32") {
+      spawn("taskkill", ["/PID", String(childPid), "/T", "/F"], { stdio: "ignore", detached: true });
+      return;
+    }
+    try {
+      process.kill(-childPid, "SIGKILL");
+    } catch {
+      // Group may have already exited; best-effort single kill as fallback
+      process.kill(childPid, "SIGKILL");
+    }
+  } catch {}
+}
+
+export async function toolBash(command: string, timeoutMs = 30000, execCtx?: ShellExecContext): Promise<ToolResult> {
+  const { spawn } = require("node:child_process");
   const { buildSandboxedCommandLine } = require("./security/sandboxExecutor");
-  const { permissionGate } = require("./security/permissionGate");
+  const { scrubChildEnv } = require("./security/childEnv");
+  const { getSandboxMode } = require("./permissions");
+  const { classifyShellCommand } = require("./security/commandClassifier");
 
-  // Pre-execution permission check via PermissionGate
-  const perm = permissionGate.evaluate("bash", { command }, {
-    cwd: currentCwd,
-    workspaceRoot,
-    mode: getSandboxMode(),
-  });
-
-  if (!perm.allowed) {
+  // ── ABSOLUTE VETO FLOOR (Layer 4 Phase 1) ────────────────────────────────
+  // CRITICAL_DENY commands are permanently blocked at the executor level.
+  // This is NOT an approval gate: no sandbox mode, session trust, or
+  // userApproved flag can override it. The SecurityEngine (via ToolGateway)
+  // makes the policy decision; the executor enforces this non-negotiable floor.
+  const vetoAnalysis = classifyShellCommand(
+    command,
+    execCtx?.workspaceRoot || workspaceRoot,
+    execCtx?.cwd || currentCwd,
+  );
+  if (vetoAnalysis.riskLevel === "CRITICAL_DENY") {
+    const { auditLogger } = require("./security/auditLogger");
+    auditLogger.logEvent({
+      timestamp: Date.now(),
+      toolName: "shell",
+      args: { command },
+      riskLevel: "CRITICAL_DENY",
+      category: "SHELL_EXECUTE",
+      capability: "EXECUTE",
+      mode: execCtx?.sandboxMode || getSandboxMode(),
+      decision: "VETO",
+      allowed: false,
+      reason: vetoAnalysis.reason || "Catastrophic command blocked by executor veto floor",
+    });
     return {
       success: false,
-      error: `Permission Denied: ${perm.reason || "Blocked by security policy"}`,
-      data: `Permission Denied: ${perm.reason || "Blocked by security policy"}`,
+      error: `Permission Denied: ${vetoAnalysis.reason || "Catastrophic command blocked permanently."} (executor veto floor — not overridable)`,
+      data: `Permission Denied: ${vetoAnalysis.reason || "Catastrophic command blocked permanently."}`,
       exitCode: 1,
     };
   }
 
+  // Guard 1: resolve cwd from explicit context (never silently use module globals)
+  const ctx: ShellExecContext = execCtx || {};
+  const cwdRes = resolveShellExecCwd(ctx);
+  if (!cwdRes.ok) {
+    return { success: false, error: cwdRes.error, data: cwdRes.error, exitCode: 1 };
+  }
+  const execCwd = cwdRes.cwd;
+  const wsRoot = ctx.workspaceRoot || workspaceRoot;
+  const mode = ctx.sandboxMode || getSandboxMode();
+  const outputCap = ctx.outputCapBytes || DEFAULT_SHELL_OUTPUT_CAP;
+
   // Inject a trap to capture the final PWD after the command executes
   const wrappedCommand = `set -e\n${command}\necho "---CWD---"\npwd`;
   const sandboxed = buildSandboxedCommandLine(wrappedCommand, {
-    workspaceRoot,
-    cwd: currentCwd,
-    sandboxMode: getSandboxMode(),
-    networkMode: permissionGate.getNetworkMode(),
+    workspaceRoot: wsRoot,
+    cwd: execCwd,
+    sandboxMode: mode,
     toolName: "shell",
     isMutation: true,
   });
@@ -473,7 +596,6 @@ export async function toolBash(command: string, timeoutMs = 30000): Promise<Tool
   // Check if sandbox denied execution
   if (sandboxed.denied) {
     const { auditLogger } = require("./security/auditLogger");
-    const { getSandboxMode } = require("./permissions");
     auditLogger.logEvent({
       timestamp: Date.now(),
       toolName: "shell",
@@ -481,10 +603,10 @@ export async function toolBash(command: string, timeoutMs = 30000): Promise<Tool
       riskLevel: "DANGEROUS",
       category: "SHELL_EXECUTE",
       capability: "EXECUTE",
-      mode: getSandboxMode(),
+      mode,
       decision: "SANDBOX_BLOCK",
       allowed: false,
-      cwd: currentCwd,
+      cwd: execCwd,
       reason: sandboxed.reason || "OS sandbox unavailable; mutation blocked",
     });
     return {
@@ -495,112 +617,106 @@ export async function toolBash(command: string, timeoutMs = 30000): Promise<Tool
     };
   }
 
+  // Hardened child env: allowlist only, secrets dropped, explicit env policy-merged
+  const childEnv = scrubChildEnv(process.env, ctx.env);
+
   return new Promise((resolve) => {
+    // Spawn with detached:true so the child leads a process group we can kill as a tree.
     let child: any;
-    if (sandboxed.isOsSandboxed) {
+    try {
       child = spawn(sandboxed.executable, sandboxed.args, {
-        cwd: workspaceRoot,
-        env: process.env,
+        cwd: execCwd,
+        env: childEnv,
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
       });
-      let stdoutBuf = "";
-      let stderrBuf = "";
-      let timedOut = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGKILL");
-      }, timeoutMs);
-
-      child.stdout.on("data", (d: Buffer) => { stdoutBuf += d.toString("utf8"); });
-      child.stderr.on("data", (d: Buffer) => { stderrBuf += d.toString("utf8"); });
-
-      child.on("close", (code: number) => {
-        clearTimeout(timer);
-        let finalStdout = stdoutBuf;
-        const cwdMarkerIdx = finalStdout.lastIndexOf("---CWD---");
-        if (cwdMarkerIdx !== -1) {
-          const afterMarker = finalStdout.substring(cwdMarkerIdx + 9).trim();
-          const newCwd = afterMarker.split("\n")[0].trim();
-          if (newCwd && newCwd.startsWith("/") && fs.existsSync(newCwd)) {
-            currentCwd = newCwd;
-          }
-          finalStdout = finalStdout.substring(0, cwdMarkerIdx).trim();
-        }
-
-        const exitCode = timedOut ? 124 : (code ?? 0);
-        const { data: stdoutData, truncated: stdoutTrunc } = truncateOutput(finalStdout);
-        const { data: stderrData, truncated: stderrTrunc } = truncateOutput(stderrBuf);
-
-        if (exitCode !== 0 || timedOut) {
-          const combined = [stderrData, stdoutData].filter(Boolean).join("\n").trim();
-          resolve({
-            success: false,
-            error: combined || (timedOut ? "Command timed out" : `Exited with code ${exitCode}`),
-            data: combined || (timedOut ? "Command timed out" : `Exited with code ${exitCode}`),
-            stdout: stdoutData,
-            stderr: stderrData,
-            exitCode,
-            truncated: stdoutTrunc || stderrTrunc,
-          });
-        } else {
-          const combined = [stderrData, stdoutData].filter(Boolean).join("\n").trim();
-          resolve({
-            success: true,
-            data: combined || "(no output)",
-            stdout: stdoutData,
-            stderr: stderrData,
-            exitCode: 0,
-            truncated: stdoutTrunc || stderrTrunc,
-          });
-        }
-      });
-
-      child.on("error", (err: Error) => {
-        clearTimeout(timer);
-        resolve({
-          success: false,
-          error: `Sandbox execution error: ${err.message}`,
-          data: `Sandbox execution error: ${err.message}`,
-          exitCode: 1,
-        });
-      });
-      return;
+    } catch (err: any) {
+      const msg = `Sandbox execution error: ${err?.message || String(err)}`;
+      return resolve({ success: false, error: msg, data: msg, exitCode: 1 });
     }
 
-    // Direct execution fallback
-    exec(wrappedCommand, {
-      encoding: "utf8",
-      timeout: timeoutMs,
-      maxBuffer: 10 * 1024 * 1024,
-      cwd: workspaceRoot,
-    }, (error: any, stdout: string, stderr: string) => {
-      let finalStdout = stdout || "";
+    let stdoutBuf = "";
+    let stderrBuf = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let stdoutCapped = false;
+    let stderrCapped = false;
+    let timedOut = false;
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (child.pid) killProcessTree(child.pid);
+    }, timeoutMs);
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (child.stdout) child.stdout.removeAllListeners();
+      if (child.stderr) child.stderr.removeAllListeners();
+      child.removeAllListeners();
+    };
+
+    // STREAMING output bounds: cap bytes as they arrive, never buffer unbounded.
+    const wireStream = (stream: any, isStdout: boolean) => {
+      if (!stream) return;
+      stream.on("data", (d: Buffer) => {
+        if (isStdout) {
+          if (stdoutBytes >= outputCap) { stdoutCapped = true; return; }
+          const remaining = outputCap - stdoutBytes;
+          const chunk = d.length > remaining ? d.subarray(0, remaining) : d;
+          stdoutBytes += chunk.length;
+          stdoutBuf += chunk.toString("utf8");
+          if (chunk.length < d.length) stdoutCapped = true;
+        } else {
+          if (stderrBytes >= outputCap) { stderrCapped = true; return; }
+          const remaining = outputCap - stderrBytes;
+          const chunk = d.length > remaining ? d.subarray(0, remaining) : d;
+          stderrBytes += chunk.length;
+          stderrBuf += chunk.toString("utf8");
+          if (chunk.length < d.length) stderrCapped = true;
+        }
+      });
+    };
+    wireStream(child.stdout, true);
+    wireStream(child.stderr, false);
+
+    const finish = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+
+      let finalStdout = stdoutBuf;
       const cwdMarkerIdx = finalStdout.lastIndexOf("---CWD---");
-      
       if (cwdMarkerIdx !== -1) {
         const afterMarker = finalStdout.substring(cwdMarkerIdx + 9).trim();
         const newCwd = afterMarker.split("\n")[0].trim();
-        if (newCwd && newCwd.startsWith("/")) {
-          if (fs.existsSync(newCwd)) {
-            currentCwd = newCwd;
-          }
+        if (newCwd && newCwd.startsWith("/") && fs.existsSync(newCwd)) {
+          // Only follow the child's cd if it stayed within workspace policy
+          const check = resolveShellExecCwd({ ...ctx, cwd: newCwd });
+          if (check.ok) currentCwd = check.cwd;
         }
         finalStdout = finalStdout.substring(0, cwdMarkerIdx).trim();
       }
 
-      const exitCode = error ? (error.code ?? 1) : 0;
+      const capMarker = "\n... [output truncated at byte cap]";
+      if (stdoutCapped) finalStdout += capMarker;
+      let finalStderr = stderrBuf;
+      if (stderrCapped) finalStderr += capMarker;
+
+      const exitCode = timedOut ? 124 : (code ?? 0);
       const { data: stdoutData, truncated: stdoutTrunc } = truncateOutput(finalStdout);
-      const { data: stderrData, truncated: stderrTrunc } = truncateOutput(stderr || "");
-      
-      if (error) {
+      const { data: stderrData, truncated: stderrTrunc } = truncateOutput(finalStderr);
+
+      if (exitCode !== 0 || timedOut) {
         const combined = [stderrData, stdoutData].filter(Boolean).join("\n").trim();
         resolve({
           success: false,
-          error: combined || error.message,
-          data: combined || error.message,
+          error: combined || (timedOut ? "Command timed out" : `Exited with code ${exitCode}`),
+          data: combined || (timedOut ? "Command timed out" : `Exited with code ${exitCode}`),
           stdout: stdoutData,
           stderr: stderrData,
           exitCode,
-          truncated: stdoutTrunc || stderrTrunc
+          truncated: stdoutTrunc || stderrTrunc || stdoutCapped || stderrCapped,
         });
       } else {
         const combined = [stderrData, stdoutData].filter(Boolean).join("\n").trim();
@@ -609,10 +725,20 @@ export async function toolBash(command: string, timeoutMs = 30000): Promise<Tool
           data: combined || "(no output)",
           stdout: stdoutData,
           stderr: stderrData,
-          exitCode,
-          truncated: stdoutTrunc || stderrTrunc
+          exitCode: 0,
+          truncated: stdoutTrunc || stderrTrunc || stdoutCapped || stderrCapped,
         });
       }
+    };
+
+    child.on("close", (code: number | null) => finish(code));
+
+    child.on("error", (err: Error) => {
+      if (settled) return;
+      const msg = `Sandbox execution error: ${err.message}`;
+      settled = true;
+      cleanup();
+      resolve({ success: false, error: msg, data: msg, exitCode: 1 });
     });
   });
 }
@@ -716,28 +842,40 @@ export function toolFileExists(filePath: string): ToolResult {
 
 export async function toolWebFetch(url: string): Promise<ToolResult & { _html?: string }> {
   try {
-    if (!url || (!url.startsWith("http://") && !url.startsWith("https://"))) {
-      return { success: false, error: `Invalid URL: '${url}'. Must start with http:// or https://` };
+    if (!url) {
+      return { success: false, error: `Invalid URL: empty` };
     }
+    const { safeFetch, SafeFetchError } = await import("./security/safeFetch");
     const startTime = Date.now();
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; ToolNet-CLI/1.0; +https://toolnet.ai)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-      },
-      signal: AbortSignal.timeout(20000),
-      redirect: "follow",
-    });
+    let res;
+    try {
+      res = await safeFetch(url, {
+        timeoutMs: 20000,
+        maxHops: 3,
+        allowLocalhost: false,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; ToolNet-CLI/1.0; +https://toolnet.ai)",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.5",
+        },
+      });
+    } catch (err: any) {
+      if (err instanceof SafeFetchError) {
+        return { success: false, error: `Web fetch error (${err.code}): ${err.message}` };
+      }
+      const msg = redactSecrets(err?.message || String(err));
+      return { success: false, error: `Web fetch error: ${msg}` };
+    }
     const responseTimeMs = Date.now() - startTime;
     const finalUrl = res.url;
+    const originalUrl = url;
 
-    if (!res.ok) {
+    if (res.status < 200 || res.status >= 300) {
       return { success: false, error: `HTTP ${res.status} ${res.statusText} (${responseTimeMs}ms)\nURL: ${finalUrl}` };
     }
 
     const contentType = res.headers.get("content-type") || "";
-    const html = await res.text();
+    const html = res.body;
     const size = html.length;
 
     // Extract title
@@ -754,8 +892,8 @@ export async function toolWebFetch(url: string): Promise<ToolResult & { _html?: 
       .substring(0, 3000);
 
     const summary = [
-      `URL: ${finalUrl}${finalUrl !== url ? ` (redirected from ${url})` : ""}`,
-      `Status: ${res.status} | Time: ${responseTimeMs}ms | Size: ${Math.round(size / 1024)}KB | HTTPS: ${url.startsWith("https://") ? "✓" : "✗"}`,
+      `URL: ${finalUrl}${finalUrl !== originalUrl ? ` (redirected from ${originalUrl} via ${res.hops} hops${res.crossOrigin ? ", cross-origin" : ""})` : ""}`,
+      `Status: ${res.status} | Time: ${responseTimeMs}ms | Size: ${Math.round(size / 1024)}KB | HTTPS: ${originalUrl.startsWith("https://") ? "✓" : "✗"}`,
       `Content-Type: ${contentType}`,
       `Title: ${title}`,
       ``,

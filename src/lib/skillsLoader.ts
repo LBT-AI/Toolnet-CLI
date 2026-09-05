@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { getToolnetHome } from "./toolnetHome";
 
 export type SkillSource = "workspace" | "global" | "toolnet";
 
@@ -35,7 +36,8 @@ export function clearSkillsMemoryCache(): void {
 }
 
 function getToolnetCliDir(): string {
-  const dir = process.env.DATA_DIR || process.env.TOOLNETCLI_CONFIG_DIR || path.join(os.homedir(), ".toolnet-cli");
+  // Phase 3: canonical home module (DATA_DIR still honored for tests).
+  const dir = process.env.DATA_DIR || getToolnetHome();
   return dir;
 }
 
@@ -255,11 +257,15 @@ export function loadWorkspaceSkills(baseDir: string = process.cwd()): SkillInfo[
 }
 
 /**
- * Loads Global local skills: ~/.toolnet-cli/skills/{name}/SKILL.md
+ * Loads Global local skills: <canonical-home>/cache/skills/{name}/SKILL.md
+ * (Phase 3: legacy ~/.toolnet-cli/skills & ~/.toolnet/skills migrate into the
+ * canonical cache dir; legacy dirs kept as read-only discovery fallbacks.)
  */
 export function loadGlobalLocalSkills(): SkillInfo[] {
   const homeDir = os.homedir();
   const globalDirs = [
+    path.join(getToolnetHome(), "cache", "skills"),
+    // Legacy read-only discovery (migration keeps these if non-empty):
     path.join(homeDir, ".toolnet-cli", "skills"),
     path.join(homeDir, ".toolnet", "skills"),
     ...(process.env.DATA_DIR ? [path.join(process.env.DATA_DIR, "skills")] : []),

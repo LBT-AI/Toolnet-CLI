@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Command, CommandContext } from "./index";
 import { getSandboxMode, setSandboxMode, SandboxMode } from "../lib/permissions";
-import { policyEngine, sessionTrust, auditLogger } from "../lib/security";
+import { policyEngine, auditLogger } from "../lib/security";
+import { SessionTrustManager } from "../lib/security/sessionTrust";
 import type { PermissionCapability } from "../lib/security/types";
 
 const ALL_CAPABILITIES: PermissionCapability[] = [
@@ -25,7 +26,7 @@ export const sandboxCommand: Command = {
     if (args.length === 0 || args[0] === "status") {
       const mode = getSandboxMode();
       const policy = policyEngine.getPolicySnapshot();
-      const trusted = sessionTrust.listTrusted();
+      const trusted = new SessionTrustManager().listTrusted(ctx.getCurrentSessionId?.() || "");
       const caps = policyEngine.getAllCapabilities();
 
       const capLines = [
@@ -158,7 +159,7 @@ export const sandboxCommand: Command = {
     }
 
     if (target === "clear") {
-      sessionTrust.clear();
+      new SessionTrustManager().clear(ctx.getCurrentSessionId?.() || "");
       ctx.addMessage("assistant", `\x1b[32m✓\x1b[0m Cleared all session-trusted permissions.`);
       return;
     }

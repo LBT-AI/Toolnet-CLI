@@ -107,6 +107,8 @@ export class AgentHarness {
       userApproved: options.userApproved,
       agentRole: options.agentRole || (this.activeMode === "SUBAGENT" ? "subagent" : undefined),
       agentDepth: options.agentDepth || (this.activeMode === "SUBAGENT" ? 1 : 0),
+      sessionId: this.config.sessionId,
+      source: this.activeMode === "SUBAGENT" ? "subagent" : this.activeMode === "TEAMWORK" ? "teamwork" : "headless",
     });
 
     if (gatewayRes.needsApproval) {
@@ -141,7 +143,8 @@ export class AgentHarness {
     if (args?.path) {
       contextEngine.recordFileAccess(
         args.path,
-        isWriteTool ? "write" : "read"
+        isWriteTool ? "write" : "read",
+        this.config.sessionId
       );
     }
 
@@ -239,7 +242,7 @@ export class AgentHarness {
       }
 
       // Prepare context via Unified Context Engine
-      const prep = contextEngine.prepareMessagesForApi(messages, { model });
+      const prep = contextEngine.prepareMessagesForApi(messages, { model, sessionId });
       accumulatedTokens = prep.budget.currentEstimatedTokens;
       this.totalTokensUsed += accumulatedTokens;
 
@@ -294,6 +297,24 @@ export class AgentHarness {
 
       const choice = chatRes.choices?.[0];
       const assistantMsg = choice?.message;
+
+      // Layer 4 — Phase 4: split token accounting. The provider's reported
+      // `usage` is the ground truth; the heuristic estimate stays in
+      // tokenBudgetState.estimatedContextTokens and is NOT added to
+      // cumulativeSessionTokens (which is a separate counter).
+      if (chatRes.usage) {
+        contextEngine.recordUsage(
+          {
+            promptTokens: chatRes.usage.prompt_tokens || chatRes.usage.input_tokens,
+            completionTokens: chatRes.usage.completion_tokens || chatRes.usage.output_tokens,
+            totalTokens: chatRes.usage.total_tokens,
+            cachedTokens: chatRes.usage.prompt_tokens_details?.cached_tokens || chatRes.usage.cache_read_input_tokens,
+            reasoningTokens: chatRes.usage.completion_tokens_details?.reasoning_tokens || chatRes.usage.reasoning_tokens,
+          },
+          sessionId
+        );
+      }
+
       if (!assistantMsg) {
         return {
           success: false,
@@ -410,7 +431,10 @@ export class AgentHarness {
           this.emitEvent("tool:queued", mode, { toolName: name, toolArgs: args, id });
           this.emitEvent("tool:start", mode, { toolName: name, toolArgs: args, id });
 
-          const res = await this.dispatchTool(name, args);
+          const res = await this.dispatchTool(name, args, {
+            agentRole: options.agentRole,
+            agentDepth: options.agentDepth ?? (this.activeMode === "SUBAGENT" ? 1 : 0),
+          });
 
           if (res.allowed) {
             this.emitEvent("tool:complete", mode, { toolName: name, toolArgs: args, result: res.result, id });
@@ -483,7 +507,7 @@ export class AgentHarness {
    */
   async run(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
     const mode = options.mode || "HEADLESS";
-    const memoryPrompt = contextEngine.getMemoryPromptSnippet();
+    const memoryPrompt = contextEngine.getMemoryPromptSnippet(this.config.sessionId);
     const toolRules = contextEngine.getToolUsageRulesSnippet();
     const permissionContext = getPermissionContextPrompt(this.config.sandboxMode || getSandboxMode());
     const baseSystemPrompt =
@@ -518,7 +542,7 @@ ${memoryPrompt}${toolRules}`;
    * Runs headless 1-turn task (equivalent to toolnet -p "...")
    */
   async runHeadless(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
-    const memoryPrompt = contextEngine.getMemoryPromptSnippet();
+    const memoryPrompt = contextEngine.getMemoryPromptSnippet(this.config.sessionId);
     const toolRules = contextEngine.getToolUsageRulesSnippet();
     const permissionContext = getPermissionContextPrompt(this.config.sandboxMode || getSandboxMode());
     const baseSystemPrompt =
@@ -568,7 +592,7 @@ Your access is strictly limited to the policy described in [RUNTIME PERMISSION C
     options: ExecutionOptions = {}
   ): Promise<HarnessResult> {
     const { getSubagentRolePrompt, getSubagentTools } = await import("../../teamwork/subagentRuntime");
-    const rolePrompt = getSubagentRolePrompt(role, task.slice(0, 50));
+    const rolePrompt = getSubagentRolePrompt(role, task.slice(0, 50), options.sessionId || this.config.sessionId);
     const tools = options.toolsOverride || getSubagentTools(role);
 
     // Subagent security inheritance: a child agent can never be granted more
@@ -596,6 +620,7 @@ Your access is strictly limited to the policy described in [RUNTIME PERMISSION C
       { ...options, toolsOverride: tools, maxTurns: options.maxTurns || 8 },
       "SUBAGENT"
     );
+    void 0; // options.agentRole/agentDepth flow into dispatchTool below
 
     if (res.success) {
       this.emitEvent("subagent:complete", "SUBAGENT", { role, task, output: res.output });

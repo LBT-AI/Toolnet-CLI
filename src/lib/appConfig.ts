@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getToolnetConfigPath, getToolnetHome } from "./toolnetHome";
 
 export const CURRENT_SCHEMA_VERSION = 2;
 
@@ -68,12 +69,12 @@ const MIGRATABLE_FIELDS = [
 ] as const;
 
 export function getConfigDir(): string {
-  if (process.env.TOOLNETCLI_CONFIG_DIR) return process.env.TOOLNETCLI_CONFIG_DIR;
-  return path.join(os.homedir(), ".toolnetcli");
+  // Phase 3: canonical home module is the single source of truth.
+  return getToolnetHome();
 }
 
 export function getAppConfigPath(): string {
-  return path.join(getConfigDir(), "config.json");
+  return getToolnetConfigPath();
 }
 
 function legacyConfigPath(): string {

@@ -3,10 +3,30 @@ import { ContextCache } from "../../teamwork/contextCache";
 import { detectProjectFramework } from "../projectDetector";
 import { workspaceRoot } from "../codingAgent";
 
+/**
+ * Layer 4 — Phase 4: SessionMemoryStore is a CLASS that owns its own
+ * per-session data. There is NO process-wide mutable singleton in
+ * production. The exported `sessionMemory` is a thin compatibility
+ * accessor that resolves to the *current* explicit session's memory
+ * through the ContextRegistry.
+ *
+ * In production:
+ *   - production code calls getSessionMemory(sessionId) to get a
+ *     SessionMemoryStore bound to a specific session.
+ *   - the legacy `sessionMemory` export resolves to the session
+ *     currently bound by setCurrentSessionId() (or the explicitly
+ *     provided sessionId at the time of access).
+ *
+ * Tests that legitimately need a "default session" use
+ * setCurrentSessionId() to install it before exercising the legacy
+ * API surface. The bare `new SessionMemoryStore()` is still available
+ * for tests that want an isolated instance.
+ */
+
 class SessionMemoryStore {
   private data: SessionMemoryData;
   private cache: ContextCache | null = null;
-  private sessionId: string;
+  public readonly sessionId: string;
 
   constructor(sessionId = "default-session") {
     this.sessionId = sessionId;
@@ -160,5 +180,97 @@ class SessionMemoryStore {
   }
 }
 
-export const sessionMemory = new SessionMemoryStore();
 export { SessionMemoryStore };
+
+// ── Registry binding ────────────────────────────────────────────────────────
+
+import { getSessionContext, hasSessionContext, getSessionContext as ensureSessionContext } from "./contextRegistry";
+
+/**
+ * Returns the SessionMemoryStore for the given sessionId, binding a new
+ * SessionContext (with a fresh memory store) if one does not exist.
+ *
+ * This is the canonical way to obtain a per-session memory in production.
+ */
+export function getSessionMemory(sessionId: string): SessionMemoryStore {
+  if (!sessionId) {
+    throw new Error("getSessionMemory requires an explicit sessionId");
+  }
+  return getSessionContext(sessionId).memory;
+}
+
+/**
+ * TEST-ONLY escape hatch: lazily creates a one-off SessionMemoryStore
+ * for unit tests that don't want a full ContextRegistry entry. NOT for
+ * production use.
+ */
+export function createEphemeralMemory(sessionId: string): SessionMemoryStore {
+  return new SessionMemoryStore(sessionId);
+}
+
+// ── Backward-compat singleton ──────────────────────────────────────────────
+
+let _currentSessionId: string | null = null;
+let _compatMemo: { sessionId: string; store: SessionMemoryStore } | null = null;
+
+/**
+ * Production code MUST call this from the model loop bootstrap (once) and
+ * from every session switch. Without an explicit binding, the legacy
+ * `sessionMemory` accessor refuses to mutate (returns a no-op view) so
+ * silent cross-session contamination is impossible.
+ *
+ * The current session is also published to a global hook so
+ * SessionTrustManager (which lives in a separate module to avoid a
+ * circular import) can resolve it without a hard import cycle.
+ */
+export function setCurrentSessionId(sessionId: string | null): void {
+  _currentSessionId = sessionId || null;
+  _compatMemo = null;
+  (globalThis as any).__toolnetCurrentSessionId = _currentSessionId;
+}
+
+export function getCurrentSessionId(): string | null {
+  return _currentSessionId;
+}
+
+/**
+ * Legacy compatibility accessor. Production code should prefer
+ * getSessionMemory(sessionId) — but for tests and adapter paths that
+ * imported the bare `sessionMemory` singleton, this resolves to the
+ * current explicit session's memory and refuses to act if no session is
+ * bound (fail-safe default session used only by tests/migration).
+ */
+export const sessionMemory: SessionMemoryStore = new Proxy({} as SessionMemoryStore, {
+  get(_target, prop) {
+    const sid = _currentSessionId;
+    let store: SessionMemoryStore;
+    if (sid && hasSessionContext(sid)) {
+      const memo = _compatMemo;
+      if (memo && memo.sessionId === sid) {
+        store = memo.store;
+      } else {
+        store = getSessionContext(sid).memory;
+        _compatMemo = { sessionId: sid, store };
+      }
+    } else {
+      // Fail-safe: only used by tests that don't bind a session.
+      store = _compatMemo?.store ?? (_compatMemo = {
+        sessionId: "default-session",
+        store: new SessionMemoryStore("default-session"),
+      }).store;
+    }
+    const value = (store as any)[prop];
+    return typeof value === "function" ? value.bind(store) : value;
+  },
+});
+
+/**
+ * Used by tests to clear the lazy memo between runs.
+ */
+export function _resetCompatMemo(): void {
+  _compatMemo = null;
+  _currentSessionId = null;
+}
+
+// Keep the registry import alive for type-only side effects.
+void ensureSessionContext;

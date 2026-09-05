@@ -32,9 +32,70 @@ describe("ToolNet Native Skills Architecture Regression Suite", () => {
   let tmpConfigDir: string;
   let tmpWorkspaceDir: string;
   let origEnv: Record<string, string | undefined>;
+  let originalFetch: typeof globalThis.fetch;
+
+  const mockedSkillInstructions = `---
+name: AutoCAD Drafting
+id: autocad-drafting
+description: Deterministic mocked AutoCAD drafting workflow
+version: 1.0.0
+tags:
+  - cad
+  - drafting
+---
+Use this workflow to produce safe, precise AutoCAD drafting instructions. Verify layers, units, dimensions, and output paths before making changes.`;
+
+  function installDeterministicSkillsMcpMock(): void {
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url !== "https://skills.toolnet.tech/mcp") {
+        return originalFetch(input, init);
+      }
+
+      let request: any = {};
+      try {
+        request = JSON.parse(String(init?.body || "{}"));
+      } catch {}
+
+      if (request.params?.name === "get_skill") {
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: { content: [{ type: "text", text: mockedSkillInstructions }] },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+
+      const skills = [
+        {
+          name: "autocad-drafting",
+          description: "Deterministic mocked AutoCAD drafting workflow",
+          version: "1.0.0",
+          category: "cad",
+          tags: ["cad", "drafting"],
+          capabilities: ["drafting"],
+        },
+        {
+          name: "dynamo-automation",
+          description: "Deterministic mocked Dynamo automation workflow",
+          version: "1.0.0",
+          category: "automation",
+          tags: ["dynamo"],
+          capabilities: ["automation"],
+        },
+      ];
+      return new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: { content: [{ type: "text", text: JSON.stringify(skills) }] },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof globalThis.fetch;
+  }
 
   beforeEach(() => {
     origEnv = { ...process.env };
+    originalFetch = globalThis.fetch;
+    installDeterministicSkillsMcpMock();
     tmpConfigDir = tmpDir();
     tmpWorkspaceDir = tmpDir();
     process.env.TOOLNETCLI_CONFIG_DIR = tmpConfigDir;
@@ -52,6 +113,7 @@ describe("ToolNet Native Skills Architecture Regression Suite", () => {
 
   afterEach(() => {
     clearSkillsMemoryCache();
+    globalThis.fetch = originalFetch;
     try {
       fs.rmSync(tmpConfigDir, { recursive: true, force: true });
       fs.rmSync(tmpWorkspaceDir, { recursive: true, force: true });

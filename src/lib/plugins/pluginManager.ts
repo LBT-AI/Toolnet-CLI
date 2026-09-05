@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
+import { getToolnetPluginsDir } from "../toolnetHome";
 import type {
   PluginManifest,
   PluginCapability,
@@ -10,13 +10,16 @@ import type {
   PluginApi,
 } from "./types";
 import { validatePluginManifest, loadPluginManifestFromDir } from "./manifest";
-import { evaluatePermission, getSandboxMode } from "../permissions";
+import { getSandboxMode } from "../permissions";
 import { securityEngine } from "../security/securityEngine";
 import { auditLogger } from "../security/auditLogger";
 
 function getPluginsDir(): string {
-  const base = process.env.DATA_DIR || path.join(os.homedir(), ".toolnet");
-  return path.join(base, "plugins");
+  // Phase 3: canonical global plugins dir (~/.toolnetcli/plugins).
+  // DATA_DIR override still respected for tests/sandboxed installs.
+  return process.env.DATA_DIR
+    ? path.join(process.env.DATA_DIR, "plugins")
+    : getToolnetPluginsDir();
 }
 
 function getRegistryFile(): string {
@@ -202,7 +205,20 @@ export class PluginManager {
     return res;
   }
 
-  async executePluginTool(toolName: string, args: any, cwd = process.cwd()): Promise<{ result?: any; error?: string }> {
+  /**
+   * Layer 4 Phase 1: plugin tool execution goes through the ToolGateway
+   * (single SecurityEngine chokepoint). The plugin capability-grant model is
+   * still enforced first; the gateway then evaluates the canonical policy
+   * decision (ALLOW/ASK/DENY) and fail-closes headless ASK requests.
+   * Callers that obtained explicit user approval may pass userApproved=true —
+   * it is forwarded to the gateway and can NEVER override CRITICAL_DENY.
+   */
+  async executePluginTool(
+    toolName: string,
+    args: any,
+    cwd = process.cwd(),
+    options: { userApproved?: boolean } = {}
+  ): Promise<{ result?: any; error?: string }> {
     const entry = this.tools.get(toolName);
     if (!entry) {
       return { error: `Plugin tool '${toolName}' not found` };
@@ -215,7 +231,7 @@ export class PluginManager {
       return { error: `Plugin '${pluginName}' is disabled or not available` };
     }
 
-    // Capability check
+    // Plugin capability check (plugin's own grant model)
     if (tool.requiredCapabilities) {
       for (const cap of tool.requiredCapabilities) {
         if (!plugin.grantedCapabilities.includes(cap)) {
@@ -224,19 +240,31 @@ export class PluginManager {
       }
     }
 
-    // Permission engine & sandbox gate
     const sandboxMode = getSandboxMode();
-    const perm = evaluatePermission(toolName, args, sandboxMode, cwd);
-    if (!perm.allowed) {
+
+    // ── Single SecurityEngine chokepoint via ToolGateway ───────────────────
+    const { ToolGateway } = await import("../security/toolGateway");
+    const gatewayRes = await ToolGateway.execute(
+      { name: toolName, args },
+      {
+        cwd,
+        sandboxMode,
+        userApproved: options.userApproved,
+        source: "plugin",
+      }
+    );
+
+    if (!gatewayRes.allowed) {
+      const reason = gatewayRes.reason || "Sandbox policy violation";
       auditLogger.logEvent({
         action: `plugin_tool:${toolName}`,
         allowed: false,
         mode: sandboxMode,
         cwd,
         args,
-        reason: perm.reason || "Blocked by sandbox policy",
+        reason,
       });
-      return { error: `Permission Denied: ${perm.reason || "Sandbox policy violation"}` };
+      return { error: `Permission Denied: ${reason}` };
     }
 
     // Isolation & Timeout wrapper

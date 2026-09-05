@@ -12,13 +12,20 @@ import {
   type SkillInfo,
 } from "../lib/skillsLoader";
 import { messageQueue } from "../lib/messageQueue";
+import { setCurrentSessionId as bindCurrentContextSession } from "../lib/context";
 import type { SessionItem } from "./renderers/sessionPickerRenderer";
 
 export const SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
 
 export class TuiState {
   messages: Msg[] = [];
-  currentSessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  private _currentSessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  get currentSessionId(): string { return this._currentSessionId; }
+  set currentSessionId(sessionId: string) {
+    if (!sessionId) return;
+    this._currentSessionId = sessionId;
+    bindCurrentContextSession(sessionId);
+  }
   currentModel = "";
   agentMode: "Build" | "Plan" = "Build";
   bypassMode = bypassEngine.isEnabled();
@@ -526,6 +533,7 @@ export class TuiState {
 }
 
 export const tuiState = new TuiState();
+bindCurrentContextSession(tuiState.currentSessionId);
 
 // Subscribe to provider switch events to keep tuiState live
 import { onProviderSwitch } from "../providers";

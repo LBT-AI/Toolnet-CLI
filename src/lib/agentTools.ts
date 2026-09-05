@@ -19,10 +19,8 @@ import {
 } from "./codingAgent";
 import { resolve } from "node:path";
 import { getMcpAgentTools as getMcpRunnerAgentTools, executeMcpTool } from "./mcpRunner";
-import { evaluatePermission, getSandboxMode } from "./permissions";
 import { executeBrowserTool } from "./browserTool";
 import { ToolCache } from "./harness/toolPlanner";
-import { compressToolResult } from "./harness/toolOutputCompressor";
 
 // ── Shared tool cache — used by ALL callers (TUI, AgentRuntime, SubAgent, Harness)
 const _toolCache = new ToolCache();
@@ -396,17 +394,29 @@ export function getMergedAgentTools(): Array<any> {
 }
 
 export function isDangerousCommand(name: string, args: any, cwd: string): boolean {
-  const perm = evaluatePermission(name, args, getSandboxMode(), cwd);
+  const { securityEngine } = require("./security/securityEngine");
+  const { getSandboxMode } = require("./permissions");
+  const perm = securityEngine.evaluate(name, args, getSandboxMode(), cwd);
   return perm.needsApproval || !perm.allowed;
 }
 
 export interface ExecuteToolOptions {
   cwd?: string;
   workspaceRoot?: string;
+  sandboxMode?: "workspace" | "ask" | "full-access";
+  userApproved?: boolean;
+  /** Layer 4 Phase 1: full security context propagated to the executor. */
+  sessionId?: string;
+  agentRole?: string;
+  agentDepth?: number;
+  source?: "tui" | "headless" | "subagent" | "teamwork" | "plugin" | "vision" | "mcp";
 }
 
-// ── Raw tool execution (no cache, no compression) ──────────────────────────
-// All the actual tool dispatch logic lives here.
+// ── Raw tool execution (no cache, no compression) ──────────────────────
+// INTERNAL executor — invoked ONLY by ToolGateway. It performs NO security
+// evaluation, NO approval gating, and MUST NOT be used as a public execution
+// entrypoint. All production callers must go through ToolGateway.execute()
+// (executeTool is a thin compatibility wrapper around the gateway).
 
 export async function _executeToolRaw(name: string, args: any, options?: ExecuteToolOptions): Promise<string> {
   try {
@@ -426,8 +436,15 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "run_command" || name === "shell") {
       const cmd = args.command || args.cmd || "";
-      const res = await toolBash(cmd, 30000);
-      return JSON.stringify({ stdout: res.stdout || "", stderr: res.stderr || "", exitCode: res.exitCode });
+      // Hardened executor receives the EXPLICIT execution context — never
+      // module-global cwd/workspace/mode when a caller context exists.
+      const res = await toolBash(cmd, 30000, {
+        cwd: options?.cwd,
+        workspaceRoot: options?.workspaceRoot,
+        sandboxMode: options?.sandboxMode,
+        env: typeof args.env === "object" && args.env !== null ? args.env : undefined,
+      });
+      return JSON.stringify({ stdout: res.stdout || "", stderr: res.stderr || res.error || "", exitCode: res.exitCode });
     } else if (name === "tree") {
       const res = toolTree(args.path, args.depth);
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
@@ -511,37 +528,38 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
   }
 }
 
-// ── Public executeTool — wraps _executeToolRaw with cache + compression ────
-// This is the single entry point used by TUI, AgentRuntime, SubAgent, Harness.
-// ALL callers automatically get cache + compression benefits.
-
+/**
+ * Public executeTool — thin COMPATIBILITY WRAPPER around ToolGateway.execute.
+ * Layer 4 Phase 1: the ONLY security evaluation happens inside the gateway
+ * (SecurityEngine). This wrapper re-evaluates nothing and returns the gateway
+ * result. userApproved is forwarded so an interactive caller that already
+ * obtained user consent can execute an ASK tool once.
+ */
 export async function executeTool(name: string, args: any, options?: ExecuteToolOptions): Promise<string> {
   try {
-    const perm = evaluatePermission(name, args, getSandboxMode(), options?.cwd, options?.workspaceRoot);
-    if (!perm.allowed) {
-      return JSON.stringify({ stdout: "", stderr: perm.reason || "Permission denied by sandbox policy.", exitCode: 1 });
+    const { ToolGateway } = await import("./security/toolGateway");
+    const res = await ToolGateway.execute(
+      { name, args },
+      {
+        cwd: options?.cwd,
+        workspaceRoot: options?.workspaceRoot,
+        sandboxMode: options?.sandboxMode,
+        userApproved: options?.userApproved,
+        sessionId: options?.sessionId,
+        agentRole: options?.agentRole,
+        agentDepth: options?.agentDepth,
+        source: options?.source,
+      }
+    );
+    if (!res.allowed) {
+      return JSON.stringify({
+        stdout: "",
+        stderr: res.stderr || res.reason || "Permission denied by sandbox policy.",
+        exitCode: res.exitCode ?? 1,
+        ...(res.needsApproval ? { needsApproval: true, approvalRequired: true } : {}),
+      });
     }
-
-    // ── Cache check for read-only tools ────────────────────────────────────
-    const cachedResult = _toolCache.get(name, args);
-    if (cachedResult !== null) return cachedResult;
-
-    // ── Execute ────────────────────────────────────────────────────────────
-    const rawResult = await _executeToolRaw(name, args, options);
-
-    // ── Invalidate cache on write tools ────────────────────────────────────
-    const isWriteTool = name === "write_file" || name === "edit_file" || name === "replace_all" || name === "apply_patch" || name === "create_artifact" || name === "update_artifact";
-    if (isWriteTool && args?.path) {
-      _toolCache.invalidateByPath(args.path);
-    }
-    if (name === "shell" || name === "run_command") {
-      _toolCache.invalidateAll();
-    }
-
-    // ── Compress + cache ───────────────────────────────────────────────────
-    const compressed = compressToolResult(rawResult, name);
-    _toolCache.set(name, args, compressed);
-    return compressed;
+    return res.stdout;
   } catch (e: any) {
     return JSON.stringify({ stdout: "", stderr: `Error executing tool: ${e.message}`, exitCode: 1 });
   }

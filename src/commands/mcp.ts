@@ -1,5 +1,11 @@
 import type { Command, CommandContext } from "./index";
-import { loadLocalMcpConfig, addLocalMcpServer, removeLocalMcpServer } from "../lib/mcpRunner";
+import {
+  loadLocalMcpConfig,
+  addLocalMcpServer,
+  removeLocalMcpServer,
+  getLocalMcpServers,
+  mcpTrustManager,
+} from "../lib/mcpRunner";
 
 async function showMcpStatus(ctx: CommandContext) {
   const { gateway, addMessage } = ctx;
@@ -22,6 +28,16 @@ async function showMcpStatus(ctx: CommandContext) {
   const localMcpConfig = loadLocalMcpConfig();
   const localMcpNames = Object.keys(localMcpConfig);
   const combinedLocal = Array.from(new Set([...localPlugins, ...localMcpNames]));
+
+  // Phase 3: per-server trust state in the status listing.
+  const trustLines: string[] = [];
+  for (const server of getLocalMcpServers()) {
+    const trust = mcpTrustManager.getTrustState(
+      server.serverId, server.config, server.sourceKind, server.config.disabled
+    );
+    const icon = trust === "enabled" ? "\u001b[32m●\u001b[0m" : trust === "disabled" ? "\u001b[90m○\u001b[0m" : "\u001b[33m?\u001b[0m";
+    trustLines.push(`    ${icon} ${server.name} [${trust}] (${server.sourceKind})`);
+  }
 
   const lines: string[] = [];
   lines.push("MCP — Status");
@@ -49,6 +65,12 @@ async function showMcpStatus(ctx: CommandContext) {
     lines.push(`  Local stdio plugins: ${combinedLocal.join(", ")}`);
   }
 
+  if (trustLines.length > 0) {
+    lines.push("");
+    lines.push("  Discovered MCP servers:");
+    lines.push(...trustLines);
+  }
+
   if (customPlugins.length > 0) {
     lines.push("");
     lines.push(`  Custom plugins (${customPlugins.length}):`);
@@ -63,6 +85,8 @@ async function showMcpStatus(ctx: CommandContext) {
   lines.push("  /mcp tools <url>        Probe MCP server tools");
   lines.push("  /mcp add <name> <cmd>   Add a local MCP server");
   lines.push("  /mcp remove <name>      Remove a local MCP server");
+  lines.push("  /mcp enable <name>      Trust + enable a discovered server");
+  lines.push("  /mcp disable <name>     Revoke trust for a server");
 
   addMessage("assistant", lines.join("\n"));
 }
@@ -156,11 +180,54 @@ async function removeMcp(args: string[], ctx: CommandContext) {
   addMessage("assistant", `\x1b[32m✓\x1b[0m Removed local MCP server '${name}'`);
 }
 
+/**
+ * Phase 3: explicit trust decision — the ONLY way a workspace-discovered
+ * server becomes spawnable. Trust is bound to the command fingerprint;
+ * changing the command later re-requires approval.
+ */
+async function enableMcp(args: string[], ctx: CommandContext) {
+  const { addMessage } = ctx;
+  if (args.length < 1) {
+    addMessage("assistant", "Usage: /mcp enable <name>");
+    return;
+  }
+  const name = args[0];
+  const server = getLocalMcpServers().find(s => s.name === name);
+  if (!server) {
+    addMessage("assistant", `\x1b[31m✗\x1b[0m No discovered MCP server named '${name}'.`);
+    return;
+  }
+  mcpTrustManager.enableServer(server.serverId, server.config, server.sourceFile);
+  addMessage(
+    "assistant",
+    `\x1b[32m✓\x1b[0m Enabled '${server.name}' (${server.sourceKind}).\n` +
+    `  command: ${server.config.command} ${(server.config.args || []).join(" ")}\n` +
+    `  Trust is bound to this command fingerprint — changes will require re-approval.`
+  );
+}
+
+async function disableMcp(args: string[], ctx: CommandContext) {
+  const { addMessage } = ctx;
+  if (args.length < 1) {
+    addMessage("assistant", "Usage: /mcp disable <name>");
+    return;
+  }
+  const name = args[0];
+  const server = getLocalMcpServers().find(s => s.name === name);
+  if (server) {
+    mcpTrustManager.disableServer(server.serverId);
+  } else {
+    // Server may already be removed; still revoke any lingering trust by id.
+    mcpTrustManager.disableServer(name);
+  }
+  addMessage("assistant", `\x1b[32m✓\x1b[0m Disabled '${name}' (trust revoked).`);
+}
+
 export const mcpCommand: Command = {
   name: "mcp",
   aliases: [],
   description: "Manage MCP (Model Context Protocol) plugins and registry",
-  usage: "/mcp [registry|tools|add|remove|status] ...",
+  usage: "/mcp [registry|tools|add|remove|enable|disable|status] ...",
   async handler(args: string[], ctx: CommandContext) {
     if (args.length === 0) {
       await showMcpStatus(ctx);
@@ -174,7 +241,9 @@ export const mcpCommand: Command = {
       case "status":    await showMcpStatus(ctx); break;
       case "add":       await addMcp(subArgs, ctx); break;
       case "remove":    await removeMcp(subArgs, ctx); break;
-      default:          ctx.addMessage("assistant", `Unknown: ${sub}\nTry: /mcp, /mcp registry, /mcp tools <url>, /mcp add, /mcp remove`); break;
+      case "enable":    await enableMcp(subArgs, ctx); break;
+      case "disable":   await disableMcp(subArgs, ctx); break;
+      default:          ctx.addMessage("assistant", `Unknown: ${sub}\nTry: /mcp, /mcp registry, /mcp tools <url>, /mcp add, /mcp enable, /mcp disable`); break;
     }
   },
 };

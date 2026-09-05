@@ -14,6 +14,7 @@ export interface AgentRuntimeOptions {
   /** @deprecated Use baseUrl instead */
   gatewayUrl?: string;
   provider?: Provider;
+  sessionId?: string;
   maxTurns?: number;
   timeoutMs?: number;
   onEvent?: (event: string, data: any) => void;
@@ -27,8 +28,10 @@ export interface AgentRuntimeResult {
   error?: string;
 }
 
-export function getAgentSystemPrompt(): string {
-  const memorySnippet = contextEngine.getMemoryPromptSnippet();
+export function getAgentSystemPrompt(sessionId?: string): string {
+  const memorySnippet = sessionId
+    ? contextEngine.getMemoryPromptSnippet(sessionId)
+    : contextEngine.getMemoryPromptSnippet();
   const permissionContext = getPermissionContextPrompt(getSandboxMode());
   const basePrompt = `You are ToolNet Agent — a precise, tool-first AI coding assistant running in Toolnet CLI.
 
@@ -174,7 +177,7 @@ export class AgentRuntime {
     options: AgentRuntimeOptions = {}
   ): Promise<AgentRuntimeResult> {
     if (!messages.some((m) => m.role === "system")) {
-      messages.unshift({ role: "system", content: getAgentSystemPrompt() });
+      messages.unshift({ role: "system", content: getAgentSystemPrompt(options.sessionId) });
     }
 
     const res = await this.harness.resume(messages as ContextMessage[], {

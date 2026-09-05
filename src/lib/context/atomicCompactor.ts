@@ -1,19 +1,23 @@
 import type { CompactionOptions, CompactionResult, ContextMessage } from "./types";
 import { estimateMessageChars, estimateMessageTokens, estimateTotalTokens } from "./tokenEstimator";
 import { getModelContextSpec } from "./modelBudgets";
-import { sessionMemory } from "./sessionMemory";
+import { SessionMemoryStore } from "./sessionMemory";
+import { getSessionContext, getSessionContext as ensureContext } from "./contextRegistry";
+import { redactSecrets } from "../security/secretGuard";
+import { validateToolCallPairs } from "./toolCallValidator";
+import { assertPrimarySystemMessageInvariant, normalizePrimarySystemMessage } from "./messageInvariants";
 
 interface AtomicTurn {
-  userMessage?: ContextMessage;
-  assistantMessages: ContextMessage[];
-  toolMessages: ContextMessage[];
-  otherMessages: ContextMessage[];
+  /** Messages in original order: [user, assistant, tool, assistant, ...] */
+  messages: ContextMessage[];
   totalChars: number;
   totalTokens: number;
 }
 
 /**
  * Groups raw messages into atomic conversation turns to guarantee tool_call_id integrity.
+ * Each turn preserves the ORIGINAL message order so the relative position of
+ * `assistant(tool_calls)` and the matching `tool(tool_call_id)` is never broken.
  */
 function groupIntoAtomicTurns(messages: ContextMessage[]): {
   systemMessages: ContextMessage[];
@@ -26,7 +30,7 @@ function groupIntoAtomicTurns(messages: ContextMessage[]): {
 
   for (const msg of messages) {
     if (msg.role === "system") {
-      // Keep initial system instructions
+      // Keep initial system instructions (one allowed at the head).
       if (turns.length === 0 && !currentTurn) {
         systemMessages.push(msg);
         continue;
@@ -38,10 +42,7 @@ function groupIntoAtomicTurns(messages: ContextMessage[]): {
         turns.push(currentTurn);
       }
       currentTurn = {
-        userMessage: msg,
-        assistantMessages: [],
-        toolMessages: [],
-        otherMessages: [],
+        messages: [msg],
         totalChars: (msg.content || "").length,
         totalTokens: estimateMessageTokens(msg),
       };
@@ -49,25 +50,12 @@ function groupIntoAtomicTurns(messages: ContextMessage[]): {
     }
 
     if (!currentTurn) {
-      currentTurn = {
-        assistantMessages: [],
-        toolMessages: [],
-        otherMessages: [],
-        totalChars: 0,
-        totalTokens: 0,
-      };
+      currentTurn = { messages: [], totalChars: 0, totalTokens: 0 };
     }
 
+    currentTurn.messages.push(msg);
     currentTurn.totalChars += (msg.content || "").length;
     currentTurn.totalTokens += estimateMessageTokens(msg);
-
-    if (msg.role === "assistant") {
-      currentTurn.assistantMessages.push(msg);
-    } else if (msg.role === "tool") {
-      currentTurn.toolMessages.push(msg);
-    } else {
-      currentTurn.otherMessages.push(msg);
-    }
   }
 
   if (currentTurn) {
@@ -78,15 +66,48 @@ function groupIntoAtomicTurns(messages: ContextMessage[]): {
 }
 
 /**
- * Compacts conversation history while strictly preserving tool-call pairing and context memory.
+ * Layer 4 — Phase 4: compactMessagesAtomically
+ *
+ * Atomicity contract:
+ *   - Every assistant tool_call in the input MUST be followed by its tool
+ *     result in the OUTPUT. We preserve complete turns.
+ *   - We never produce an assistant tool_calls entry without the matching
+ *     tool result message.
+ *   - If the input is malformed, we fall back to validateToolCallPairs to
+ *     identify the broken boundary and stop short of producing an
+ *     invariant-violating result.
+ *
+ * Provider-compatibility contract:
+ *   - The system instruction (if any) is preserved at index 0. Only one
+ *     primary system message is kept.
+ *   - The compaction summary is emitted with role "user" by default
+ *     (configurable: `summaryRole: "user" | "system" | "assistant"`).
+ *     This avoids putting a secondary system message mid-conversation,
+ *     which some providers reject (Anthropic, Gemini strict mode, etc.).
+ *   - The summary is redacted of secrets before persistence.
  */
 export function compactMessagesAtomically(
   messages: ContextMessage[],
-  options?: CompactionOptions
+  options?: CompactionOptions & { memory?: SessionMemoryStore; sessionId?: string; summaryRole?: "user" | "system" | "assistant" }
 ): CompactionResult {
   const force = options?.force ?? false;
   const spec = getModelContextSpec(options?.model);
   const thresholdChars = options?.thresholdChars ?? (spec.autoCompactThresholdTokens * 3.8);
+
+  // Atomic-turn validator: refuse to compact if any assistant tool_call
+  // has no matching result OR any orphan tool result exists. This is the
+  // fail-safe repair boundary from the validator.
+  const validation = validateToolCallPairs(messages);
+  if (!validation.valid && !force) {
+    return {
+      compacted: false,
+      messages: [...messages],
+      originalCount: messages.length,
+      newCount: messages.length,
+      savedChars: 0,
+      reason: `Refused to compact: tool-call pair integrity broken (orphanTools=${validation.orphanTools.length}, missingResults=${validation.missingResults.length}).`,
+    };
+  }
 
   const totalChars = estimateMessageChars(messages);
   const totalTokens = estimateTotalTokens(messages);
@@ -105,7 +126,9 @@ export function compactMessagesAtomically(
     };
   }
 
-  const { systemMessages, turns } = groupIntoAtomicTurns(messages);
+  const normalizedMessages = normalizePrimarySystemMessage(messages);
+  assertPrimarySystemMessageInvariant(normalizedMessages);
+  const { systemMessages, turns } = groupIntoAtomicTurns(normalizedMessages);
 
   if (turns.length < 2) {
     return {
@@ -123,7 +146,6 @@ export function compactMessagesAtomically(
 
   // Determine split index: keep recent turns while compacting older history
   let keepTurns = options?.keepRecentCount ?? 2;
-  // If keepRecentCount was provided as raw messages count (e.g. 6 raw msgs), convert to turns
   if (keepTurns > 3 && keepTurns >= turns.length) {
     keepTurns = Math.max(1, Math.floor(turns.length / 2));
   }
@@ -150,6 +172,11 @@ export function compactMessagesAtomically(
     };
   }
 
+  // Resolve the memory store to use (bound to sessionId if provided).
+  const memory: SessionMemoryStore =
+    options?.memory ||
+    (options?.sessionId ? ensureContext(options.sessionId).memory : new SessionMemoryStore("ephemeral-compaction"));
+
   // Extract structured intelligence from compacted turns
   const userGoals: string[] = [];
   const toolsUsed = new Set<string>();
@@ -158,15 +185,13 @@ export function compactMessagesAtomically(
   const errorsEncountered: string[] = [];
 
   for (const turn of turnsToCompact) {
-    if (turn.userMessage?.content) {
-      const firstLine = turn.userMessage.content.split("\n")[0].slice(0, 120);
-      userGoals.push(firstLine);
-      sessionMemory.recordUserGoal(firstLine);
-    }
-
-    for (const am of turn.assistantMessages) {
-      if (am.tool_calls) {
-        for (const tc of am.tool_calls) {
+    for (const m of turn.messages) {
+      if (m.role === "user" && m.content) {
+        const firstLine = m.content.split("\n")[0].slice(0, 120);
+        userGoals.push(firstLine);
+        memory.recordUserGoal(firstLine);
+      } else if (m.role === "assistant" && m.tool_calls) {
+        for (const tc of m.tool_calls) {
           const name = tc.function?.name;
           if (name) {
             toolsUsed.add(name);
@@ -174,7 +199,7 @@ export function compactMessagesAtomically(
               const args = JSON.parse(tc.function.arguments || "{}");
               if (args.path) {
                 filesTouched.add(args.path);
-                sessionMemory.recordFileAccess(args.path, name.includes("write") || name.includes("edit") ? "write" : "read");
+                memory.recordFileAccess(args.path, name.includes("write") || name.includes("edit") ? "write" : "read");
               }
               if (name === "write_file" || name === "edit_file" || name === "apply_patch") {
                 if (args.path) modifiedFiles.add(args.path);
@@ -182,26 +207,24 @@ export function compactMessagesAtomically(
             } catch {}
           }
         }
-      }
-    }
-
-    for (const toolMsg of turn.toolMessages) {
-      if (toolMsg.name) {
-        toolsUsed.add(toolMsg.name);
-      }
-      if (toolMsg.content) {
-        try {
-          const parsed = JSON.parse(toolMsg.content);
-          if (parsed.exitCode && parsed.exitCode !== 0 && parsed.stderr) {
-            const errSummary = `${toolMsg.name || "tool"} error: ${parsed.stderr.slice(0, 150)}`;
-            errorsEncountered.push(errSummary);
-          }
-        } catch {}
+      } else if (m.role === "tool") {
+        if (m.name) {
+          toolsUsed.add(m.name);
+        }
+        if (m.content) {
+          try {
+            const parsed = JSON.parse(m.content);
+            if (parsed.exitCode && parsed.exitCode !== 0 && parsed.stderr) {
+              const errSummary = `${m.name || "tool"} error: ${parsed.stderr.slice(0, 150)}`;
+              errorsEncountered.push(errSummary);
+            }
+          } catch {}
+        }
       }
     }
   }
 
-  const memorySnapshot = sessionMemory.getSnapshot();
+  const memorySnapshot = memory.getSnapshot();
   const summaryHeader = options?.customSummaryPrefix || "[Context Compaction Summary]";
 
   const summaryLines = [
@@ -226,25 +249,88 @@ export function compactMessagesAtomically(
     `Note: All recent turns below are active. Continue directly with current objectives.`
   );
 
+  const rawSummary = summaryLines.join("\n");
+  // Secret redaction BEFORE persisting/summary: keys, bearer tokens, blocks.
+  const redactedSummary = redactSecrets(rawSummary);
+
+  // Provider-compatible summary role: default to "user" so the system
+  // message stays at index 0 (Anthropic / Gemini-friendly).
+  const summaryRole = options?.summaryRole ?? "user";
   const summaryMessage: ContextMessage = {
-    role: "system",
-    content: summaryLines.join("\n"),
+    role: summaryRole,
+    content: redactedSummary,
   };
 
-  // Reconstruct flattened messages: system -> summary -> recent turns in correct chronological order
-  const reconstructedMessages: ContextMessage[] = [...systemMessages, summaryMessage];
+  // Preserve at most ONE primary system message at index 0.
+  const primarySystem = systemMessages.slice(0, 1);
+  const reconstructedMessages: ContextMessage[] = [...primarySystem, summaryMessage];
 
   for (const turn of recentTurns) {
-    if (turn.userMessage) reconstructedMessages.push(turn.userMessage);
-    for (const am of turn.assistantMessages) reconstructedMessages.push(am);
-    for (const tm of turn.toolMessages) reconstructedMessages.push(tm);
-    for (const om of turn.otherMessages) reconstructedMessages.push(om);
+    for (const m of turn.messages) {
+      reconstructedMessages.push(m);
+    }
+  }
+
+  // Final invariant check on the output.
+  const outValidation = validateToolCallPairs(reconstructedMessages);
+  try {
+    assertPrimarySystemMessageInvariant(reconstructedMessages);
+  } catch {
+    return {
+      compacted: false,
+      messages: [...messages],
+      originalCount: messages.length,
+      newCount: messages.length,
+      savedChars: 0,
+      originalTokens: totalTokens,
+      newTokens: totalTokens,
+      savedTokens: 0,
+      reason: `Refused to compact: rebuilt history would contain an invalid system-message placement.`,
+    };
+  }
+  if (!outValidation.valid) {
+    return {
+      compacted: false,
+      messages: [...messages],
+      originalCount: messages.length,
+      newCount: messages.length,
+      savedChars: 0,
+      originalTokens: totalTokens,
+      newTokens: totalTokens,
+      savedTokens: 0,
+      reason: `Refused to compact: rebuilt history would violate tool-call pair invariant.`,
+    };
   }
 
   const newChars = estimateMessageChars(reconstructedMessages);
   const newTokens = estimateTotalTokens(reconstructedMessages);
   const savedChars = Math.max(0, totalChars - newChars);
   const savedTokens = Math.max(0, totalTokens - newTokens);
+
+  // Persist summary + recent files into the session context.
+  if (options?.sessionId) {
+    const ctx = getSessionContext(options.sessionId);
+    ctx.summary = redactedSummary;
+    if (errorsEncountered.length > 0) {
+      for (const e of errorsEncountered.slice(-3)) {
+        if (!ctx.errors.includes(e)) ctx.errors.push(e);
+        if (ctx.errors.length > 20) ctx.errors.shift();
+      }
+    }
+    for (const g of userGoals.slice(-6)) {
+      if (!ctx.goals.includes(g)) ctx.goals.push(g);
+      if (ctx.goals.length > 20) ctx.goals.shift();
+    }
+    for (const f of Array.from(filesTouched).slice(-10)) {
+      if (!ctx.fileAccess.read.includes(f)) ctx.fileAccess.read.push(f);
+      if (ctx.fileAccess.read.length > 50) ctx.fileAccess.read.shift();
+    }
+    for (const f of Array.from(modifiedFiles)) {
+      if (!ctx.fileAccess.write.includes(f)) ctx.fileAccess.write.push(f);
+      if (ctx.fileAccess.write.length > 50) ctx.fileAccess.write.shift();
+    }
+    ctx.generation++;
+  }
 
   return {
     compacted: true,

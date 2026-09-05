@@ -66,6 +66,10 @@ export interface ExecutionOptions {
   toolChoice?: "auto" | "required" | "none";
   sandboxMode?: SandboxMode;
   mode?: ExecutionMode;
+  /** Real agent role for the security context (Phase 2 policy propagation). */
+  agentRole?: string;
+  /** Nesting depth for subagent recursion gates. */
+  agentDepth?: number;
   onChunk?: (chunk: string) => void;
   onEvent?: (event: string, data: any) => void;
 }

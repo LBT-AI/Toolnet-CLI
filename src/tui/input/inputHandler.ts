@@ -219,9 +219,11 @@ function _handleKeyInternal(
   }
 
   // 1. Pending Security Approval Modal
+  // Semantics: Y = allow once (no persistence), A = allow for session (records
+  // trust), N = deny (records session denial), Esc = dismiss WITHOUT recording.
   if (tuiState.pendingConfirmation) {
     if (hex === "1b") {
-      if (tuiState.pendingConfirmation.onDecision) tuiState.pendingConfirmation.onDecision("n");
+      // Esc: dismiss only — onDecision intentionally NOT called so nothing is recorded.
       tuiState.pendingConfirmation.resolve(false);
       tuiState.pendingConfirmation = null;
       renderAll();

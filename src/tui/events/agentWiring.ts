@@ -5,9 +5,11 @@ import { getCwdInfo } from "../../lib/codingAgent";
 import { getCliKey, loadCliKeys } from "../../lib/keys";
 import { contextEngine } from "../../lib/context";
 import { parseAndProcessInput } from "../../lib/attachments";
-import { getMergedAgentTools, executeTool } from "../../lib/agentTools";
+import { getMergedAgentTools } from "../../lib/agentTools";
 import { getAgentSystemPrompt } from "../../lib/agentRuntime";
-import { evaluatePermission, getSandboxMode } from "../../lib/permissions";
+import { getSandboxMode } from "../../lib/permissions";
+import { ToolGateway } from "../../lib/security/toolGateway";
+import { securityEngine } from "../../lib/security/securityEngine";
 import { executeToolBatch, type ToolCall, type BatchRunResult } from "../../lib/harness/toolExecutor";
 import { requestApprovalModal } from "../permissions/permissionModal";
 import { dispatchCommand } from "../../commands";
@@ -21,6 +23,7 @@ import { getActiveProvider, getActiveApiKey, getActiveDefaultModel } from "../..
 import { statusManager } from "../statusService";
 import { messageQueue } from "../../lib/messageQueue";
 import { providerPicker } from "../../components/ProviderPicker";
+import { assertPrimarySystemMessageInvariant } from "../../lib/context";
 
 const PLANNER_SYSTEM_PROMPT = `You are ToolNet Planner. Your goal is to analyze the user request, explore the codebase using read-only tools, and create a step-by-step plan. Do not execute the plan yourself. Use the save_plan tool to save the plan.`;
 
@@ -28,7 +31,16 @@ async function handleSavePlan(parsedArgs: any): Promise<string> {
   const cwd = getCwdInfo().currentCwd;
   const toolnetDir = path.join(cwd, ".toolnet");
   if (!fs.existsSync(toolnetDir)) fs.mkdirSync(toolnetDir);
-  fs.writeFileSync(path.join(toolnetDir, "plan.md"), parsedArgs?.content || "");
+  const planPath = path.join(toolnetDir, "plan.md");
+
+  // Layer 4 Phase 1: save_plan is a model-callable MUTATING tool — its file
+  // write goes through the security-evaluated toolWrite (workspace invariant,
+  // history snapshot) instead of a raw fs.writeFileSync bypass.
+  const { toolWrite } = await import("../../lib/codingAgent");
+  const writeRes = toolWrite(planPath, parsedArgs?.content || "");
+  if (!writeRes.success) {
+    return JSON.stringify({ stdout: "", stderr: writeRes.error || "Failed to save plan", exitCode: 1 });
+  }
 
   const confirmed = await new Promise<boolean>((resolve) => {
     tuiState.pendingConfirmation = { prompt: "Plan generated. Approve and switch to Build mode?", resolve };
@@ -39,6 +51,16 @@ async function handleSavePlan(parsedArgs: any): Promise<string> {
     return JSON.stringify({ stdout: "Plan saved to .toolnet/plan.md. Switched to Build mode.", exitCode: 0 });
   }
   return JSON.stringify({ error: "User denied the plan." });
+}
+
+/** Context-engine bookkeeping for executed tool calls (path-bearing tools). */
+function recordFileAccessIfAny(name: string, args: any): void {
+  if (!args?.path) return;
+  contextEngine.recordFileAccess(
+    args.path,
+    name.includes("write") || name.includes("edit") || name.includes("patch") ? "write" : "read",
+    tuiState.currentSessionId
+  );
 }
 
 export async function sendMessage(text: string): Promise<void> {
@@ -86,13 +108,13 @@ export async function sendMessage(text: string): Promise<void> {
         extraHeaders["x-bypass-level"] = tuiState.bypassLevel;
       }
 
-      const autoPrep = contextEngine.prepareMessagesForApi(tuiState.messages as any, { model: tuiState.currentModel });
+      const autoPrep = contextEngine.prepareMessagesForApi(tuiState.messages as any, { model: tuiState.currentModel, sessionId: tuiState.currentSessionId });
       if (autoPrep.compacted) {
         tuiState.messages = autoPrep.messages;
         tuiState.saveCurrentSession();
       }
 
-      const apiMessages = tuiState.messages.filter((m, i) => i !== assistantIdx).map((m) => {
+      const apiMessages = tuiState.messages.filter((m, i) => i !== assistantIdx && m.role !== "system").map((m) => {
         let contentPayload: any = m.content;
         if (m.role === "user" && typeof m.content === "string" && (m.content.includes("@") || m.content.includes("/attach"))) {
           const processed = parseAndProcessInput(m.content, getCwdInfo().currentCwd);
@@ -107,9 +129,10 @@ export async function sendMessage(text: string): Promise<void> {
         return out;
       });
 
-      if (!apiMessages.some((m) => m.role === "system" && !m.content.startsWith("→") && !m.content.startsWith("Unknown"))) {
-        apiMessages.unshift({ role: "system", content: tuiState.agentMode === "Plan" ? PLANNER_SYSTEM_PROMPT : getAgentSystemPrompt() });
-      }
+      apiMessages.unshift({ role: "system", content: tuiState.agentMode === "Plan" ? PLANNER_SYSTEM_PROMPT : getAgentSystemPrompt(tuiState.currentSessionId) });
+      // Guard clause: provider payloads never contain status/system notices
+      // after the primary instruction.
+      assertPrimarySystemMessageInvariant(apiMessages as any);
 
       // Merge plugin tools
       const pluginTools = pluginManager.getRegisteredTools();
@@ -181,8 +204,9 @@ export async function sendMessage(text: string): Promise<void> {
             tuiState.lastTokens = `${u.prompt_tokens || 0} \u2192 ${u.completion_tokens || 0} (${u.total_tokens || 0})`;
             const tracker = getGlobalTracker();
             tracker.recordUsage({
-              inputTokens: u.prompt_tokens || 0,
-              outputTokens: u.completion_tokens || 0,
+              inputTokens: u.prompt_tokens || u.input_tokens || 0,
+              outputTokens: u.completion_tokens || u.output_tokens || 0,
+              cachedInputTokens: u.prompt_tokens_details?.cached_tokens || u.cache_read_input_tokens || 0,
               model: tuiState.currentModel,
             });
           }
@@ -233,48 +257,69 @@ export async function sendMessage(text: string): Promise<void> {
             return { result: r, allowed: true };
           }
 
-          const perm = evaluatePermission(name, args, getSandboxMode(), cwd);
-          if (!perm.allowed) {
+          // ── Layer 4 Phase 1: SINGLE GATEWAY FLOW ──────────────────────────
+          // Step 1: unapproved gateway call → SecurityEngine decision (only eval).
+          const gateway = async (userApproved: boolean) =>
+            ToolGateway.execute(
+              { name, args, id },
+              {
+                cwd,
+                workspaceRoot: getCwdInfo().workspaceRoot,
+                sandboxMode: getSandboxMode(),
+                userApproved,
+                sessionId: tuiState.currentSessionId,
+                source: "tui",
+              }
+            );
+
+          const first = await gateway(false);
+
+          // Step 2: DENY → never executed (CRITICAL_DENY included — no modal).
+          if (!first.allowed && !first.needsApproval) {
             return {
-              result: JSON.stringify({ error: `Permission Denied: ${perm.reason || "Blocked by sandbox policy."}` }),
+              result: JSON.stringify({ error: first.stderr || `Permission Denied: ${first.reason || "Blocked by sandbox policy."}` }),
               allowed: false,
             };
           }
-          if (perm.needsApproval) {
-            const ok = await requestApprovalModal(
-              perm.reason ? `${perm.reason}` : `Tool ${name} requires permission`,
-              args
-            );
+
+          // Step 3: ASK → interactive modal (Y once / A session / N / Esc).
+          if (first.needsApproval) {
+            const ok = await requestApprovalModal({
+              toolName: name,
+              args,
+              targetKey: securityEngine.getSessionTrustTargetKey(name, args),
+              reason: first.reason || `Tool ${name} requires permission`,
+            });
             if (!ok) {
               return { result: JSON.stringify({ error: "User denied permission." }), allowed: false };
             }
-          }
-
-          // Check if it's a plugin tool
-          if (pluginTools.some((pt) => pt.function.name === name)) {
-            const pluginRes = await pluginManager.executePluginTool(name, args, cwd);
-            if (pluginRes.error) {
-              return { result: JSON.stringify({ error: pluginRes.error }), allowed: false };
+            // Step 4: approved (Y or A) → gateway re-entry with userApproved=true.
+            // The gateway evaluates the SAME args once more but skips the modal
+            // path; Y/A/N/Esc each evaluate exactly once — no double execution.
+            const approvedRes = await gateway(true);
+            if (!approvedRes.allowed) {
+              return {
+                result: JSON.stringify({ error: approvedRes.stderr || `Permission Denied: ${approvedRes.reason || "Blocked by sandbox policy."}` }),
+                allowed: false,
+              };
             }
-            return { result: typeof pluginRes.result === "string" ? pluginRes.result : JSON.stringify(pluginRes.result), allowed: true };
+            updateCrashToolResult(name, 0, `Executed ${name}`);
+            recordFileAccessIfAny(name, args);
+            return { result: approvedRes.stdout, allowed: true };
           }
 
-          const result = await executeTool(name, args, { cwd });
+          // Step 5: ALLOW straight through.
           updateCrashToolResult(name, 0, `Executed ${name}`);
-
-          if (args?.path) {
-            contextEngine.recordFileAccess(
-              args.path,
-              name.includes("write") || name.includes("edit") || name.includes("patch") ? "write" : "read"
-            );
-          }
-          return { result, allowed: true };
+          recordFileAccessIfAny(name, args);
+          return { result: first.stdout, allowed: true };
         };
 
         const outcome = await executeToolBatch(parsedCalls, {
           cwd,
           needsApproval: (name, args) => {
-            const p = evaluatePermission(name, args, getSandboxMode(), cwd);
+            // Classification-only check (no execution): routes approval-needing
+            // calls to the sequential path so batching can't skip confirmation.
+            const p = securityEngine.evaluate(name, args, getSandboxMode(), cwd, getCwdInfo().workspaceRoot);
             return p.needsApproval || !p.allowed;
           },
           runTool,

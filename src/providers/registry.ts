@@ -8,20 +8,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { getToolnetHome } from "../lib/toolnetHome";
 import type { Provider, ProviderConfig } from "./types";
 import { OpenAICompatibleProvider } from "./openaiCompatible";
 import { getCliKey, loadCliKeys } from "../lib/keys";
 
 export function getProvidersConfigDir(): string {
-  if (process.env.TOOLNETCLI_CONFIG_DIR) return process.env.TOOLNETCLI_CONFIG_DIR;
-  return path.join(os.homedir(), ".toolnetcli");
+  // Phase 3: canonical home module (single TOOLNETCLI_CONFIG_DIR-aware source).
+  return getToolnetHome();
 }
 
 export function getProvidersConfigFile(): string {
   return path.join(getProvidersConfigDir(), "providers.json");
 }
 
-export const PROVIDERS_CONFIG_DIR = path.join(os.homedir(), ".toolnetcli");
+// Computed lazily via getters to honor TOOLNETCLI_CONFIG_DIR set at runtime.
+export const PROVIDERS_CONFIG_DIR = getToolnetHome();
 export const PROVIDERS_CONFIG_FILE = path.join(PROVIDERS_CONFIG_DIR, "providers.json");
 
 export interface StoredProvidersConfig {

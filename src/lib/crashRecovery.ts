@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
+import { getToolnetRecoveryDir } from "./toolnetHome";
 
 export interface CrashState {
   sessionId: string;
@@ -19,8 +19,8 @@ export interface CrashState {
 }
 
 function getRecoveryDir(): string {
-  const base = process.env.DATA_DIR || path.join(os.homedir(), ".toolnet");
-  return path.join(base, "recovery");
+  // Phase 3: canonical home recovery dir.
+  return getToolnetRecoveryDir();
 }
 
 function getRecoveryFile(): string {

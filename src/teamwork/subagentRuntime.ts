@@ -5,9 +5,10 @@
 
 import { agentTools } from "../lib/agentTools";
 import { workspaceRoot, currentCwd } from "../lib/codingAgent";
-import { contextEngine } from "../lib/context";
+import { contextEngine, childSessionId, createChildSessionContext, deleteSessionContext, getSessionContext, type SessionContext } from "../lib/context";
 import type { AgentRole, TaskNode } from "./types";
 import type { EventBus } from "./eventBus";
+import type { SandboxMode } from "../lib/security/types";
 
 export interface SubagentOptions {
   model?: string;
@@ -18,6 +19,13 @@ export interface SubagentOptions {
   eventBus?: EventBus;
   sessionId?: string;
   onEvent?: (event: string, data: any) => void;
+  /** Phase 2 policy propagation: child sandbox mode (clamped <= parent inside harness). */
+  sandboxMode?: SandboxMode;
+  workspaceRoot?: string;
+  cwd?: string;
+  /** Real agent role propagated into the security context (never generic). */
+  agentDepth?: number;
+  source?: "tui" | "headless" | "subagent" | "teamwork" | "plugin" | "vision" | "mcp";
 }
 
 export interface SubagentResult {
@@ -28,7 +36,49 @@ export interface SubagentResult {
   tokensUsed: number;
   role: AgentRole;
   nodeId: string;
+  childSessionId: string;
   error?: string;
+}
+
+/**
+ * Phase 4: derive a stable child sessionId for a subagent. The child
+ * inherits the parent's workspace and sandbox mode but its memory,
+ * file-access list, token budget, and compaction state are entirely
+ * independent. The child NEVER writes back to the parent memory —
+ * the harness return value is the only artifact the parent sees.
+ */
+export function deriveSubagentChildSessionId(parentSessionId: string, taskNodeId: string): string {
+  return childSessionId(parentSessionId || "session", taskNodeId);
+}
+
+export function bindSubagentContext(
+  parentSessionId: string,
+  taskNodeId: string
+): { childSessionId: string; ctx: SessionContext } {
+  const childId = deriveSubagentChildSessionId(parentSessionId, taskNodeId);
+  const parentCtx = parentSessionId ? getSessionContext(parentSessionId) : null;
+  const ctx = createChildSessionContext(childId, parentCtx || {
+    sessionId: parentSessionId || "ephemeral",
+    memory: null as any,
+    compactionState: { count: 0, lastCompactedAt: 0, lastSummary: "" },
+    fileAccess: { read: [], write: [], patched: [] },
+    goals: [],
+    errors: [],
+    summary: "",
+    tokenBudgetState: {
+      estimatedContextTokens: 0,
+      actualUsagePromptTokens: 0,
+      actualUsageCompletionTokens: 0,
+      actualUsageCachedTokens: 0,
+      actualUsageReasoningTokens: 0,
+      cumulativeSessionTokens: 0,
+      lastUpdated: 0,
+    },
+    metadata: { createdAt: Date.now(), lastTouchedAt: Date.now() },
+    lifecycleState: "active",
+    generation: 1,
+  }, { kind: "subagent" });
+  return { childSessionId: childId, ctx };
 }
 
 import fs from "node:fs";
@@ -49,8 +99,10 @@ export function loadCustomPersonas(): Record<string, string> {
 /**
  * Returns role-specific system prompts with strict operational guidelines.
  */
-export function getSubagentRolePrompt(role: AgentRole, title: string): string {
-  const baseMemory = contextEngine.getMemoryPromptSnippet();
+export function getSubagentRolePrompt(role: AgentRole, title: string, sessionId?: string): string {
+  const baseMemory = sessionId
+    ? contextEngine.getMemoryPromptSnippet(sessionId)
+    : contextEngine.getMemoryPromptSnippet();
   const customPersonas = loadCustomPersonas();
 
   const rolePrompts: Record<string, string> = {
@@ -167,10 +219,17 @@ export async function executeSubagentTask(
   const maxTurns = options.maxTurns || node.maxTurns || 8;
   const timeoutMs = options.timeoutMs || 120000;
   const onEvent = options.onEvent;
+  const parentSessionId = options.sessionId || "";
 
   if (onEvent) {
     onEvent("subagent:start", { nodeId: node.id, role, title: node.title });
   }
+
+  // Phase 4: bind a fresh child SessionContext with deterministic id.
+  // The child NEVER mutates parent memory. Only the explicit result
+  // (harnessResult) is observable from the parent.
+  const childId = deriveSubagentChildSessionId(parentSessionId, node.id);
+  bindSubagentContext(parentSessionId, node.id);
 
   // Single-kernel delegation: the AgentHarness owns the ReAct loop, provider
   // calls, SecurityEngine enforcement, executeToolBatch, ToolCache + compress,
@@ -200,7 +259,11 @@ export async function executeSubagentTask(
       gatewayUrl: options.gatewayUrl || options.baseUrl,
       maxTurns,
       timeoutMs,
-      sessionId: options.sessionId,
+      // Subagent's session = child session id; parent memory untouched.
+      sessionId: childId,
+      sandboxMode: options.sandboxMode,
+      agentRole: role,
+      agentDepth: options.agentDepth,
     });
 
     if (onEvent) {
@@ -215,9 +278,16 @@ export async function executeSubagentTask(
       tokensUsed: res.tokensUsed || 0,
       role,
       nodeId: node.id,
+      childSessionId: childId,
       error: res.error || (res.success ? undefined : `Sub-Agent failed for task '${node.title}'`),
     };
   } finally {
     unsubscribe();
+    // Phase 4: cleanup the child's in-memory context once the result
+    // has been returned. Persisted sessions (saved via saveSession) are
+    // never deleted by this path — only the live registry entry.
+    try {
+      deleteSessionContext(childId);
+    } catch {}
   }
 }

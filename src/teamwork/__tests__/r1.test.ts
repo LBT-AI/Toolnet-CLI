@@ -287,6 +287,17 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
       createdAt: Date.now(),
     };
 
+    // BEFORE (Phase 1-): unreachable gatewayUrl triggered the removed fake
+    // "Completed in fallback mode" success. AFTER (Phase 2): worker results are
+    // structured; we mock the provider HTTP layer so the REAL subagent path
+    // (executeSubagentTask → AgentHarness) succeeds honestly.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "Task completed." } }] }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )) as any;
+
     const scheduler = new DynamicScheduler(graph, { gatewayUrl: "http://mock:9999" });
     const statusChanges: string[] = [];
     const eventsReceived: string[] = [];
@@ -299,16 +310,20 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
       eventsReceived.push(evt.type);
     });
 
-    const finalState = await scheduler.start();
+    try {
+      const finalState = await scheduler.start();
 
-    expect(finalState.status).toBe("COMPLETED");
-    expect(finalState.completedTaskIds).toEqual(["t1", "t2"]);
-    expect(statusChanges).toContain("t1:RUNNING");
-    expect(statusChanges).toContain("t1:COMPLETED");
-    expect(statusChanges).toContain("t2:RUNNING");
-    expect(statusChanges).toContain("t2:COMPLETED");
-    expect(eventsReceived).toContain("scheduler:start");
-    expect(eventsReceived).toContain("scheduler:complete");
+      expect(finalState.status).toBe("COMPLETED");
+      expect(finalState.completedTaskIds).toEqual(["t1", "t2"]);
+      expect(statusChanges).toContain("t1:RUNNING");
+      expect(statusChanges).toContain("t1:COMPLETED");
+      expect(statusChanges).toContain("t2:RUNNING");
+      expect(statusChanges).toContain("t2:COMPLETED");
+      expect(eventsReceived).toContain("scheduler:start");
+      expect(eventsReceived).toContain("scheduler:complete");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   }, { timeout: 30000 });
 
   test("cascades failure to dependent nodes (PENDING -> SKIPPED)", async () => {
@@ -388,14 +403,27 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
       createdAt: Date.now(),
     };
 
-    const scheduler = new DynamicScheduler(graph, { maxConcurrencyOverride: 1, gatewayUrl: "http://mock:9999" });
-    const finalState = await scheduler.start();
+    // Phase 2: mock provider HTTP (before: fake-success fallback masked the
+    // unreachable gateway). Real subagent path must succeed honestly.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "OK" } }] }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )) as any;
 
-    expect(finalState.status).toBe("COMPLETED");
-    expect(finalState.completedTaskIds).toHaveLength(3);
-    expect(finalState.completedTaskIds).toContain("root-1");
-    expect(finalState.completedTaskIds).toContain("root-2");
-    expect(finalState.completedTaskIds).toContain("root-3");
+    const scheduler = new DynamicScheduler(graph, { maxConcurrencyOverride: 1, gatewayUrl: "http://mock:9999" });
+    try {
+      const finalState = await scheduler.start();
+
+      expect(finalState.status).toBe("COMPLETED");
+      expect(finalState.completedTaskIds).toHaveLength(3);
+      expect(finalState.completedTaskIds).toContain("root-1");
+      expect(finalState.completedTaskIds).toContain("root-2");
+      expect(finalState.completedTaskIds).toContain("root-3");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   }, { timeout: 30000 });
 
   test("executes parallel ready nodes exceeding maxWorkers limit without deadlocking (maxConcurrency = 2)", async () => {
@@ -412,14 +440,26 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
       createdAt: Date.now(),
     };
 
-    const scheduler = new DynamicScheduler(graph, { maxConcurrencyOverride: 2, gatewayUrl: "http://mock:9999" });
-    const finalState = await scheduler.start();
+    // Phase 2: mock provider HTTP (before: fake-success fallback).
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "OK" } }] }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )) as any;
 
-    expect(finalState.status).toBe("COMPLETED");
-    expect(finalState.completedTaskIds).toHaveLength(3);
-    expect(finalState.completedTaskIds).toContain("root-1");
-    expect(finalState.completedTaskIds).toContain("root-2");
-    expect(finalState.completedTaskIds).toContain("root-3");
+    const scheduler = new DynamicScheduler(graph, { maxConcurrencyOverride: 2, gatewayUrl: "http://mock:9999" });
+    try {
+      const finalState = await scheduler.start();
+
+      expect(finalState.status).toBe("COMPLETED");
+      expect(finalState.completedTaskIds).toHaveLength(3);
+      expect(finalState.completedTaskIds).toContain("root-1");
+      expect(finalState.completedTaskIds).toContain("root-2");
+      expect(finalState.completedTaskIds).toContain("root-3");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   }, { timeout: 30000 });
 
   test("preserves scheduler state status FAILED when set before completion", async () => {

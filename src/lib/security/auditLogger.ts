@@ -1,16 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import crypto from "node:crypto";
 import type { SecurityAuditEvent } from "./types";
 import { redactOutputSecrets } from "./outputRedactor";
 import { redactSecrets } from "./secretGuard";
+import { getToolnetAuditDir } from "../toolnetHome";
 
 export const GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 
 function getDefaultAuditDir(): string {
-  if (process.env.TOOLNET_AUDIT_DIR) return process.env.TOOLNET_AUDIT_DIR;
-  return path.join(os.homedir(), ".toolnet-cli", "audit");
+  // Phase 3: canonical home (~/.toolnetcli/audit), legacy dir migrated by toolnetHome.
+  return getToolnetAuditDir();
 }
 
 export interface AuditEntry {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { evaluatePermission, getSandboxMode } from "./permissions";
+import { getSandboxMode } from "./permissions";
+import { securityEngine } from "./security/securityEngine";
 
 export interface ValidatedImage {
   filePath: string;
@@ -110,9 +111,13 @@ export function validateAndLoadImage(filePath: string, cwd = process.cwd(), maxS
     };
   }
 
-  // Check Sandbox escape
+  // Layer 4 Phase 1: sandbox boundary via SecurityEngine (single policy source).
+  // Image reading is a model-driven file read — it must respect the same
+  // workspace policy as the read_file tool.
   const sandboxMode = getSandboxMode();
-  const perm = evaluatePermission("read_file", { path: absPath }, sandboxMode, cwd, cwd);
+  // Pass cwd as the workspace root: image validation is invoked with an explicit
+  // pipeline cwd which acts as the effective workspace boundary for the read.
+  const perm = securityEngine.evaluate("read_file", { path: absPath }, sandboxMode, cwd, cwd);
   if (!perm.allowed && !perm.needsApproval) {
     return {
       ok: false,

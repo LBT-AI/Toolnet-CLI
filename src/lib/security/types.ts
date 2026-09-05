@@ -56,6 +56,8 @@ export interface ToolExecutionContext {
   agentRole?: string;
   agentDepth?: number;
   sessionId?: string;
+  /** Layer 4 Phase 1: origin of the call — for audit + role propagation. */
+  source?: "tui" | "headless" | "subagent" | "teamwork" | "plugin" | "vision" | "mcp";
 }
 
 export interface ToolGatewayResult {

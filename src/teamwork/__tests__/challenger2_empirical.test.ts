@@ -1,4 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
+import { mcpTrustManager, getLocalMcpServers } from "../../lib/mcpRunner";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -35,6 +36,12 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
       JSON.stringify(mcpConfig, null, 2),
       "utf8"
     );
+
+    // Phase 3 trust model: these tests exercise the ENABLED end-to-end path,
+    // so grant explicit trust to the discovered server (simulates /mcp enable).
+    for (const server of getLocalMcpServers(tempDir)) {
+      mcpTrustManager.enableServer(server.serverId, server.config, server.sourceFile);
+    }
   });
 
   afterEach(async () => {
@@ -288,12 +295,16 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
       const status = await initMcpClients(tempDir);
       expect(status.connectedServers).toEqual(["mock-weather-server"]);
 
+      // Phase 3: canonical namespaced tool name.
+      const server = getLocalMcpServers(tempDir).find(s => s.name === "mock-weather-server")!;
+      const canonical = `mcp__${server.serverId}__get_weather`;
+
       const tools = getMergedAgentTools();
-      const weatherTool = tools.find((t) => t.function.name === "get_weather");
+      const weatherTool = tools.find((t) => t.function.name === canonical);
       expect(weatherTool).toBeDefined();
       expect(weatherTool.function.parameters.properties.location).toBeDefined();
 
-      const rawRes = await executeTool("get_weather", { location: "Tokyo" });
+      const rawRes = await executeTool(canonical, { location: "Tokyo" });
       const parsedRes = JSON.parse(rawRes);
       expect(parsedRes.exitCode).toBe(0);
       expect(parsedRes.stderr).toBe("");
@@ -306,7 +317,9 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
 
     test("R3.3: Call get_weather with missing arguments (defaults to Unknown)", async () => {
       await initMcpClients(tempDir);
-      const rawRes = await executeTool("get_weather", {});
+      const server = getLocalMcpServers(tempDir).find(s => s.name === "mock-weather-server")!;
+      const canonical = `mcp__${server.serverId}__get_weather`;
+      const rawRes = await executeTool(canonical, {});
       const parsedRes = JSON.parse(rawRes);
       expect(parsedRes.exitCode).toBe(0);
 
@@ -324,25 +337,29 @@ describe("Challenger 2 Empirical Tests - R2 & R3", () => {
 
     test("R3.5: Multiple sequential initMcpClients calls clean up prior clients correctly", async () => {
       await initMcpClients(tempDir);
-      expect(getMergedAgentTools().some(t => t.function.name === "get_weather")).toBe(true);
+      const server = getLocalMcpServers(tempDir).find(s => s.name === "mock-weather-server")!;
+      const canonical = `mcp__${server.serverId}__get_weather`;
+      expect(getMergedAgentTools().some(t => t.function.name === canonical)).toBe(true);
 
       const status2 = await initMcpClients(tempDir);
       expect(status2.connectedServers).toEqual(["mock-weather-server"]);
 
-      const weatherTools = getMergedAgentTools().filter(t => t.function.name === "get_weather");
+      const weatherTools = getMergedAgentTools().filter(t => t.function.name === canonical);
       expect(weatherTools.length).toBe(1);
 
-      const res = await executeTool("get_weather", { location: "London" });
+      const res = await executeTool(canonical, { location: "London" });
       expect(JSON.parse(res).exitCode).toBe(0);
     });
 
     test("R3.6: Concurrent tool executions through MCP client", async () => {
       await initMcpClients(tempDir);
+      const server = getLocalMcpServers(tempDir).find(s => s.name === "mock-weather-server")!;
+      const canonical = `mcp__${server.serverId}__get_weather`;
 
       const promises = [
-        executeTool("get_weather", { location: "Hanoi" }),
-        executeTool("get_weather", { location: "Paris" }),
-        executeTool("get_weather", { location: "New York" }),
+        executeTool(canonical, { location: "Hanoi" }),
+        executeTool(canonical, { location: "Paris" }),
+        executeTool(canonical, { location: "New York" }),
       ];
 
       const results = await Promise.all(promises);

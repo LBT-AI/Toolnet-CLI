@@ -555,6 +555,18 @@ const isInteractiveMode = !isHeadless && !isSimple;
 // ---- Workspace init (deferred so subcommands are silent) ----
 initWorkspace();
 
+// ---- Legacy global-state migration (idempotent, non-fatal) ----
+// Phase 3: consolidates ~/.toolnet-cli and ~/.toolnet into ~/.toolnetcli.
+// Never runs for subcommand help/version paths (fast exit happens before).
+import("./lib/toolnetHome")
+  .then(({ migrateLegacyToolnetState }) => migrateLegacyToolnetState())
+  .then((res) => {
+    if (res?.warnings?.length) {
+      for (const w of res.warnings) console.error(`\x1b[33m[migrate]\x1b[0m ${w}`);
+    }
+  })
+  .catch(() => {});
+
 // ---- Background update check (interactive only, non-blocking) ----
 if (isInteractiveMode && isTty() && !process.env.TOOLNET_HEADLESS) {
   import("./lib/updater").then(({ backgroundCheck }) => {

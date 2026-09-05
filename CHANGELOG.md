@@ -2,6 +2,20 @@
 All notable changes to ToolNet CLI will be documented here.
 The project follows Semantic Versioning.
 
+## [1.2.1] - 2026-09-05
+### Security / Execution
+- Routed model-callable tool execution through the ToolGateway chokepoint, with approval/session-trust handling, shell environment and working-directory scrubbing, process-tree hardening, and convergent critical-deny enforcement.
+### Teamwork
+- Replaced fake worker success with structured worker results, enforced budgets and dependency correctness, and hardened retry/concurrency behavior.
+### MCP
+- Added trust gating, namespace isolation, secret-free child environments, timeout/output caps, and lifecycle cleanup for local MCP execution. Remote HTTP/SSE MCP remains unsupported.
+### State
+- Standardized persistent state on `~/.toolnetcli`, with legacy-state migration while retaining project-local `.toolnet` data.
+### Context
+- Added per-session isolation, protection against late asynchronous completions, provider-compatible compaction, and improved token accounting.
+### Final hardening
+- Added `safeFetch` redaction, expanded red-team coverage, strengthened audit integrity, and verified package/clean-HOME smoke paths.
+
 ## [1.1.0] - 2026-08-30
 ### Added
 - **Native Anthropic Messages API Adapter (`src/providers/anthropic.ts`)**: Direct integration with `/v1/messages`, multi-turn tool calling, SSE streaming (`content_block_delta`), and `x-api-key` header handling.
@@ -85,8 +99,9 @@ The project follows Semantic Versioning.
 - ToolNet CLI separated from the ToolNet API repository
 - Repository metadata now points to LBT-AI/Toolnet-CLI
 
-[Unreleased]: https://github.com/LBT-AI/Toolnet-CLI/compare/v1.0.5...HEAD
-[1.0.5]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.5
+[Unreleased]: https://github.com/LBT-AI/Toolnet-CLI/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.2.1
+[1.1.0]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.1.0
 [1.0.4]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.4
 [1.0.3]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.3
 [1.0.2]: https://github.com/LBT-AI/Toolnet-CLI/releases/tag/v1.0.2

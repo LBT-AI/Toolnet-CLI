@@ -13,7 +13,7 @@ export const harnessCommand: Command = {
       model: ctx.currentModel ? ctx.currentModel() : undefined,
     });
     const snap = harness.getSnapshot();
-    const memory = contextEngine.getSessionMemory();
+    const memory = contextEngine.getSessionMemory(snap.sessionId);
     const trustedRules = sessionTrust.listTrusted();
 
     const lines: string[] = [

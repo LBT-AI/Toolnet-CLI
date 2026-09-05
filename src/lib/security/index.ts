@@ -12,3 +12,4 @@ export * from "./auditLogger";
 export * from "./securityEngine";
 export * from "./permissionContext";
 export * from "./toolGateway";
+export * from "./childEnv";

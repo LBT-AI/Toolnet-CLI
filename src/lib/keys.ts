@@ -1,19 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-
-const APP_NAME = "toolnetcli";
+import { getToolnetKeysPath } from "./toolnetHome";
 
 function getDataDir(): string {
   if (process.env.DATA_DIR) return process.env.DATA_DIR;
-  if (process.platform === "win32") {
-    return path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), APP_NAME);
-  }
-  return path.join(os.homedir(), `.${APP_NAME}`);
+  // Phase 3: canonical home (win32 included — one root everywhere).
+  return path.dirname(getToolnetKeysPath());
 }
 
 function getKeysFile(): string {
-  return path.join(getDataDir(), "cli-keys.json");
+  return getToolnetKeysPath();
 }
 const LEGACY_KEYS_FILE = path.join(os.homedir(), ".toolnetapi", "cli-keys.json");
 

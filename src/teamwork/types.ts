@@ -32,6 +32,8 @@ export type TaskStatus =
   | 'COMPLETED'
   | 'FAILED'
   | 'SKIPPED'
+  | 'BUDGET_EXCEEDED'
+  | 'CANCELLED'
   | 'pending'
   | 'ready'
   | 'running'
@@ -39,6 +41,9 @@ export type TaskStatus =
   | 'failed'
   | 'skipped'
   | 'blocked';
+
+/** Terminal skip reason recorded on the node when it never runs. */
+export type SkipReason = 'BLOCKED_DEPENDENCY' | 'BUDGET_EXCEEDED' | 'CANCELLED';
 
 export type TaskNodeStatus = TaskStatus;
 
@@ -48,6 +53,21 @@ export interface TaskNodeOutput {
   modifiedFiles?: string[];
   artifacts?: string[];
   error?: string;
+}
+
+/**
+ * Structured execution result attached to a node by the scheduler
+ * (Layer 4 Phase 2). COMPLETED ⇔ outputResult.success === true.
+ */
+export interface NodeOutputResult {
+  success: boolean;
+  output?: string;
+  error?: string;
+  errorCode?: string;
+  retryable?: boolean;
+  tokensUsed?: number;
+  durationMs?: number;
+  attempts?: number;
 }
 
 export interface TaskNode {
@@ -65,9 +85,13 @@ export interface TaskNode {
   reviewRequired?: boolean;
   maxTurns?: number;
   inputContext?: Record<string, unknown>;
-  outputResult?: TaskNodeOutput;
+  outputResult?: NodeOutputResult;
+  /** Terminal skip reason when status is SKIPPED/BUDGET_EXCEEDED. */
+  skipReason?: SkipReason;
   result?: string;
   error?: string;
+  /** Machine-readable failure code (PROVIDER_NETWORK, AUTH_REQUIRED, ...). */
+  errorCode?: string;
   retryCount?: number;
   attempts?: number;
   maxAttempts?: number;
@@ -153,7 +177,9 @@ export type SchedulerStatus =
   | 'RUNNING'
   | 'PAUSED'
   | 'COMPLETED'
-  | 'FAILED';
+  | 'FAILED'
+  | 'BUDGET_EXCEEDED'
+  | 'CANCELLED';
 
 export interface ActiveAgent {
   agentId: string;

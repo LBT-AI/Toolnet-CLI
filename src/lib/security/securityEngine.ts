@@ -11,7 +11,7 @@ import type {
 import { isSensitiveFile } from "./secretGuard";
 import { classifyShellCommand } from "./commandClassifier";
 import { policyEngine } from "./policyEngine";
-import { sessionTrust } from "./sessionTrust";
+import { SessionTrustManager, getLegacyCompatibilitySessionId } from "./sessionTrust";
 import { auditLogger } from "./auditLogger";
 import {
   isPathInsideWorkspace,
@@ -24,6 +24,7 @@ import {
 export class SecurityEngine {
   private currentMode: SandboxMode = "workspace";
   private pluginTools = new Set<string>();
+  private readonly trustManager = new SessionTrustManager();
 
   setMode(mode: SandboxMode) {
     this.currentMode = mode;
@@ -48,6 +49,31 @@ export class SecurityEngine {
 
   getMode(): SandboxMode {
     return this.currentMode;
+  }
+
+  /**
+   * Layer 4 Phase 1: canonical session-trust target key.
+   * THE single source for how a tool+args pair maps to a sessionTrust key.
+   * The TUI approval modal MUST call this instead of deriving its own key from
+   * command/path so recordDecision and isTrustedForSession always match.
+   */
+  getSessionTrustTargetKey(toolName: string, args: any): string {
+    const category = this.categorizeTool(toolName);
+    if (category === "SHELL_EXECUTE") {
+      return String(args?.command || args?.cmd || "").trim();
+    }
+    return String(args?.path || args?.name || args?.url || "");
+  }
+
+  /**
+   * Convenience passthrough so callers don't reach into sessionTrust directly.
+   * sessionId must be the explicit session id (never empty). Falls back to
+   * the canonical "current" session only when an explicit context is absent.
+   */
+  isSessionDenied(toolName: string, targetKey: string, sessionId?: string): boolean {
+    // No implicit bucket: an absent session cannot inherit any trust decision.
+    if (!sessionId) return false;
+    return this.trustManager.isDeniedForSession(sessionId, toolName, targetKey);
   }
 
   /**
@@ -301,11 +327,21 @@ export class SecurityEngine {
       ? String(args?.command || args?.cmd || "").trim()
       : (args?.path || args?.name || args?.url || "");
 
-    if (sessionTrust.isDeniedForSession(toolName, targetKey)) {
+    const sid = context?.sessionId || (
+      // Test-only compatibility for pre-Phase-5 callers. Production paths
+      // must provide context.sessionId and never enter this bucket. Legacy
+      // tests may bind the deprecated singleton to an explicit current id.
+      process.env.NODE_ENV === "test"
+        ? ((globalThis as any).__toolnetCurrentSessionId || getLegacyCompatibilitySessionId())
+        : undefined
+    );
+    // Guard clause: production trust is never consulted without an explicit
+    // session id. The test-only adapter preserves older regression fixtures.
+    if (sid && this.trustManager.isDeniedForSession(sid, toolName, targetKey)) {
       return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "DANGEROUS", capability: toolCap, reason: "Action was previously denied for this session." };
     }
 
-    if (sessionTrust.isTrustedForSession(toolName, targetKey, mode)) {
+    if (sid && this.trustManager.isTrustedForSession(sid, toolName, targetKey, mode)) {
       return { decision: "ALLOW", allowed: true, needsApproval: false, riskLevel: analysisRisk === "DANGEROUS" ? "SAFE_BUILD" : analysisRisk, capability: toolCap };
     }
 
@@ -340,9 +376,15 @@ export class SecurityEngine {
     }
 
     if (category === "MCP_TOOL" && !this.isPluginTool(toolName)) {
-      const isReadOnly = /^(read|list|get|inspect|search|find|view|query)/i.test(toolName);
+      // Phase 3: evaluate the UNDERLYING MCP tool name. The public tool may be
+      // namespaced (mcp__<server>__<tool>) — never let the mcp__ prefix make a
+      // mutating tool look read-only, and never let it look built-in.
+      const effectiveName = toolName.startsWith("mcp__")
+        ? (toolName.split("__")[2] || toolName)
+        : toolName;
+      const isReadOnly = /^(read|list|get|inspect|search|find|view|query)/i.test(effectiveName);
       if (!isReadOnly) {
-        return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "DANGEROUS", capability: toolCap, reason: `Mutating external MCP tool '${toolName}' is blocked in workspace mode.` };
+        return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "DANGEROUS", capability: toolCap, reason: `Mutating external MCP tool '${effectiveName}' is blocked in workspace mode.` };
       }
     }
 
@@ -390,7 +432,11 @@ export class SecurityEngine {
     }
 
     if (category === "MCP_TOOL") {
-      const isReadOnly = /^(read|list|get|inspect|search|find|view|query)/i.test(toolName);
+      // Phase 3: underlying tool name for namespaced MCP tools.
+      const effectiveName = toolName.startsWith("mcp__")
+        ? (toolName.split("__")[2] || toolName)
+        : toolName;
+      const isReadOnly = /^(read|list|get|inspect|search|find|view|query)/i.test(effectiveName);
       return { riskLevel: isReadOnly ? "SAFE_READ" : "MODERATE_WRITE", capability: "EXECUTE" };
     }
 
@@ -445,6 +491,9 @@ export class SecurityEngine {
     // env VAR=value sh -c or env VAR=value bash -c
     if (/\benv\s+[A-Z_]+\s*=\s*.*\s+(bash|sh)\s+-c/.test(command)) return true;
 
+    // env with ANY target (env obscures the real executable — Fail-Closed)
+    if (/\benv\s+/.test(command)) return true;
+
     // command ... (command wrapper)
     if (/\bcommand\s+/.test(command)) return true;
 
@@ -460,11 +509,18 @@ export class SecurityEngine {
     // xargs sh -c, xargs bash -c
     if (/\bxargs\s+.*\s+(bash|sh)\s+-c/.test(command)) return true;
 
+    // xargs with any target (argument-list expansion obscures the real executable)
+    if (/\bxargs\b/.test(command)) return true;
+
     // find -exec, find -execdir
     if (/\bfind\s+.*\s+-exec(dir)?\s+/.test(command)) return true;
 
     // find -delete
     if (/\bfind\s+.*\s+-delete\b/.test(command)) return true;
+
+    // php -r, lua -e style inline interpreters
+    if (/\bphp\s+-r\s+/.test(command)) return true;
+    if (/\b(ruby|python3?|perl|node|lua)\s+-[ec]\s+/.test(command)) return true;
 
     // Variable in command position: $CMD, ${CMD}
     if (/\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*\s+/.test(command)) return true;
@@ -518,6 +574,10 @@ export class SecurityEngine {
     let isInside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 
     if (!isInside && !workspaceRoot) {
+      // Multi-root fallback: consult ALL registered workspace roots so the
+      // SecurityEngine boundary matches the workspace-roots model used by the
+      // tool layer (setWorkspaceRoots / toolnet.workspace.json).
+      // Only when no explicit root was passed — an explicit root is authoritative.
       try {
         const { getWorkspaceRoots } = require("../codingAgent");
         const roots: string[] = getWorkspaceRoots();

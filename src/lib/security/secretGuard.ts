@@ -59,6 +59,12 @@ export function isSensitiveFile(filePath: string): { isSensitive: boolean; reaso
  * Regex patterns to detect and mask API keys, tokens, and private keys in output text.
  */
 const SECRET_REDACTION_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
+  // Standard credential-bearing HTTP headers (case-insensitive). Redact the
+  // complete credential value, including Bearer/Basic schemes, without
+  // swallowing unrelated prose following the header.
+  { pattern: /((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)\s*:\s*)(?:(?:Bearer|Basic)\s+)?[^\s,;]+/gi, replacement: "$1[REDACTED_HEADER]" },
+  // Credential assignments in query strings, URLs, JSON, or plain diagnostics.
+  { pattern: /((?<![A-Z_])(?:token|access_token|refresh_token|api_key|password|secret)\s*[=:]\s*["']?)([^"'\s&,}]+)/gi, replacement: "$1[REDACTED_SECRET]" },
   // Private Key Blocks
   {
     pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
@@ -70,13 +76,16 @@ const SECRET_REDACTION_PATTERNS: Array<{ pattern: RegExp; replacement: string }>
   { pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED_OPENAI_KEY]" },
   // GitHub Personal Access Token
   { pattern: /\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b/g, replacement: "[REDACTED_GITHUB_TOKEN]" },
+  { pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED_GITHUB_TOKEN]" },
   // NPM Access Token
-  { pattern: /\bnpm_[A-Za-z0-9]{36}\b/g, replacement: "[REDACTED_NPM_TOKEN]" },
+  { pattern: /\bnpm_[A-Za-z0-9]{20,}\b/g, replacement: "[REDACTED_NPM_TOKEN]" },
   // AWS Access Key ID
   { pattern: /\b(AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b/g, replacement: "[REDACTED_AWS_KEY_ID]" },
   // Bearer Token Header
   { pattern: /(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+/-]{20,}/gi, replacement: "$1[REDACTED_BEARER_TOKEN]" },
-  // Key / Secret assignment in config/env
+  // Key / Secret assignment in config/env. Keep this after provider-specific
+  // token patterns so GITHUB_TOKEN/npm token values retain their precise
+  // redaction labels instead of being consumed by this generic rule.
   {
     pattern: /((?:API_KEY|SECRET|PASSWORD|PASSWD|AUTH_TOKEN|PRIVATE_KEY|DATABASE_URL|ACCESS_TOKEN)\s*[:=]\s*["']?)[^"'\s\r\n]{8,}(["']?)/gi,
     replacement: "$1[REDACTED_SECRET]$2",

@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { getActiveBaseUrl } from "../providers";
+import { getToolnetAuthTokenPath } from "./toolnetHome";
 
-const CONFIG_DIR = path.join(os.homedir(), ".toolnet");
-const TOKEN_FILE = path.join(CONFIG_DIR, "auth_token");
+// Phase 3: canonical home — legacy ~/.toolnet/auth_token migrated by toolnetHome.
+const TOKEN_FILE = getToolnetAuthTokenPath();
 
 export function getStoredToken(): string | null {
   try {
@@ -15,7 +15,8 @@ export function getStoredToken(): string | null {
 }
 
 export function storeToken(token: string) {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const { ensureToolnetDir, getToolnetHome } = require("./toolnetHome");
+  ensureToolnetDir(getToolnetHome());
   fs.writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
 }
 

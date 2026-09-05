@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { getToolnetHome } from "../toolnetHome";
 import { ALL_BYPASS_LEVELS, type BypassConfig, type BypassLevel, type BypassTurnResult, type RefusalCheckResult } from "./types";
 import { BYPASS_LEVEL_CATALOG, getBypassPrompt } from "./prompts";
 import { isRefusal, getEscalatedLevel, generateRefusalOverridePrompt } from "./antiRefusal";
@@ -9,9 +10,9 @@ import { setBypassPolicy } from "../codingAgent";
 import { getSandboxMode } from "../permissions";
 
 function getConfigDir(): string {
-  if (process.env.TOOLNETCLI_CONFIG_DIR) return process.env.TOOLNETCLI_CONFIG_DIR;
   if (process.env.DATA_DIR) return process.env.DATA_DIR;
-  return path.join(os.homedir(), ".toolnetcli");
+  // Phase 3: canonical home module (single TOOLNETCLI_CONFIG_DIR-aware source).
+  return getToolnetHome();
 }
 
 const CONFIG_FILE = path.join(getConfigDir(), "bypass-config.json");

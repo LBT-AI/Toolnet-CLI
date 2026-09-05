@@ -30,6 +30,10 @@ export function getSandboxMode(): SandboxMode {
 export function setSandboxMode(mode: SandboxMode): void {
   currentSandboxMode = mode;
   securityEngine.setMode(mode);
+  // Persist to user config ONLY in real usage. Test runs (bun test sets
+  // NODE_ENV=test) must never mutate the user's on-disk config — that caused
+  // cross-run pollution where a test's "ask" mode leaked into the next run.
+  if (process.env.NODE_ENV === "test") return;
   try {
     updateConfig({ sandboxMode: mode });
   } catch {}
@@ -79,6 +83,10 @@ export function isPathInsideWorkspace(
   let isInside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 
   if (!isInside && !workspaceRoot) {
+    // Multi-root fallback: consult ALL registered workspace roots. This keeps
+    // tool-level boundary checks (codingAgent, vision, etc.) consistent with
+    // the workspace-roots model used elsewhere in the CLI.
+    // Only when no explicit root was passed — an explicit root is authoritative.
     try {
       const { getWorkspaceRoots } = require("./codingAgent");
       const roots: string[] = getWorkspaceRoots();
