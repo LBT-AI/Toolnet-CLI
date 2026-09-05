@@ -37,7 +37,7 @@ jobs:
         run: bun run typecheck
 
       - name: Unit tests
-        run: bun test
+        run: bun test --parallel=1
 
       - name: Build Bun and Node bundles
         run: bun run build
