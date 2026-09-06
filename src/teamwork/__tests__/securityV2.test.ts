@@ -17,7 +17,7 @@ describe("Security & Permissions 2.0 Engine", () => {
   });
 
   afterEach(() => {
-    setSandboxMode("ask");
+    setSandboxMode("workspace");
     sessionTrust.clear();
   });
 

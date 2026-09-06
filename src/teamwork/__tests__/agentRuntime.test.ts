@@ -10,7 +10,7 @@ describe("Step 2 - P0-A Agent Execution Foundation", () => {
   });
 
   afterEach(() => {
-    setSandboxMode("ask");
+    setSandboxMode("workspace");
   });
 
   test("agentTools registry exposes all mandatory tools with schemas", () => {

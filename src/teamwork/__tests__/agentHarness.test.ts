@@ -14,7 +14,7 @@ describe("Unified AgentHarness Architecture", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    setSandboxMode("ask");
+    setSandboxMode("workspace");
     resetHarness();
   });
 

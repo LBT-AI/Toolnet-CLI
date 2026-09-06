@@ -29,6 +29,10 @@ describe("POLICY BASELINE", () => {
   const cwd = tmpBase;
   const wsRoot = tmpBase;
 
+  beforeEach(() => {
+    setSandboxMode("workspace");
+  });
+
   afterEach(() => { sessionTrust.clear(); });
 
   test("CRITICAL_DENY runs before whitelist — rm -rf / blocked even if whitelisted", () => {
