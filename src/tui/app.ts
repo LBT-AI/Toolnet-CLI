@@ -18,7 +18,7 @@ import { A, T, write, getSize } from "../term";
 import { BracketedPasteParser, ENABLE_BRACKETED_PASTE } from "../lib/bracketedPaste";
 import { setupTerminalLifecycle, restoreTerminal, wrapErrorBoundary, onTerminalResize } from "../lib/terminalLifecycle";
 import { initWorkspace } from "../lib/codingAgent";
-import { playSplashAnimation } from "../splash";
+import { showBannerIfEligible } from "../banner/banner";
 import { loadConfig } from "../lib/config";
 import { parseSessionArgs, loadSession, getLastSessionId, formatExitMessage } from "../lib/sessionPersistence";
 import { providerPicker } from "../components/ProviderPicker";
@@ -308,9 +308,7 @@ export async function main(): Promise<void> {
     tuiState.setStatus("Provider: Not configured │ Model: Not selected");
   }
 
-  if (!process.argv.includes("--no-splash")) {
-    await playSplashAnimation();
-  }
+  await showBannerIfEligible();
 
   const { resume, sessionId: requestedSessionId } = parseSessionArgs(process.argv.slice(2));
   if (requestedSessionId) {

@@ -12,7 +12,7 @@
 class Toolnet < Formula
   desc "AI coding agent for the terminal"
   homepage "https://github.com/LBT-AI/Toolnet-CLI"
-  version "1.2.1"
+  version "1.2.2"
   license "MIT"
 
   on_macos do

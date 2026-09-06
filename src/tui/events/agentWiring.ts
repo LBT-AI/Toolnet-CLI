@@ -553,6 +553,21 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
         break;
       }
 
+      case "/setup": {
+        // Exit the full-screen TUI, run the manual setup wizard in a fresh
+        // process (inherits this TTY), then leave. `toolnet` relaunches
+        // straight into the main TUI once the config is usable again.
+        tuiState.saveCurrentSession();
+        markCleanExit();
+        restoreTerminal();
+        const { spawn } = await import("node:child_process");
+        const entry = process.argv[1];
+        const child = spawn(process.execPath, [entry, "config", "init"], { stdio: "inherit" });
+        child.on("error", () => process.exit(1));
+        child.on("exit", (code) => process.exit(code ?? 0));
+        return;
+      }
+
       case "/skills":
       case "/skill": {
         const rest = parts.slice(1).join(" ").trim();

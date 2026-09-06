@@ -22,6 +22,7 @@ export const COMMANDS = [
   { name: "/plan",      desc: "Switch to Plan mode" },
   { name: "/build",     desc: "Switch to Build mode" },
   { name: "/provider",  desc: "Manage providers (add/use/list)" },
+  { name: "/setup",     desc: "Re-run setup wizard (provider / key / model)" },
   { name: "/providers", desc: "Show providers (open Web UI)" },
   { name: "/combos",    desc: "Manage AI combos (open Web UI)" },
   { name: "/keys",      desc: "Manage API keys (open Web UI)" },

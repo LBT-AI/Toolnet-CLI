@@ -1,0 +1,25 @@
+{
+  "name": "toolnet-cli",
+  "version": "1.0.0",
+  "description": "ToolNet CLI with neon boot animation",
+  "main": "dist/toolnet-cli.js",
+  "bin": {
+    "toolnet": "dist/toolnet-cli.js"
+  },
+  "scripts": {
+    "dev": "tsx toolnet-cli.ts",
+    "build": "tsc",
+    "start": "node dist/toolnet-cli.js"
+  },
+  "dependencies": {
+    "ansi-escapes": "^6.2.0",
+    "chalk": "^5.3.0",
+    "log-update": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  },
+  "type": "module"
+}

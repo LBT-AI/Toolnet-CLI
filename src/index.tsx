@@ -6,8 +6,8 @@ import { getVersion, getVersionString, getVersionJson } from "./lib/version";
 import type { ShellName } from "./lib/completion";
 import { generateCompletionScript, getCompletionInstallHelp } from "./lib/completion";
 import { handleUpdate } from "./lib/updater";
-import { appConfigExists, loadAppConfig } from "./lib/appConfig";
-import { runSetupWizard, isTty, printSetupHint } from "./lib/setupWizard";
+import { loadAppConfig } from "./lib/appConfig";
+import { runSetupWizard, isTty, printSetupHint, hasUsableConfiguration, shouldAutoLaunchSetup } from "./lib/setupWizard";
 
 const CLI_VERSION = getVersion();
 const args = process.argv.slice(2);
@@ -64,7 +64,8 @@ OPTIONS:
   -b, --bypass [level]  Enable Bypass/Jailbreak mode (e.g. --bypass godmode)
   -v, --version         Print version
   -h, --help            Show help
-  --no-splash           Skip startup splash
+  --no-splash           Skip startup banner
+  --banner              Force startup banner animation each run
   --no-color            Disable ANSI color outputs
   --verbose             Enable verbose output
   --json                JSON output with -p
@@ -332,11 +333,7 @@ SUBCOMMANDS:
     process.exit(0);
   }
   if (subArg === "init") {
-    if (!isTty()) {
-      printSetupHint();
-      process.exit(1);
-    }
-    await runSetupWizard();
+    await runSetupWizard({ forceAll: true });
     process.exit(0);
   }
   if (subArg === "show") {
@@ -578,10 +575,14 @@ if (isInteractiveMode && isTty() && !process.env.TOOLNET_HEADLESS) {
   }).catch(() => {});
 }
 
-// ---- First-run detection (interactive mode only) ----
-if (isInteractiveMode && isTty() && !appConfigExists()) {
-  console.log("\n\x1b[36mFirst run detected — launching setup wizard…\x1b[0m\n");
-  await runSetupWizard();
+// ---- First-run setup (interactive mode only) ----
+// Launches ONLY when there is no usable configuration (provider + key +
+// model). Partial/broken config resumes at the missing step instead of
+// offering a broken "Re-run setup?" restart. Esc/Ctrl+C exits cleanly with
+// no writes, so the next `toolnet` run opens setup again.
+if (isInteractiveMode && shouldAutoLaunchSetup()) {
+  const setupResult = await runSetupWizard();
+  if (!setupResult.completed) process.exit(0);
 }
 
 // ---- Non-interactive prompt mode ----
@@ -594,7 +595,7 @@ if (promptIdx >= 0) {
     console.error("Error: -p/--prompt requires a prompt.");
     process.exit(1);
   }
-  if (!appConfigExists()) {
+  if (!hasUsableConfiguration()) {
     printSetupHint();
   }
 

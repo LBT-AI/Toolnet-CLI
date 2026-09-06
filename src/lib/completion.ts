@@ -13,7 +13,7 @@ const SUBCOMMANDS =
   "config provider session resume skills tools queue completion update version usage budget doctor plugin pr issue audit telemetry";
 
 const TOP_FLAGS =
-  "--help -h --version -v --resume -r --session -s --model -m --prompt -p --simple --bypass -b --json --no-splash --verbose --format";
+  "--help -h --version -v --resume -r --session -s --model -m --prompt -p --simple --bypass -b --json --no-splash --banner --verbose --format";
 
 const bashCompletion = `# bash completion for toolnet
 _toolnet_completions() {
@@ -215,7 +215,8 @@ _toolnet() {
       '(-p --prompt)'{-p,--prompt}'=[Run non-interactively with prompt]' \
       '(-s --simple)'{-s,--simple}'[Launch lightweight REPL]' \
       '(-b --bypass)'{-b,--bypass}'=[Enable bypass mode level]' \
-      '--no-splash[Skip startup splash]' \
+      '--no-splash[Skip startup banner]' \
+      '--banner[Force startup banner animation]' \
       '--verbose[Enable verbose output]' \
       '--json[JSON output format]' \
       '--format=[Output format: text|markdown|json|jsonl]' \
@@ -238,7 +239,8 @@ complete -c toolnet -s v -l version -d 'Print version'
 complete -c toolnet -s p -l prompt -r -d 'Run non-interactively with prompt'
 complete -c toolnet -s s -l simple -d 'Launch lightweight REPL'
 complete -c toolnet -s b -l bypass -r -d 'Enable bypass mode level'
-complete -c toolnet -l no-splash -d 'Skip startup splash'
+complete -c toolnet -l no-splash -d 'Skip startup banner'
+complete -c toolnet -l banner -d 'Force startup banner animation'
 complete -c toolnet -l verbose -d 'Enable verbose output'
 complete -c toolnet -l json -d 'JSON output format'
 complete -c toolnet -l format -r -d 'Output format: text|markdown|json|jsonl'

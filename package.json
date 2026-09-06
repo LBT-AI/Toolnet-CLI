@@ -1,6 +1,6 @@
 {
   "name": "toolnetcli",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "type": "module",
   "license": "MIT",
   "description": "ToolNet CLI — AI coding agent for the terminal",
@@ -13,8 +13,7 @@
     "url": "https://github.com/LBT-AI/Toolnet-CLI/issues"
   },
   "bin": {
-    "toolnet": "bin/toolnet.js",
-    "toolnetcli": "bin/toolnet.js"
+    "toolnet": "bin/toolnet.js"
   },
   "files": [
     "bin",
@@ -30,6 +29,9 @@
     "prepack": "bun run build",
     "start": "bun dist/index.js",
     "start:node": "node dist/node/index.js",
+    "dev:boot": "tsx toolnet-cli.ts",
+    "build:boot": "tsc -p tsconfig.toolnet-cli.json",
+    "start:boot": "node dist/toolnet-cli.js",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "check": "bun run typecheck && bun test && bun run build",
@@ -47,20 +49,24 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@opentui/core": "0.4.5",
-    "@opentui/keymap": "0.4.5",
-    "@opentui/solid": "0.4.5",
-    "opentui-spinner": "0.0.7",
-    "solid-js": "1.9.15",
+    "ansi-escapes": "^7.3.0",
+    "chalk": "^6.0.0",
+    "log-update": "^8.0.0",
     "string-width": "^8.2.2",
     "strip-ansi": "7.1.2"
   },
   "devDependencies": {
-    "@types/bun": "latest",
+    "@opentui/core": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "@types/bun": "1.4.0",
+    "solid-js": "1.9.12",
+    "tsx": "^4.23.13",
     "typescript": "5.8.2"
   },
   "overrides": {
-    "brace-expansion": "2.1.4",
-    "@babel/core": "7.29.7"
+    "@babel/core": "7.29.7",
+    "babel-plugin-module-resolver": {
+      "glob": "13.0.6"
+    }
   }
 }

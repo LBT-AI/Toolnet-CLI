@@ -2,6 +2,14 @@
 All notable changes to ToolNet CLI will be documented here.
 The project follows Semantic Versioning.
 
+## [1.2.2] - 2026-09-06
+### Packaging
+- Clean npm installation dependency graph: no ERESOLVE, conflicting peer, or deprecated dependency warnings on fresh production install.
+- Removed conflicting OpenTUI peer dependencies (`@opentui/keymap`, `opentui-spinner`) not used by ToolNet.
+- Removed deprecated transitive `glob@9.3.5` by resolving `babel-plugin-module-resolver` against non-deprecated `glob@13`.
+- Single CLI command: `toolnet` (removed `toolnetcli` binary alias; npm package name remains `toolnetcli`).
+- First-install packaging fixes.
+
 ## [1.2.1] - 2026-09-05
 ### Security / Execution
 - Routed model-callable tool execution through the ToolGateway chokepoint, with approval/session-trust handling, shell environment and working-directory scrubbing, process-tree hardening, and convergent critical-deny enforcement.

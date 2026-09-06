@@ -6,7 +6,7 @@ import { dispatchCommand, getAllCommands } from "./commands";
 import { AgentRuntime } from "./lib/agentRuntime";
 import { printToolStart, printToolEnd } from "./lib/tool-format";
 import * as readline from "node:readline";
-import { playSplashAnimation } from "./splash";
+import { showBannerIfEligible } from "./banner/banner";
 import { bypassEngine } from "./lib/bypass";
 
 // ─── True color ANSI helpers (Catppuccin Mocha) ──────────────────────────
@@ -414,7 +414,7 @@ export async function main() {
     await withSpinner("Checking provider...", () => provider.health!());
   }
 
-  await playSplashAnimation();
+  await showBannerIfEligible();
 
   print("");
   print(C.bold + color.cyan + "  ╭━━━╮╭╮╭━╮╭━╮╭━┳╮╭━┳━╮" + C.reset);

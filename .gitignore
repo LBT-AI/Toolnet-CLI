@@ -14,3 +14,4 @@ dist-bin/
 .plroute-*
 *.tmp
 test_sandbox/
+.clai/

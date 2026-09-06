@@ -20,6 +20,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getToolnetConfigPath, getToolnetHome } from "./toolnetHome";
+import { BANNER_SETTINGS } from "../banner/types";
+import type { BannerSetting } from "../banner/types";
 
 export const CURRENT_SCHEMA_VERSION = 2;
 
@@ -44,6 +46,8 @@ export interface AppConfig {
   /** Auto-update check cadence in hours (24 or 168). */
   updateCheckIntervalHours: number;
   updateCheckEnabled: boolean;
+  /** Startup banner: "once" (default) | "always" | "never". */
+  banner: BannerSetting;
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
@@ -58,6 +62,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   theme: "dark",
   updateCheckIntervalHours: 24,
   updateCheckEnabled: true,
+  banner: "once",
 };
 
 /** Fields that may be carried over from the legacy ~/.toolnetapi/config.json. */
@@ -121,6 +126,12 @@ export function validateConfig(input: unknown): AppConfig {
   const interval = input.updateCheckIntervalHours;
   if (typeof interval === "number" && Number.isFinite(interval) && interval >= 1) {
     cfg.updateCheckIntervalHours = Math.floor(interval);
+  }
+  if (
+    typeof input.banner === "string" &&
+    (BANNER_SETTINGS as readonly string[]).includes(input.banner)
+  ) {
+    cfg.banner = input.banner as BannerSetting;
   }
 
   return cfg;

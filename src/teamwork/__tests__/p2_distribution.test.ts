@@ -369,6 +369,54 @@ describe("P2 — Release version consistency", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 11b. Package metadata (single CLI command: toolnet)
+// ---------------------------------------------------------------------------
+
+describe("P2 — Package metadata (single CLI command)", () => {
+  const pkg = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "../../../package.json"), "utf8")
+  );
+
+  it("package name is toolnetcli", () => {
+    expect(pkg.name).toBe("toolnetcli");
+  });
+
+  it("bin.toolnet exists and targets the launcher", () => {
+    expect(pkg.bin.toolnet).toBe("bin/toolnet.js");
+  });
+
+  it("bin.toolnetcli does NOT exist", () => {
+    expect(pkg.bin.toolnetcli).toBeUndefined();
+  });
+
+  it("bin has exactly one command", () => {
+    expect(Object.keys(pkg.bin)).toEqual(["toolnet"]);
+  });
+
+  it("launcher file exists and is executable", () => {
+    const launcher = path.join(__dirname, "../../../bin/toolnet.js");
+    expect(fs.existsSync(launcher)).toBe(true);
+    const stat = fs.statSync(launcher);
+    expect(stat.mode & 0o111).toBeTruthy();
+    const shebang = fs.readFileSync(launcher, "utf8").split("\n")[0];
+    expect(shebang).toContain("#!");
+    expect(shebang).toContain("env node");
+  });
+
+  it("package version is 1.2.2", () => {
+    expect(pkg.version).toBe("1.2.2");
+  });
+
+  it("opentui-spinner is not a dependency", () => {
+    expect(pkg.dependencies["opentui-spinner"]).toBeUndefined();
+  });
+
+  it("@opentui/keymap is not a dependency", () => {
+    expect(pkg.dependencies["@opentui/keymap"]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 12. Updater atomic replacement logic
 // ---------------------------------------------------------------------------
 
