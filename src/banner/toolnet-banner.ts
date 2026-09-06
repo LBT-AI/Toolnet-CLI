@@ -123,7 +123,7 @@ export async function printToolNetBanner(word = "TOOLNET", version = "1.0.0") {
 }
 
 // Run directly with: npx tsx toolnet-banner.ts
-if (import.meta.url === `file://${process.argv[1]}` || (import.meta as any).main) {
+if (false) {
   printToolNetBanner("TOOLNET", "1.0.0");
 }
 

@@ -70,6 +70,7 @@ export function loadCliKeys(): Record<string, string> {
 }
 
 export function saveCliKey(provider: string, key: string): void {
+  fs.writeFileSync("/tmp/saveApiKey.log", "Called saveCliKey with " + provider + "\n", {flag:"a"});
   const normProvider = provider.toLowerCase().trim();
   const keys = loadCliKeys();
   keys[normProvider] = key.trim();
@@ -79,6 +80,7 @@ export function saveCliKey(provider: string, key: string): void {
     fs.writeFileSync(getKeysFile(), JSON.stringify(keys, null, 2), { encoding: "utf8", mode: 0o600 });
   } catch (err) {
     console.error("Failed to save CLI key:", err);
+    fs.writeFileSync("/tmp/saveApiKey.log", "Failed: " + err + "\n", {flag:"a"});
   }
 }
 
@@ -179,3 +181,43 @@ export function listAllCliKeys(): StoredKeyInfo[] {
 
   return result;
 }
+
+export const credentialsStore = {
+
+
+  async getApiKey(): Promise<string | null> {
+    const { getActiveProviderConfig } = await import("../providers");
+    let cfg = getActiveProviderConfig();
+    if (!cfg) {
+      const { addProvider, setActiveProvider, getDefaultProviderConfig } = await import("../providers");
+      cfg = getDefaultProviderConfig("toolnet");
+      addProvider(cfg);
+      setActiveProvider("toolnet");
+      const { updateAppConfig } = await import("./appConfig");
+      updateAppConfig({ provider: "toolnet", keyProvider: "toolnet" });
+    }
+    return getCliKey(cfg.id) || (cfg.apiKeyEnv ? process.env[cfg.apiKeyEnv] : undefined) || cfg.apiKey || null;
+  },
+  async hasApiKey(): Promise<boolean> {
+    const { getActiveProviderConfig } = await import("../providers");
+    let cfg = getActiveProviderConfig();
+    if (!cfg) {
+      const { addProvider, setActiveProvider, getDefaultProviderConfig } = await import("../providers");
+      cfg = getDefaultProviderConfig("toolnet");
+      addProvider(cfg);
+      setActiveProvider("toolnet");
+      const { updateAppConfig } = await import("./appConfig");
+      updateAppConfig({ provider: "toolnet", keyProvider: "toolnet" });
+    }
+    if (!cfg) return false;
+    return Boolean(getCliKey(cfg.id) || (cfg.apiKeyEnv && process.env[cfg.apiKeyEnv]) || cfg.apiKey);
+  },
+  async saveApiKey(key: string): Promise<void> {
+    fs.writeFileSync("/tmp/saveApiKey.log", "Called saveApiKey with key: " + key + "\n", {flag:"a"});
+    const { getActiveProviderConfig } = await import("../providers");
+    const cfg = getActiveProviderConfig();
+    if (cfg) {
+      saveCliKey(cfg.id, key);
+    }
+  }
+};

@@ -310,7 +310,7 @@ const isDirectRun =
   (typeof (import.meta as any).main === "boolean" && (import.meta as any).main) ||
   (process.argv[1] && process.argv[1].endsWith("boot_animation.ts"));
 
-if (isDirectRun) {
+if (false) {
   animateBoot().catch((err) => {
     process.stdout.write("\x1B[?25h");
     console.error("\nAborted.", err);

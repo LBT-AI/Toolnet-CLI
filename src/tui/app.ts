@@ -4,7 +4,7 @@ import { renderHeader } from "./renderers/headerRenderer";
 import { renderChatMessages } from "./renderers/chatRenderer";
 import { renderSidebar } from "./renderers/sidebarRenderer";
 import { renderWorkingStatus, renderInputArea, renderFooter } from "./renderers/statusRenderer";
-import { renderConfirmationModal, renderToast } from "./renderers/modalRenderer";
+import { renderConfirmationModal, renderToast, renderSecretInputModal } from "./renderers/modalRenderer";
 import { renderModelPickerBox } from "./renderers/modelPickerRenderer";
 import { renderKeyManagerBox } from "./renderers/keyManagerRenderer";
 import { renderSkillsPickerBox } from "./renderers/skillsPickerRenderer";
@@ -30,7 +30,15 @@ import { statusManager } from "./statusService";
 import { messageQueue } from "../lib/messageQueue";
 
 setupTerminalLifecycle();
+
+// Guard: renderAll() must NOT write to stdout before the alternate screen is active.
+// autoRestoreActiveProvider() fires notifyProviderSwitch() → requestRender() → renderAll()
+// during main() initialization, BEFORE write(T.altOn). Without this guard, the TUI frame
+// would be painted on the normal screen (below the banner), causing a "split/duplicate" UI.
+let isAltScreenActive = false;
+
 onTerminalResize(() => {
+  if (!isAltScreenActive) return;
   if (tuiState.showHelp) tuiState.showHelp = false;
   renderAll();
 });
@@ -58,6 +66,10 @@ onProviderSwitch((id, config) => {
 });
 
 export function renderAll(): void {
+  // Do not write to stdout before the alt screen is active (pre-altOn renders
+  // would paint on the normal screen causing "split/duplicate" UI on mobile SSH).
+  if (!isAltScreenActive) return;
+
   wrapErrorBoundary(() => {
     const activeSuggests = getSuggestions(tuiState.inputBuffer);
     const layout = computeLayout(activeSuggests.length, 3, tuiState.cursorPos);
@@ -156,7 +168,9 @@ export function renderAll(): void {
     }));
 
     // Cursor position
-    if (!tuiState.showHelp && !tuiState.showModelPicker && !tuiState.showKeyManager && !tuiState.showSkillsPicker && !tuiState.showQueueManager && !tuiState.showSessionPicker && !providerPicker.show) {
+    
+    if (!tuiState.showHelp && !tuiState.showModelPicker && !tuiState.showKeyManager && !tuiState.showSecretInput && !tuiState.showSkillsPicker && !tuiState.showQueueManager && !tuiState.showSessionPicker && !providerPicker.show) {
+
       out.push(T.goto(layout.cursorRow, layout.cursorCol) + T.show);
     } else {
       out.push(T.hide);
@@ -176,6 +190,17 @@ export function renderAll(): void {
     }
 
     // 11. Key Manager Modal Popup
+
+    // 11B. Secret Input Modal Popup (must use write() — `out` is already committed above)
+    if (tuiState.showSecretInput && tuiState.secretInputConfig) {
+      const secretBox = renderSecretInputModal(cols, rows, {
+        config: tuiState.secretInputConfig,
+        buffer: tuiState.secretInputBuffer,
+        cursor: tuiState.secretInputCursor
+      });
+      write(secretBox.join(""));
+    }
+
     if (tuiState.showKeyManager) {
       const keyBox = renderKeyManagerBox(cols, rows, {
         keyManagerIdx: tuiState.keyManagerIdx,
@@ -254,6 +279,7 @@ function exitApp(): void {
     tuiState.saveCurrentSession();
   }
   markCleanExit();
+  isAltScreenActive = false;  // stop renderAll() from painting during teardown
   restoreTerminal();
   const msg = formatExitMessage(sessionId, hasContent);
   process.stdout.write(msg.replace(/\n/g, "\r\n"));
@@ -343,6 +369,9 @@ export async function main(): Promise<void> {
     }
   }
 
+  // Activate alternate screen. Set the guard BEFORE writing T.altOn so that
+  // any synchronous listeners triggered by write() cannot fire renderAll() prematurely.
+  isAltScreenActive = true;
   write(T.altOn + T.hide + T.home + T.clearDown + ENABLE_BRACKETED_PASTE);
 
   if (process.stdin.isTTY) {
@@ -400,3 +429,60 @@ export async function main(): Promise<void> {
 }
 
 export { getInputState, setInputState, resetInputState, handlePaste };
+
+
+export async function mountTui() {
+  await main();
+  return {
+    waitUntilRendered: async () => {
+      // Small delay to ensure it's on screen
+      return new Promise(resolve => setTimeout(resolve, 50));
+    },
+    openSecretInput: async (config: {title: string, placeholder: string}) => {
+      return await tuiState.openSecretInput(config);
+    },
+    showApiKeySetup: async (): Promise<boolean> => {
+      while (true) {
+        const key = await tuiState.openSecretInput({ title: "API Key", placeholder: "Enter your API key" });
+        if (!key) return false;
+        
+        tuiState.setStatus("Validating API Key...");
+        tuiState.requestRender();
+        
+        const { credentialsStore } = await import("../lib/keys");
+        const { getActiveProvider } = await import("../providers");
+        const provider = getActiveProvider();
+        
+        const valid = provider && provider.validateCredentials ? await provider.validateCredentials(key) : true;
+        if (valid) {
+          await credentialsStore.saveApiKey(key);
+          return true;
+        }
+        
+        tuiState.showToast("API Key không hợp lệ", 3000);
+        tuiState.requestRender();
+      }
+    },
+    showAuthError: async (msg: string) => {
+      tuiState.showToast(msg, 3000);
+      tuiState.requestRender();
+    },
+    keepAlive: async () => {
+      return new Promise<void>(() => {});
+    },
+    runInteractiveLoop: async () => {
+      return new Promise<void>(() => {});
+    },
+    refreshProviderState: async () => {
+      await tuiState.refreshActiveModels();
+      tuiState.requestRender();
+    },
+    setState: (s: string) => {
+      tuiState.appState = s;
+      if (s === "ready") {
+        tuiState.setStatus("Ready");
+      }
+      tuiState.requestRender();
+    }
+  };
+}

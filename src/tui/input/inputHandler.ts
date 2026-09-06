@@ -71,6 +71,19 @@ function _handlePasteInternal(
 ): void {
   const renderAll = callbacks?.renderAll || (() => tuiState.requestRender());
 
+
+  if (tuiState.showSecretInput) {
+    const sanitized = stripBracketedPaste(pastedText).replace(/[\r\n\x00-\x1f\x7f]/g, "");
+    if (!sanitized) return;
+    const cur = tuiState.secretInputCursor;
+    tuiState.secretInputBuffer = tuiState.secretInputBuffer.slice(0, cur) + sanitized + tuiState.secretInputBuffer.slice(cur);
+    tuiState.secretInputCursor = cur + sanitized.length;
+    renderAll();
+    return;
+  }
+
+
+
   // 1. Pending Security Approval Modal
   if (tuiState.pendingConfirmation) {
     return;
@@ -202,6 +215,85 @@ function _handleKeyInternal(
   const sendMessage = callbacks?.sendMessage || (() => {});
   const exitApp = callbacks?.exitApp || (() => {});
   const openModelPicker = callbacks?.openModelPicker || (async () => {});
+
+  if (tuiState.showSecretInput) {
+    const cur = tuiState.secretInputCursor;
+    
+    // Esc
+    if (hex === "1b") {
+      tuiState.resolveSecretInput("");
+      return;
+    }
+
+    // Enter
+    if (hex === "0d" || hex === "0a") {
+      tuiState.resolveSecretInput(tuiState.secretInputBuffer.trim());
+      return;
+    }
+
+    // Backspace
+    if (hex === "7f" || hex === "08" || s === "\x7f" || s === "\b") {
+      if (cur > 0) {
+        tuiState.secretInputBuffer = tuiState.secretInputBuffer.slice(0, cur - 1) + tuiState.secretInputBuffer.slice(cur);
+        tuiState.secretInputCursor = cur - 1;
+        renderAll();
+      }
+      return;
+    }
+
+    // Delete
+    if (hex === "1b5b337e" || s === "\x1b[3~") {
+      if (cur < tuiState.secretInputBuffer.length) {
+        tuiState.secretInputBuffer = tuiState.secretInputBuffer.slice(0, cur) + tuiState.secretInputBuffer.slice(cur + 1);
+        renderAll();
+      }
+      return;
+    }
+
+    // Left arrow
+    if (hex === "1b5b44" || hex === "1b4f44" || s === "\x1b[D" || s === "\x1bOD") {
+      if (cur > 0) {
+        tuiState.secretInputCursor = cur - 1;
+        renderAll();
+      }
+      return;
+    }
+
+    // Right arrow
+    if (hex === "1b5b43" || hex === "1b4f43" || s === "\x1b[C" || s === "\x1bOC") {
+      if (cur < tuiState.secretInputBuffer.length) {
+        tuiState.secretInputCursor = cur + 1;
+        renderAll();
+      }
+      return;
+    }
+
+    // Home / Ctrl+A
+    if (hex === "1b5b48" || hex === "1b4f48" || hex === "1b5b317e" || hex === "1b5b377e" || hex === "01" || s === "\x01") {
+      tuiState.secretInputCursor = 0;
+      renderAll();
+      return;
+    }
+
+    // End / Ctrl+E
+    if (hex === "1b5b46" || hex === "1b4f46" || hex === "1b5b347e" || hex === "1b5b387e" || hex === "05" || s === "\x05") {
+      tuiState.secretInputCursor = tuiState.secretInputBuffer.length;
+      renderAll();
+      return;
+    }
+
+    // Printable
+    if (!s.startsWith("\x1b")) {
+      const cleanText = s.replace(/[\r\n\x00-\x1f\x7f]/g, "");
+      if (cleanText.length > 0) {
+        tuiState.secretInputBuffer = tuiState.secretInputBuffer.slice(0, cur) + cleanText + tuiState.secretInputBuffer.slice(cur);
+        tuiState.secretInputCursor = cur + cleanText.length;
+        renderAll();
+      }
+      return;
+    }
+    return;
+  }
 
   // 0. Bracketed Paste detection in incoming buffer
   if (s.includes(BRACKETED_PASTE_START)) {
@@ -1044,6 +1136,7 @@ function _handleKeyInternal(
   if (hex === "0d") {
     const text = inputBufferManager.getText().trim();
     if (!text) return;
+    if (tuiState.appState !== "ready" && text !== "/exit") return;
 
     inputBufferManager.clear();
     tuiState.inputBuffer = "";

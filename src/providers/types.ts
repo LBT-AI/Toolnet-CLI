@@ -122,6 +122,9 @@ export interface Provider {
 
   /** Health check — returns true if provider is reachable */
   health?(): Promise<boolean>;
+
+  /** Validate credentials */
+  validateCredentials?(key: string): Promise<boolean>;
 }
 
 /**

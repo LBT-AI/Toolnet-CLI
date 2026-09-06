@@ -70,6 +70,21 @@ export class ToolNetProvider implements Provider {
     return headers;
   }
 
+
+  async validateCredentials(key: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.v1Url}/models`, {
+        headers: {
+          "Authorization": `Bearer ${key}`,
+          "Content-Type": "application/json"
+        }
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async listModels(): Promise<ModelInfo[]> {
     try {
       const res = await fetch(`${this.v1Url}/models`, {

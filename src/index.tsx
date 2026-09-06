@@ -580,10 +580,10 @@ if (isInteractiveMode && isTty() && !process.env.TOOLNET_HEADLESS) {
 // model). Partial/broken config resumes at the missing step instead of
 // offering a broken "Re-run setup?" restart. Esc/Ctrl+C exits cleanly with
 // no writes, so the next `toolnet` run opens setup again.
-if (isInteractiveMode && shouldAutoLaunchSetup()) {
+/* if (isInteractiveMode && shouldAutoLaunchSetup()) {
   const setupResult = await runSetupWizard();
   if (!setupResult.completed) process.exit(0);
-}
+} */
 
 // ---- Non-interactive prompt mode ----
 const promptIdx = args.findIndex(
@@ -626,8 +626,79 @@ if (promptIdx >= 0) {
     const { main } = await import("./simple-repl");
     await main();
   } else {
-    const { main } = await import("./tui");
-    await main();
+
+    const { loadAppConfig } = await import("./lib/appConfig");
+    const { showBannerIfEligible } = await import("./banner/banner");
+    const { mountTui } = await import("./tui/app");
+    const { credentialsStore } = await import("./lib/keys");
+
+    async function bootstrapConfig() {
+      loadAppConfig();
+    }
+
+    async function ensureWorkspaceTrust(tui: any): Promise<boolean> {
+      const { SessionTrustManager } = await import("./lib/security/sessionTrust");
+      const { requestApprovalModal } = await import("./tui/permissions/permissionModal");
+      const tm = new SessionTrustManager();
+      const { tuiState } = await import("./tui/state");
+      const sid = tuiState.currentSessionId;
+      
+      const cwd = process.cwd();
+      if (tm.isTrustedForSession(sid, "workspace_trust", cwd, "workspace")) return true;
+      if (tm.isDeniedForSession(sid, "workspace_trust", cwd)) return false;
+
+      return await requestApprovalModal({
+        toolName: "workspace_trust",
+        args: { path: cwd },
+        reason: `Do you trust the folder ${cwd}?`,
+        targetKey: cwd
+      });
+    }
+
+    
+    async function ensureAuthenticated(tui: any): Promise<boolean> {
+      const { credentialsStore } = await import("./lib/keys");
+      const { getActiveProvider } = await import("./providers");
+      const provider = getActiveProvider();
+      
+      let key = await credentialsStore.getApiKey();
+
+      if (!key) {
+        return await tui.showApiKeySetup();
+      }
+
+      if (provider && provider.validateCredentials) {
+        const valid = await provider.validateCredentials(key);
+        if (valid) return true;
+
+        await tui.showAuthError("API Key không hợp lệ");
+        return await tui.showApiKeySetup();
+      }
+      return true;
+    }
+
+    async function startInteractiveSession(): Promise<void> {
+      await bootstrapConfig();
+      const tui = await mountTui();
+      await tui.waitUntilRendered();
+      const trusted = await ensureWorkspaceTrust(tui);
+      if (!trusted) return;
+      
+      const authenticated = await ensureAuthenticated(tui);
+      if (!authenticated) {
+        tui.setState("credentials-required");
+        await tui.keepAlive();
+        return;
+      }
+
+      await tui.refreshProviderState();
+      tui.setState("ready");
+
+      await tui.runInteractiveLoop();
+    }
+
+    if (process.env.NODE_ENV !== "test") { await startInteractiveSession(); }
+
   }
 }
 export {};

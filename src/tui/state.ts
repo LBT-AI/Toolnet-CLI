@@ -18,6 +18,7 @@ import type { SessionItem } from "./renderers/sessionPickerRenderer";
 export const SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
 
 export class TuiState {
+  appState: string = "boot";
   messages: Msg[] = [];
   private _currentSessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   get currentSessionId(): string { return this._currentSessionId; }
@@ -52,6 +53,43 @@ export class TuiState {
   availableModels: string[] = [];
   filteredModels: string[] = [];
   modelSearchQuery = "";
+
+  
+  showSecretInput = false;
+  secretInputConfig: { title: string; placeholder: string } | null = null;
+  secretInputBuffer = "";
+  secretInputCursor = 0;
+  private secretInputResolve: ((value: string) => void) | null = null;
+
+  async openSecretInput(config: { title: string; placeholder: string }): Promise<string> {
+    this.showSecretInput = true;
+    this.secretInputConfig = config;
+    this.secretInputBuffer = "";
+    this.secretInputCursor = 0;
+    this.showModelPicker = false;
+    this.showKeyManager = false;
+    this.showHelp = false;
+    this.showSkillsPicker = false;
+    this.showQueueManager = false;
+    this.showSessionPicker = false;
+    this.setStatus("Enter: Save │ Esc: Cancel");
+    this.requestRender();
+
+    return new Promise((resolve) => {
+      this.secretInputResolve = resolve;
+    });
+  }
+
+  resolveSecretInput(value: string): void {
+    if (this.secretInputResolve) {
+      this.secretInputResolve(value);
+      this.secretInputResolve = null;
+    }
+    this.showSecretInput = false;
+    this.secretInputConfig = null;
+    this.setStatus("");
+    this.requestRender();
+  }
 
   showKeyManager = false;
   keyManagerIdx = 0;

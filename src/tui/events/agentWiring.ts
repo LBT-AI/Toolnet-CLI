@@ -353,6 +353,32 @@ export async function sendMessage(text: string): Promise<void> {
     if (err?.name === "AbortError") {
       statusManager.cancel();
       tuiState.messages.push({ role: "assistant", content: "(cancelled)" });
+    } else if (err?.message?.includes("401") || err?.status === 401) {
+      statusManager.failed("Authentication failed (401).");
+      tuiState.messages.push({ role: "system", content: "⚠️ API Key expired or invalid (401)." });
+      tuiState.saveCurrentSession();
+      tuiState.requestRender();
+      
+      const { credentialsStore } = await import("../../lib/keys");
+      const { getActiveProvider } = await import("../../providers");
+      const provider = getActiveProvider();
+      
+      while (true) {
+        const key = await tuiState.openSecretInput({ title: "API Key", placeholder: "Enter new API key" });
+        if (!key) break;
+        tuiState.setStatus("Validating API Key...");
+        tuiState.requestRender();
+        const valid = provider && provider.validateCredentials ? await provider.validateCredentials(key) : true;
+        if (valid) {
+          await credentialsStore.saveApiKey(key);
+          tuiState.showToast("API Key saved.", 2000);
+          tuiState.messages.push({ role: "system", content: "✅ API Key updated. You can resubmit your prompt." });
+          break;
+        } else {
+          tuiState.showToast("API Key không hợp lệ", 3000);
+          tuiState.requestRender();
+        }
+      }
     } else {
       statusManager.failed(err?.message || String(err));
       tuiState.messages.push({ role: "assistant", content: "✖ Error: " + (err?.message || String(err)) });

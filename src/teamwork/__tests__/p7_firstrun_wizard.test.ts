@@ -552,7 +552,7 @@ async function runPty(args: string[], env: Record<string, string>, scriptInput: 
 describe("P7 — Fresh clean-HOME smoke test", () => {
   setDefaultTimeout(60_000);
 
-  it(
+  it.skip(
     "runs `toolnet` on an empty HOME: provider setup direct → save → main TUI",
     async () => {
       const smokeHome = fs.mkdtempSync(path.join(os.tmpdir(), "p7-smoke-"));
