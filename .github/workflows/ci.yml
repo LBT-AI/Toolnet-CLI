@@ -15,6 +15,7 @@ jobs:
   test:
     name: Typecheck, Test, Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -23,7 +24,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.4.0
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -37,7 +38,7 @@ jobs:
         run: bun run typecheck
 
       - name: Unit tests
-        run: bun test --parallel=1
+        run: bun test --timeout 30000
 
       - name: Build Bun and Node bundles
         run: bun run build
