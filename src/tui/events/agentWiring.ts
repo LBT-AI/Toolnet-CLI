@@ -24,6 +24,8 @@ import { statusManager } from "../statusService";
 import { messageQueue } from "../../lib/messageQueue";
 import { providerPicker } from "../../components/ProviderPicker";
 import { assertPrimarySystemMessageInvariant } from "../../lib/context";
+import { getToolById } from "../../lib/toolsCatalog";
+import { normalizeSectionId } from "../../lib/harnessCatalog";
 
 const PLANNER_SYSTEM_PROMPT = `You are ToolNet Planner. Your goal is to analyze the user request, explore the codebase using read-only tools, and create a step-by-step plan. Do not execute the plan yourself. Use the save_plan tool to save the plan.`;
 
@@ -432,6 +434,27 @@ export function buildTuiCommandContext(): any {
     openSkillsPicker: (initialSkillName?: string) => tuiState.openSkillsPicker(initialSkillName),
     openQueueManager: () => tuiState.openQueueManager(),
     openSessionPicker: () => tuiState.openSessionPicker(),
+    openToolsPanel: (initialToolName?: string) => {
+      if (initialToolName && getToolById(initialToolName)) {
+        tuiState.openToolDetail(initialToolName);
+      } else if (initialToolName) {
+        tuiState.showToast("Tool not found: " + initialToolName);
+        tuiState.openToolsOverlay();
+      } else {
+        tuiState.openToolsOverlay();
+      }
+    },
+    openHarnessPanel: (initialSection?: string) => {
+      const sectionId = initialSection ? normalizeSectionId(initialSection) : null;
+      if (initialSection && !sectionId) {
+        tuiState.showToast("Section not found: " + initialSection);
+        tuiState.openHarnessOverlay();
+      } else if (sectionId) {
+        tuiState.openHarnessSection(sectionId);
+      } else {
+        tuiState.openHarnessOverlay();
+      }
+    },
     setBypassMode: (enabled: boolean, level?: string) => {
       tuiState.bypassMode = enabled;
       if (level) tuiState.bypassLevel = level as any;
@@ -625,6 +648,36 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
           tuiState.openSessionPicker();
         } else {
           await dispatchCommand(cmd, ctx);
+        }
+        break;
+      }
+
+      case "/tools":
+      case "/cli-tools": {
+        const rest = parts.slice(1).join(" ").trim();
+        if (rest && getToolById(rest)) {
+          tuiState.openToolDetail(rest);
+        } else if (rest) {
+          tuiState.showToast("Tool not found: " + rest);
+          tuiState.openToolsOverlay();
+        } else {
+          tuiState.openToolsOverlay();
+        }
+        break;
+      }
+
+      case "/harness":
+      case "/kernel":
+      case "/sys": {
+        const rest = parts.slice(1).join(" ").trim();
+        const sectionId = rest ? normalizeSectionId(rest) : null;
+        if (rest && !sectionId) {
+          tuiState.showToast("Section not found: " + rest);
+          tuiState.openHarnessOverlay();
+        } else if (sectionId) {
+          tuiState.openHarnessSection(sectionId);
+        } else {
+          tuiState.openHarnessOverlay();
         }
         break;
       }

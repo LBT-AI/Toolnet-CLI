@@ -27,19 +27,28 @@ export const toolsCommand: Command = {
   name: "tools",
   aliases: ["cli-tools"],
   description: "View available agent execution tools (read_file, write_file, shell, etc.)",
-  usage: "/tools",
+  usage: "/tools [tool-name]",
   async handler(args: string[], ctx: CommandContext) {
     if (args[0] === "--help" || args[0] === "help") {
       ctx.addMessage(
         "assistant",
         "/tools — View available agent tools\n\n" +
-        "  /tools    Show the agent tools registry\n\n" +
+        "  /tools              Open the interactive Tools Panel\n" +
+        "  /tools <tool-name>  Open the detail view for one tool (e.g. /tools read_file)\n\n" +
         "Tools are local executable functions (read_file, bash, edit_file, etc.)\n" +
         "invoked by the AI agent during task execution."
       );
       return;
     }
-    
+
+    // Interactive TUI: open the Tools Panel overlay (nothing printed to chat).
+    if (typeof ctx.openToolsPanel === "function") {
+      const target = args.length > 0 ? args.join(" ").trim() : undefined;
+      await ctx.openToolsPanel(target);
+      return;
+    }
+
+    // Non-interactive fallback: dump the registry as a chat message.
     ctx.addMessage("assistant", getFormattedToolsList());
   },
 };

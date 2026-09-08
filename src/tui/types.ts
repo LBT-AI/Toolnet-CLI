@@ -8,9 +8,13 @@ export interface Msg {
   name?: string;
 }
 
+export type ApprovalChoice = "y" | "a" | "t" | "n";
+
 export interface PendingConfirmation {
   prompt: string;
-  onDecision?: (choice: "y" | "a" | "n") => void;
+  /** Currently highlighted option index in the approval modal (0-based). */
+  selectedIndex?: number;
+  onDecision?: (choice: ApprovalChoice) => void;
   resolve: (val: boolean) => void;
 }
 
@@ -18,3 +22,10 @@ export interface InputState {
   buffer: string;
   cursor: number;
 }
+
+export type Overlay =
+  | { type: "none" }
+  | { type: "tools"; selected: number; scroll: number; query?: string }
+  | { type: "tool-detail"; toolId: string }
+  | { type: "harness"; selected: number; scroll: number; query?: string }
+  | { type: "harness-detail"; section: string };

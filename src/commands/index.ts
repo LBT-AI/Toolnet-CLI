@@ -52,6 +52,8 @@ export interface CommandContext {
   openSkillsPicker?: (initialSkillName?: string) => Promise<void> | void;
   openQueueManager?: () => Promise<void> | void;
   openSessionPicker?: () => Promise<void> | void;
+  openToolsPanel?: (initialToolName?: string) => Promise<void> | void;
+  openHarnessPanel?: (initialSection?: string) => Promise<void> | void;
   setBypassMode?: (enabled: boolean, level?: string) => void;
   getCurrentSessionId?: () => string;
   setCurrentSessionId?: (id: string) => void;

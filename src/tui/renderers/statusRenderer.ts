@@ -22,44 +22,63 @@ export interface FooterState {
 }
 
 /**
- * Renders the live Working / Activity status line directly above the input box.
+ * Whether the working-status line should be drawn at all. Idle = no line
+ * (the header badge already says idle); the line only appears when there is
+ * something real to say: streaming, a transient result, help, or a queue.
+ */
+export function statusLineActive(state: WorkingStatusState): boolean {
+  return Boolean(
+    state.showHelp ||
+    state.isStreaming ||
+    state.statusText ||
+    (state.queuedCount && state.queuedCount > 0)
+  );
+}
+
+/**
+ * Single-line activity status, shown ONLY when active (see statusLineActive).
+ * No divider — the input divider below it is the only rule in that region.
  */
 export function renderWorkingStatus(
   cols: number,
   state: WorkingStatusState
 ): string {
-  let content = "";
+  if (!statusLineActive(state)) return "";
+
   const queueBadge = state.queuedCount && state.queuedCount > 0
-    ? ` │ ${A.fgYellow}${state.queuedCount} queued${A.reset}`
+    ? ` ${A.fgYellow}${state.queuedCount} queued${A.reset}`
     : "";
 
+  let content = "";
+  let fg = state.primaryColor;
+
   if (state.showHelp) {
-    content = A.fgYellow + "Shortcuts: Tab (mode) │ Ctrl+N (models) │ Esc (cancel) │ / (commands)" + A.reset;
+    content = "Shortcuts: Tab mode · Ctrl+N models · / commands · Esc cancel";
+    fg = A.fgYellow;
   } else if (state.isStreaming) {
     const sp = SPINNER[state.spinnerIdx % SPINNER.length];
     const text = state.statusText || "Working…";
-    const elapsed = state.elapsedDisplay ? ` · ${state.elapsedDisplay.trim()}` : "";
-    content = A.fgCyan + A.bold + `${sp} ` + A.reset + A.fgCyan + text + A.reset + A.fgSubtext + elapsed + A.reset + queueBadge;
+    const elapsed = state.elapsedDisplay ? ` ${state.elapsedDisplay.trim()}` : "";
+    content = `${sp} ${text}${elapsed}`;
   } else if (state.statusText) {
-    const isErr = state.statusText.startsWith("✖") || state.statusText.startsWith("✗") || state.statusText.toLowerCase().includes("error") || state.statusText.toLowerCase().includes("failed");
-    const isSuccess = state.statusText.startsWith("✔") || state.statusText.startsWith("✓") || state.statusText.startsWith("✅");
-    const fg = isErr ? A.fgRed : isSuccess ? A.fgGreen : state.primaryColor;
-    const defaultIcon = isErr ? "✖" : isSuccess ? "✔" : "●";
+    const isErr = state.statusText.startsWith("✖") || state.statusText.startsWith("✗") || /error|failed/i.test(state.statusText);
+    const isSuccess = state.statusText.startsWith("✔") || state.statusText.startsWith("✓");
+    const icon = isErr ? "✖" : isSuccess ? "✔" : "●";
     const hasIconPrefix = /^[✖✗✔✓✅●]\s/.test(state.statusText);
-    const displayText = hasIconPrefix ? state.statusText : `${defaultIcon} ${state.statusText}`;
-    const elapsed = state.elapsedDisplay ? ` · ${state.elapsedDisplay.trim()}` : "";
-    content = fg + A.bold + displayText + A.reset + (elapsed ? A.fgSubtext + elapsed + A.reset : "") + queueBadge;
+    content = hasIconPrefix ? state.statusText : `${icon} ${state.statusText}`;
+    fg = isErr ? A.fgRed : isSuccess ? A.fgGreen : state.primaryColor;
   } else {
-    const modeLabel = tuiState.agentMode === "Plan" ? "Planner" : "Builder";
-    const nextInfo = state.nextQueuedText ? ` │ ${A.fgYellow}Next: ${truncate(state.nextQueuedText, 25)}${A.reset}` : "";
-    content = A.fgGreen + "● Ready" + A.reset + A.fgMuted + ` │ Mode: ${A.fgText}${modeLabel}${A.reset}${A.fgMuted} │ Enter: send │ Shift+Enter: newline` + A.reset + queueBadge + nextInfo;
+    const nextText = state.nextQueuedText ? ` · Next: ${truncate(state.nextQueuedText, 30)}` : "";
+    content = `${state.queuedCount} queued${nextText}`;
+    fg = A.fgYellow;
   }
 
-  const divider = T.clearLine + A.fgBorder + "─".repeat(cols) + A.reset + "\r\n";
-  const stripped = stripAnsi(content);
-  const pad = Math.max(0, cols - stripped.length - 1);
-  const line = T.clearLine + " " + content + " ".repeat(pad) + "\r\n";
-  return divider + line;
+  const maxContent = Math.max(8, cols - 3);
+  const visibleContent = stripAnsi(content).length > maxContent ? truncate(content, maxContent) : content;
+  const stripped = stripAnsi(visibleContent);
+  const pad = Math.max(0, cols - 1 - stripped.length);
+
+  return T.clearLine + fg + " " + visibleContent + A.reset + queueBadge + " ".repeat(pad) + "\r\n";
 }
 
 /**
@@ -73,7 +92,8 @@ export function renderStatusBar(
 }
 
 /**
- * Renders the Input Area with border and prompt.
+ * Renders the Input Area: a single thin divider plus the prompt line.
+ * No surrounding box — Claude-Code style, keeps vertical space tight.
  */
 export function renderInputArea(
   cols: number,
@@ -81,20 +101,19 @@ export function renderInputArea(
   primaryColor: string
 ): string {
   const isTyping = inputBuffer.length > 0;
-  const borderCol = isTyping ? primaryColor : A.fgBorder;
-  const divider = T.clearLine + borderCol + "─".repeat(cols) + A.reset + "\r\n";
+  const dividerCol = isTyping ? primaryColor : A.fgBorder;
+  const divider = T.clearLine + dividerCol + "─".repeat(cols - 1) + A.reset + "\r\n";
 
   if (!inputBuffer) {
-    const prompt = A.fgSubtext + A.bold + "> " + A.reset;
+    const prompt = A.reset + A.fgCyan + A.bold + "> " + A.reset;
     const placeholder = A.fgMuted + "Enter a coding task or / for commands" + A.reset;
     const stripped = stripAnsi(prompt + placeholder);
-    const pad = Math.max(0, cols - stripped.length - 1);
-    const inputLine = T.clearLine + " " + prompt + placeholder + " ".repeat(pad) + A.reset + "\r\n";
-    return divider + inputLine;
+    const pad = Math.max(0, cols - 1 - stripped.length);
+    return divider + T.clearLine + prompt + placeholder + " ".repeat(pad) + A.reset + "\r\n";
   }
 
   const lines = inputBuffer.split("\n");
-  const maxLinesToShow = Math.min(4, lines.length);
+  const maxLinesToShow = Math.min(3, lines.length);
   const outLines: string[] = [divider];
   const startIdx = Math.max(0, lines.length - maxLinesToShow);
 
@@ -104,7 +123,7 @@ export function renderInputArea(
       ? primaryColor + A.bold + "> " + A.reset
       : A.fgMuted + "… " + A.reset;
     const promptWidth = 2;
-    const maxInputWidth = Math.max(10, cols - promptWidth - 4);
+    const maxInputWidth = Math.max(10, cols - promptWidth - 3);
     const rawText = lines[i];
     const lineText = isFirst && lines.length > 1 ? rawText + " ↵" : rawText;
     const visible = lineText.length > maxInputWidth
@@ -112,16 +131,17 @@ export function renderInputArea(
       : lineText;
     const textFormatted = A.fgText + visible + A.reset;
     const stripped = stripAnsi(prompt + textFormatted);
-    const pad = Math.max(0, cols - stripped.length - 1);
-    outLines.push(T.clearLine + " " + prompt + textFormatted + " ".repeat(pad) + A.reset + "\r\n");
+    const pad = Math.max(0, cols - 1 - stripped.length);
+    outLines.push(T.clearLine + prompt + textFormatted + " ".repeat(pad) + A.reset + "\r\n");
   }
 
   return outLines.join("");
 }
 
 /**
- * Renders the persistent bottom Footer bar:
- * Provider: <name> │ Model: <model> │ Workspace: <path>
+ * Bottom bar: `provider · model · workspace` in one tight line, no labels,
+ * no divider (the input divider already separates content from chrome).
+ * Under 50 cols it stays the same line, just truncated harder.
  */
 export function renderFooter(
   cols: number,
@@ -132,12 +152,7 @@ export function renderFooter(
   const { workspaceRoot } = getCwdInfo();
   const wsPath = state?.workspacePath ?? workspaceRoot;
 
-  // Provider label
-  const provLabel = providerName
-    ? A.fgSubtext + "Provider: " + A.fgGreen + truncate(providerName, 18) + A.reset
-    : A.fgSubtext + "Provider: " + A.fgYellow + "Not configured" + A.reset;
-
-  // Model label
+  const provVisible = providerName || "Not configured";
   const isModelSelected = Boolean(
     currentModel &&
     currentModel !== "none" &&
@@ -148,22 +163,31 @@ export function renderFooter(
     !currentModel.startsWith("Provider offline") &&
     !currentModel.startsWith("Loading...")
   );
-  const modelText = isModelSelected ? truncate(currentModel, 24) : "Not selected";
-  const modelColor = isModelSelected ? A.fgText : A.fgYellow;
-  const modelLabel = A.fgSubtext + "Model: " + modelColor + modelText + A.reset;
+  const modelVisible = isModelSelected ? currentModel : "Not selected";
 
-  // Workspace path label (dynamically truncated based on terminal width)
-  const maxWsLen = Math.max(12, Math.min(35, cols - 65));
-  const wsLabel = A.fgSubtext + "Workspace: " + A.fgText + truncate(wsPath || process.cwd(), maxWsLen) + A.reset;
+  const providerFg = providerName ? A.fgCyan : A.fgMuted;
+  const modelFg = isModelSelected ? A.fgText : A.fgMuted;
+  const wsFg = A.fgSubtext;
 
-  const items = [provLabel, modelLabel, wsLabel];
-  const sep = A.fgMuted + " │ " + A.reset;
-  const footerContent = " " + items.join(sep);
-  const stripped = stripAnsi(footerContent);
-  const padding = Math.max(0, cols - stripped.length);
+  const item = (fg: string, text: string, max: number) => fg + truncate(text, max) + A.reset;
+  const sep = A.fgMuted + " · " + A.reset;
 
-  const divider = T.clearLine + A.fgBorder + "─".repeat(cols) + A.reset + "\r\n";
-  const bar = T.clearLine + A.bgSurface + footerContent + " ".repeat(padding) + A.reset;
+  // Budget the terminal width: provider gets most, model second, cwd last.
+  const maxTotal = cols - 1;
+  const provMax = Math.max(6, Math.floor(maxTotal * 0.4));
+  const modelMax = Math.max(6, Math.floor((maxTotal - provMax - 3) * 0.45));
+  const wsMax = Math.max(4, maxTotal - provMax - modelMax - 4);
 
-  return divider + bar;
+  const content = " " + item(providerFg, provVisible, provMax) + sep + item(modelFg, modelVisible, modelMax) + sep + item(wsFg, wsPath || process.cwd(), wsMax);
+
+  const maxContent = Math.max(10, maxTotal);
+  const bar = truncate(content, maxContent);
+  const strippedLen = stripAnsi(bar).length;
+  const padding = Math.max(0, maxTotal - strippedLen);
+
+  // Bottom bar: NO trailing newline. The footer sits on the very last grid
+  // row; a '\r\n' at the bottom row would make a real terminal scroll the
+  // whole screen up by one every frame (pushing the header off the top).
+  // buildFrame() follows footer with clearDown + an absolute cursor goto.
+  return T.clearLine + bar + " ".repeat(padding) + A.reset;
 }

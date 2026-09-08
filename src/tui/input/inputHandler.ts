@@ -8,6 +8,7 @@ import { syncProviderOnKeySave, setActiveProvider } from "../../providers";
 import { BRACKETED_PASTE_START, parseBracketedPaste, stripBracketedPaste } from "../../lib/bracketedPaste";
 import { statusManager } from "../statusService";
 import { messageQueue } from "../../lib/messageQueue";
+import { overlayIsActive, handleOverlayKey } from "./overlayInput";
 
 const inputBufferManager = new MultilineInputBuffer();
 
@@ -79,6 +80,11 @@ function _handlePasteInternal(
     tuiState.secretInputBuffer = tuiState.secretInputBuffer.slice(0, cur) + sanitized + tuiState.secretInputBuffer.slice(cur);
     tuiState.secretInputCursor = cur + sanitized.length;
     renderAll();
+    return;
+  }
+
+  // Panel overlay is active — paste must NOT leak into the chat input.
+  if (overlayIsActive()) {
     return;
   }
 
@@ -310,38 +316,56 @@ function _handleKeyInternal(
     return;
   }
 
-  // 1. Pending Security Approval Modal
-  // Semantics: Y = allow once (no persistence), A = allow for session (records
-  // trust), N = deny (records session denial), Esc = dismiss WITHOUT recording.
+  // 1. Pending Security Approval Modal — list navigation overlay.
+  //   ↑/k ↓/j  navigate the 4 options, Enter selects the highlighted one,
+  //   Esc dismisses WITHOUT recording (onDecision intentionally NOT called),
+  //   single-key shortcuts: Y = Allow once, A = Allow for session,
+  //   T = Always trust this folder, N = Deny (records session denial).
   if (tuiState.pendingConfirmation) {
+    const conf = tuiState.pendingConfirmation;
+    const optCount = 4;
+    const sel = conf.selectedIndex ?? 0;
+
+    const selectApproval = (choice: "y" | "a" | "t" | "n") => {
+      if (conf.onDecision) conf.onDecision(choice);
+      conf.resolve(choice === "n" ? false : true);
+      tuiState.pendingConfirmation = null;
+      renderAll();
+    };
+
+    if (hex === "1b5b41" || hex === "1b4f41" || s.toLowerCase() === "k") {
+      conf.selectedIndex = (sel - 1 + optCount) % optCount;
+      renderAll();
+      return;
+    }
+    if (hex === "1b5b42" || hex === "1b4f42" || s.toLowerCase() === "j") {
+      conf.selectedIndex = (sel + 1) % optCount;
+      renderAll();
+      return;
+    }
+    if (hex === "0d" || hex === "0a") {
+      selectApproval((["y", "a", "t", "n"] as const)[sel]);
+      return;
+    }
     if (hex === "1b") {
-      // Esc: dismiss only — onDecision intentionally NOT called so nothing is recorded.
-      tuiState.pendingConfirmation.resolve(false);
+      conf.resolve(false);
       tuiState.pendingConfirmation = null;
       renderAll();
       return;
     }
-    if (s.toLowerCase() === "y") {
-      if (tuiState.pendingConfirmation.onDecision) tuiState.pendingConfirmation.onDecision("y");
-      tuiState.pendingConfirmation.resolve(true);
-      tuiState.pendingConfirmation = null;
-      renderAll();
+    const approvalKey = s.toLowerCase();
+    if (approvalKey === "y" || approvalKey === "a" || approvalKey === "t" || approvalKey === "n") {
+      selectApproval(approvalKey);
       return;
     }
-    if (s.toLowerCase() === "a") {
-      if (tuiState.pendingConfirmation.onDecision) tuiState.pendingConfirmation.onDecision("a");
-      tuiState.pendingConfirmation.resolve(true);
-      tuiState.pendingConfirmation = null;
-      renderAll();
-      return;
-    }
-    if (s.toLowerCase() === "n") {
-      if (tuiState.pendingConfirmation.onDecision) tuiState.pendingConfirmation.onDecision("n");
-      tuiState.pendingConfirmation.resolve(false);
-      tuiState.pendingConfirmation = null;
-      renderAll();
-      return;
-    }
+    return;
+  }
+
+  // 1B. Tools / Harness panel overlay — guard clause. When an overlay is
+  // active, its keys are consumed here and NEVER leak into the model picker,
+  // suggestions palette, history, or the chat input handle below.
+  if (overlayIsActive()) {
+    handleOverlayKey(hex, s);
     return;
   }
 
@@ -370,17 +394,16 @@ function _handleKeyInternal(
         !sel.includes("Loading...")
       ) {
         tuiState.currentModel = sel;
-        tuiState.setStatus(`Provider: ${tuiState.providerName || "Not configured"} │ Model: ${tuiState.currentModel}`);
-      } else {
-        tuiState.setStatus(`Provider: ${tuiState.providerName || "Not configured"} │ Model: ${tuiState.currentModel || "Not selected"}`);
+        tuiState.showToast(`Model: ${sel}`);
       }
       tuiState.showModelPicker = false;
+      tuiState.setStatus("");
       renderAll();
       return;
     }
     if (hex === "1b") { // Esc
       tuiState.showModelPicker = false;
-      tuiState.setStatus(`Provider: ${tuiState.providerName || "Not configured"} │ Model: ${tuiState.currentModel || "Not selected"}`);
+      tuiState.setStatus("");
       renderAll();
       return;
     }
@@ -413,7 +436,7 @@ function _handleKeyInternal(
     if (tuiState.selectedSkillDetail) {
       if (hex === "1b" || hex === "7f" || hex === "08" || s.toLowerCase() === "b") { // Esc / Backspace / 'b' -> Back to list
         tuiState.selectedSkillDetail = null;
-        tuiState.setStatus("↑↓ Navigate │ Enter Select │ Esc Close");
+        tuiState.setStatus("");
         renderAll();
         return;
       }
@@ -515,7 +538,7 @@ function _handleKeyInternal(
       // Esc -> Cancel input
       if (hex === "1b") {
         tuiState.keyManagerInput = null;
-        tuiState.setStatus("Enter/A: Set Key │ D: Delete │ ↑↓: Move │ Esc: Close");
+        tuiState.setStatus("");
         renderAll();
         return;
       }
@@ -530,7 +553,7 @@ function _handleKeyInternal(
           tuiState.showToast("Saved API key for " + provider);
         }
         tuiState.keyManagerInput = null;
-        tuiState.setStatus("Enter/A: Set Key │ D: Delete │ ↑↓: Move │ Esc: Close");
+        tuiState.setStatus("");
         renderAll();
         return;
       }
@@ -654,7 +677,7 @@ function _handleKeyInternal(
       const item = providers[tuiState.keyManagerIdx];
       if (item) {
         tuiState.keyManagerInput = { provider: item.id, buffer: "", cursor: 0 };
-        tuiState.setStatus("Enter API key for " + item.name + " │ Enter: Save │ Esc: Cancel");
+        tuiState.setStatus("");
         renderAll();
       }
       return;
@@ -890,7 +913,7 @@ function _handleKeyInternal(
         if (hasKey) {
           setActiveProvider(sel);
           tuiState.showToast("Active provider switched to " + sel);
-          tuiState.setStatus("Active Provider: " + tuiState.providerName + " │ Model: " + (tuiState.currentModel || "none"));
+          tuiState.setStatus("");
           renderAll();
           return;
         }
@@ -898,7 +921,7 @@ function _handleKeyInternal(
         // Provider has no key -> open Set Key modal directly!
         tuiState.keyManagerInput = { provider: sel, buffer: "", cursor: 0 };
         tuiState.showKeyManager = true;
-        tuiState.setStatus("Enter API key for " + sel + " │ Enter: Save │ Esc: Cancel");
+        tuiState.setStatus("");
         tuiState.showToast("Please enter an API key for " + sel);
         renderAll();
       },
@@ -1027,7 +1050,7 @@ function _handleKeyInternal(
   // 11. Tab — toggle mode (if not autocompleting)
   if (hex === "09") {
     tuiState.agentMode = tuiState.agentMode === "Build" ? "Plan" : "Build";
-    tuiState.setStatus("Mode: " + tuiState.agentMode);
+    tuiState.setStatus("");
     renderAll();
     return;
   }

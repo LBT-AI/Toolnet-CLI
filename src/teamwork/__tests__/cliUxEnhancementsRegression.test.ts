@@ -31,6 +31,9 @@ describe("CLI UX Enhancements Regression Suite", () => {
     tuiState.inputBuffer = "";
     tuiState.cursorPos = 0;
     tuiState.setStatus("");
+    // Mirror the real startup flow (index.tsx calls tui.setState("ready"));
+    // the Enter handler ignores submits while booting.
+    tuiState.appState = "ready";
   });
 
   afterEach(() => {
@@ -217,12 +220,12 @@ describe("CLI UX Enhancements Regression Suite", () => {
     expect(warnToast.length).toBeGreaterThan(0);
     const warnJoined = stripAnsi(warnToast.join("\n"));
     expect(warnJoined).toContain("╭");
-    expect(warnJoined).toContain("│ ⚠️ UI recovered from render glitch │");
+    expect(warnJoined).toContain("│ ▲ ⚠️ UI recovered from render glitch │");
     expect(warnJoined).toContain("╰");
 
     const succToast = renderToast(80, "✓ Model switched to gpt-4o");
     const succJoined = stripAnsi(succToast.join("\n"));
-    expect(succJoined).toContain("│ ✓ Model switched to gpt-4o │");
+    expect(succJoined).toContain("│ ✓ ✓ Model switched to gpt-4o │");
   });
 
   it("9. Input error boundary catches faulty keypress handlers and sets toast notification", () => {

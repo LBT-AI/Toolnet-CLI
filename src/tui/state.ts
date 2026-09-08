@@ -1,6 +1,6 @@
 import { saveSession, loadSession, listAllSessions, deleteSessionFile, createNewSession } from "../lib/sessionPersistence";
 import { bypassEngine } from "../lib/bypass";
-import type { Msg, PendingConfirmation } from "./types";
+import type { Msg, PendingConfirmation, Overlay } from "./types";
 import { updateCrashGoal } from "../lib/crashRecovery";
 import {
   loadAllSkills,
@@ -47,6 +47,9 @@ export class TuiState {
   spinnerTimer: ReturnType<typeof setInterval> | null = null;
   pendingConfirmation: PendingConfirmation | null = null;
 
+  /** Tools / Harness panel overlay — when non-none, all keys route into the overlay. */
+  overlay: Overlay = { type: "none" };
+
   showHelp = false;
   showModelPicker = false;
   modelPickerIdx = 0;
@@ -62,6 +65,7 @@ export class TuiState {
   private secretInputResolve: ((value: string) => void) | null = null;
 
   async openSecretInput(config: { title: string; placeholder: string }): Promise<string> {
+    this.overlay = { type: "none" };
     this.showSecretInput = true;
     this.secretInputConfig = config;
     this.secretInputBuffer = "";
@@ -72,7 +76,7 @@ export class TuiState {
     this.showSkillsPicker = false;
     this.showQueueManager = false;
     this.showSessionPicker = false;
-    this.setStatus("Enter: Save │ Esc: Cancel");
+    this.setStatus("");
     this.requestRender();
 
     return new Promise((resolve) => {
@@ -216,6 +220,7 @@ export class TuiState {
   }
 
   async openModelPicker(): Promise<void> {
+    this.overlay = { type: "none" };
     this.showModelPicker = true;
     this.showKeyManager = false;
     this.showHelp = false;
@@ -228,7 +233,7 @@ export class TuiState {
       this.currentModel = "";
       this.availableModels = ["No provider configured — use /key or /provider to set one up"];
       this.filteredModels = this.availableModels;
-      this.setStatus("Provider: Not configured │ Model: Not selected");
+      this.setStatus("");
       this.requestRender();
       return;
     }
@@ -247,25 +252,26 @@ export class TuiState {
     this.filteredModels = [...this.availableModels];
     if (this.availableModels.length === 0 || this.availableModels[0] === "No models available" || this.availableModels[0] === "Provider offline") {
       this.currentModel = "";
-      this.setStatus(`Provider: ${providerConfig.name} │ Model: Not selected`);
+      this.setStatus("");
       this.requestRender();
       return;
     }
 
     this.modelPickerIdx = this.filteredModels.indexOf(this.currentModel);
     if (this.modelPickerIdx < 0) this.modelPickerIdx = 0;
-    this.setStatus("Type to search │ ↑↓ navigate │ Enter select │ Esc cancel");
+    this.setStatus("");
     this.requestRender();
   }
 
   openKeyManager(): void {
+    this.overlay = { type: "none" };
     this.showKeyManager = true;
     this.showModelPicker = false;
     this.showHelp = false;
     this.keyManagerIdx = 0;
     this.keyManagerInput = null;
     this.keyManagerConfirmDelete = null;
-    this.setStatus("Enter/A: Set Key │ D: Delete │ ↑↓: Navigate │ Esc: Close");
+    this.setStatus("");
     this.requestRender();
   }
 
@@ -278,6 +284,7 @@ export class TuiState {
   }
 
   async openSkillsPicker(initialSkillName?: string, forceRefresh: boolean = false): Promise<void> {
+    this.overlay = { type: "none" };
     this.showSkillsPicker = true;
     this.showModelPicker = false;
     this.showKeyManager = false;
@@ -312,7 +319,7 @@ export class TuiState {
 
     this.selectedSkillDetail = null;
     this.skillsPickerIdx = 0;
-    this.setStatus("↑↓ Navigate │ Enter View │ Esc Cancel │ Type to filter");
+    this.setStatus("");
     this.requestRender();
 
     // In background, fetch fresh remote metadata from ToolNet MCP
@@ -339,7 +346,7 @@ export class TuiState {
   openSkillDetail(skill: SkillInfo): void {
     this.selectedSkillDetail = skill;
     const offlineNote = skill.isOfflineCache ? " [Offline cache]" : "";
-    this.setStatus(`Skill: ${skill.name}${offlineNote} │ Space: Toggle │ Esc: Back`);
+    this.setStatus("");
 
     if (!skill.instructionsLoaded && skill.source === "toolnet") {
       this.isLoadingSkillDetail = true;
@@ -364,7 +371,7 @@ export class TuiState {
     this.showSkillsPicker = false;
     this.selectedSkillDetail = null;
     this.isLoadingSkillDetail = false;
-    this.setStatus(`Provider: ${this.providerName || "Not configured"} │ Model: ${this.currentModel || "Not selected"}`);
+    this.setStatus("");
     this.requestRender();
   }
 
@@ -379,6 +386,7 @@ export class TuiState {
   }
 
   openQueueManager(): void {
+    this.overlay = { type: "none" };
     this.showQueueManager = true;
     this.showSkillsPicker = false;
     this.showModelPicker = false;
@@ -386,7 +394,7 @@ export class TuiState {
     this.showHelp = false;
     this.queueManagerIdx = 0;
     this.queueManagerEditing = null;
-    this.setStatus("↑↓ Navigate │ Enter Edit │ D Delete │ Ctrl+↑/↓ Reorder │ Esc Close");
+    this.setStatus("");
     this.requestRender();
   }
 
@@ -427,7 +435,7 @@ export class TuiState {
       buffer: target.text,
       cursor: target.text.length,
     };
-    this.setStatus("Editing queued task │ Enter Save │ Esc Cancel");
+    this.setStatus("");
     this.requestRender();
   }
 
@@ -437,18 +445,19 @@ export class TuiState {
       this.showToast("Task updated");
     }
     this.queueManagerEditing = null;
-    this.setStatus("↑↓ Navigate │ Enter Edit │ D Delete │ Ctrl+↑/↓ Reorder │ Esc Close");
+    this.setStatus("");
     this.saveCurrentSession();
     this.requestRender();
   }
 
   cancelQueueEdit(): void {
     this.queueManagerEditing = null;
-    this.setStatus("↑↓ Navigate │ Enter Edit │ D Delete │ Ctrl+↑/↓ Reorder │ Esc Close");
+    this.setStatus("");
     this.requestRender();
   }
 
   openSessionPicker(): void {
+    this.overlay = { type: "none" };
     const rawSessions = listAllSessions();
     const currCwd = process.cwd();
     this.availableSessions = rawSessions.map((s) => ({
@@ -473,14 +482,60 @@ export class TuiState {
     this.showModelPicker = false;
     this.showKeyManager = false;
     this.showHelp = false;
-    this.setStatus("↑↓ Navigate │ Enter Resume │ D Delete │ Esc Close");
+    this.setStatus("");
     this.requestRender();
   }
 
   closeSessionPicker(): void {
     this.showSessionPicker = false;
     this.sessionSearchQuery = "";
-    this.setStatus(`Provider: ${this.providerName || "Not configured"} │ Model: ${this.currentModel || "Not selected"}`);
+    this.setStatus("");
+    this.requestRender();
+  }
+
+  // ── Tools / Harness panel overlay ─────────────────────────────────────────
+
+  private closeSupportingModals(): void {
+    this.showModelPicker = false;
+    this.showKeyManager = false;
+    this.showHelp = false;
+    this.showSkillsPicker = false;
+    this.showQueueManager = false;
+    this.showSessionPicker = false;
+  }
+
+  openToolsOverlay(query?: string): void {
+    this.closeSupportingModals();
+    this.overlay = { type: "tools", selected: 0, scroll: 0, query: query || "" };
+    this.setStatus("");
+    this.requestRender();
+  }
+
+  openToolDetail(toolId: string): void {
+    this.closeSupportingModals();
+    this.overlay = { type: "tool-detail", toolId };
+    this.setStatus("");
+    this.requestRender();
+  }
+
+  openHarnessOverlay(query?: string): void {
+    this.closeSupportingModals();
+    this.overlay = { type: "harness", selected: 0, scroll: 0, query: query || "" };
+    this.setStatus("");
+    this.requestRender();
+  }
+
+  openHarnessSection(section: string): void {
+    this.closeSupportingModals();
+    this.overlay = { type: "harness-detail", section };
+    this.setStatus("");
+    this.requestRender();
+  }
+
+  dismissOverlay(): void {
+    if (this.overlay.type === "none") return;
+    this.overlay = { type: "none" };
+    this.setStatus("");
     this.requestRender();
   }
 

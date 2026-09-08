@@ -12,6 +12,7 @@ import { isSensitiveFile } from "./secretGuard";
 import { classifyShellCommand } from "./commandClassifier";
 import { policyEngine } from "./policyEngine";
 import { SessionTrustManager, getLegacyCompatibilitySessionId } from "./sessionTrust";
+import { isAlwaysTrusted } from "./persistentTrust";
 import { auditLogger } from "./auditLogger";
 import {
   isPathInsideWorkspace,
@@ -335,6 +336,10 @@ export class SecurityEngine {
         ? ((globalThis as any).__toolnetCurrentSessionId || getLegacyCompatibilitySessionId())
         : undefined
     );
+    // Persistent "always trust" rules bypass the per-session ask entirely.
+    if (isAlwaysTrusted(toolName, targetKey)) {
+      return { decision: "ALLOW", allowed: true, needsApproval: false, riskLevel: analysisRisk === "DANGEROUS" ? "SAFE_BUILD" : analysisRisk, capability: toolCap };
+    }
     // Guard clause: production trust is never consulted without an explicit
     // session id. The test-only adapter preserves older regression fixtures.
     if (sid && this.trustManager.isDeniedForSession(sid, toolName, targetKey)) {

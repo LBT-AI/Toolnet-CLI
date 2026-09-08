@@ -96,7 +96,7 @@ export function handleKey(data: Buffer, cb: KeyboardCallbacks) {
   // Tab — toggle mode (only if not autocompleting)
   if (hex === "09") {
     store.agentMode = store.agentMode === "Build" ? "Plan" : "Build";
-    cb.setStatus("Mode: " + store.agentMode);
+    cb.setStatus("");
     cb.renderAll();
     return;
   }

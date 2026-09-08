@@ -199,7 +199,8 @@ describe("TUI Redesign — Header & Working Status & Footer", () => {
     });
     const stripped = stripAnsi(idleHeader);
     expect(stripped).toContain("ToolNet CLI");
-    expect(stripped).toContain("[Build]");
+    // Default Build mode shows no redundant mode tag; the badge says Idle.
+    expect(stripped).not.toContain("[Build]");
     expect(stripped).toContain("● Idle");
     expect(stripped).not.toContain("localhost");
 
@@ -212,7 +213,7 @@ describe("TUI Redesign — Header & Working Status & Footer", () => {
     });
     const workingStripped = stripAnsi(workingHeader);
     expect(workingStripped).toContain("ToolNet CLI");
-    expect(workingStripped).toContain("[Plan]");
+    expect(workingStripped).toContain("Plan");
     expect(workingStripped).toContain("Working");
   });
 
@@ -225,7 +226,8 @@ describe("TUI Redesign — Header & Working Status & Footer", () => {
       elapsedDisplay: "",
       primaryColor: "\x1b[36m",
     });
-    expect(stripAnsi(readyStatus)).toContain("● Ready");
+    // Idle = no working-status line (the header badge shows ● Idle).
+    expect(stripAnsi(readyStatus)).toBe("");
 
     const streamingStatus = renderWorkingStatus(80, {
       showHelp: false,
@@ -255,16 +257,16 @@ describe("TUI Redesign — Header & Working Status & Footer", () => {
       workspacePath: "/home/user/project",
     });
     const confStripped = stripAnsi(footerConfigured);
-    expect(confStripped).toContain("Provider: OpenAI Compatible");
-    expect(confStripped).toContain("Model: gpt-4o-mini");
-    expect(confStripped).toContain("Workspace:");
+    expect(confStripped).toContain("OpenAI Compatible · gpt-4o-mini · /home/user/project");
+    expect(confStripped).toContain("gpt-4o-mini");
+    expect(confStripped).toContain("/home/user/project");
 
     const footerUnconfigured = renderFooter(100, {
       providerName: "",
       currentModel: "",
       workspacePath: "/root",
     });
-    expect(stripAnsi(footerUnconfigured)).toContain("Provider: Not configured");
+    expect(stripAnsi(footerUnconfigured)).toContain("Not configured · Not selected");
   });
 });
 
@@ -292,9 +294,9 @@ describe("TUI Redesign — Command Palette & Model Picker", () => {
       modelSearchQuery: "gpt",
     });
 
-    expect(box).toContain("Select Model");
-    expect(box).toContain("Filter:");
-    expect(box).toContain("gpt-4o");
+    expect(stripAnsi(box)).toContain("Select model");
+    expect(stripAnsi(box)).toContain("Search");
+    expect(stripAnsi(box)).toContain("gpt-4o");
   });
 });
 
@@ -410,8 +412,8 @@ describe("TUI Command Execution & Status Line Integrity", () => {
       primaryColor: "\x1b[36m",
     });
     const strippedBuilder = stripAnsi(builderStatus);
-    expect(strippedBuilder).toContain("Mode: Builder");
-    expect(strippedBuilder).not.toContain("modeup");
+    // Idle = no working-status line in either mode.
+    expect(strippedBuilder).toBe("");
 
     tuiState.agentMode = "Plan";
     const plannerStatus = renderWorkingStatus(100, {
@@ -423,8 +425,7 @@ describe("TUI Command Execution & Status Line Integrity", () => {
       primaryColor: "\x1b[36m",
     });
     const strippedPlanner = stripAnsi(plannerStatus);
-    expect(strippedPlanner).toContain("Mode: Planner");
-    expect(strippedPlanner).not.toContain("modeup");
+    expect(strippedPlanner).toBe("");
   });
 });
 
@@ -457,7 +458,7 @@ describe("TUI API Key Manager & Slash Command Architecture", () => {
     const stripped = stripAnsi(rendered);
 
     // Box has API Keys title and Provider column
-    expect(stripped).toContain("API Keys");
+    expect(stripped).toContain("API keys");
     expect(stripped).toContain("Provider");
     expect(stripped).toContain("Status");
 

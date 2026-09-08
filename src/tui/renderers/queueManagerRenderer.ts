@@ -1,6 +1,7 @@
-import { A, T } from "../../term";
+import { A } from "../../term";
 import { stripAnsi, truncate } from "../layout";
 import type { QueuedMessage } from "../../lib/messageQueue";
+import { composeBox, computeBoxGeometry } from "./composeBox";
 
 export interface QueueManagerModalState {
   queue: QueuedMessage[];
@@ -8,123 +9,77 @@ export interface QueueManagerModalState {
   editing: { index: number; buffer: string; cursor: number } | null;
 }
 
-/**
- * Renders the interactive /queue Manager Modal popup.
- */
+const MAX_DISPLAY = 10;
+
 export function renderQueueManagerBox(
   cols: number,
   rows: number,
   state: QueueManagerModalState
 ): string {
   const { queue, queueIdx, editing } = state;
-  const boxW = Math.min(80, Math.max(50, cols - 6));
-  const boxH = Math.min(20, Math.max(10, rows - 4));
-  const startCol = Math.max(1, Math.floor((cols - boxW) / 2));
-  const startRow = Math.max(2, Math.floor((rows - boxH) / 2));
+  const isNarrow = cols < 60;
+  const { boxW } = computeBoxGeometry(cols, rows, Math.min(queue.length, MAX_DISPLAY) + 2, true, isNarrow ? 46 : 58);
+  const maxTextLen = Math.max(12, boxW - 14);
 
-  const out: string[] = [];
-  let curRow = startRow;
+  const body: string[] = [];
 
-  const pushLine = (content: string) => {
-    out.push(T.goto(curRow++, startCol));
-    const stripped = stripAnsi(content);
-    const pad = Math.max(0, boxW - 2 - stripped.length);
-    out.push(
-      A.fgBorder + "│" + A.reset +
-      content +
-      " ".repeat(pad) +
-      A.fgBorder + "│" + A.reset
-    );
-  };
-
-  // Header Title
-  const countLabel = queue.length > 0 ? ` (${queue.length} tasks)` : " (empty)";
-  const titleText = ` Queue${countLabel} `;
-  const titleBarLen = Math.max(0, boxW - 4 - stripAnsi(titleText).length);
-  const topBorder =
-    A.fgBorder + "┌─" + A.bold + A.fgCyan + titleText + A.reset + A.fgBorder + "─".repeat(titleBarLen) + "┐" + A.reset;
-  out.push(T.goto(curRow++, startCol) + topBorder);
-
-  // Edit mode vs List mode
   if (editing) {
-    pushLine(` ${A.bold}${A.fgYellow}Editing Task #${editing.index + 1}:${A.reset}`);
-    pushLine("");
-
-    const maxInputLen = boxW - 6;
+    body.push(A.fgYellow + A.bold + "Editing task #" + (editing.index + 1) + A.reset);
+    body.push("");
     const buf = editing.buffer;
     const cur = editing.cursor;
     const before = buf.slice(0, cur);
-    const atCursor = buf[cur] || " ";
+    const at = buf[cur] || " ";
     const after = buf.slice(cur + 1);
-
-    const fullVisual = before + `\x1b[7m${atCursor}\x1b[27m` + after;
-    pushLine(`  ${A.fgCyan}>${A.reset} ${truncate(fullVisual, maxInputLen + 10)}`);
-    pushLine("");
-
-    const remainingRows = startRow + boxH - 2 - curRow;
-    for (let i = 0; i < remainingRows; i++) {
-      pushLine("");
-    }
-
-    const editFooter = " Enter Save │ Esc Cancel edit ";
-    const botBarLen = Math.max(0, boxW - 2 - stripAnsi(editFooter).length);
-    const bottomBorder =
-      A.fgBorder + "└" + A.fgSubtext + editFooter + A.fgBorder + "─".repeat(botBarLen) + "┘" + A.reset;
-    out.push(T.goto(curRow, startCol) + bottomBorder);
-    return out.join("");
+    const full = before + `\x1b[7m${at}\x1b[27m` + after;
+    body.push(A.fgCyan + "> " + A.reset + truncate(full, maxTextLen + 10));
+    body.push("");
+    return composeBox(cols, rows, {
+      title: "Edit queued task",
+      body,
+      footer: "enter save · esc cancel",
+    }).join("");
   }
-
-  // Subheader / instructions
-  const subheader = queue.length > 0
-    ? ` ${A.fgSubtext}Queued tasks (executed in FIFO order):${A.reset}`
-    : ` ${A.fgMuted}No queued messages. Type during active task to enqueue.${A.reset}`;
-  pushLine(subheader);
-
-  // Divider
-  out.push(T.goto(curRow++, startCol));
-  out.push(A.fgBorder + "├" + "─".repeat(boxW - 2) + "┤" + A.reset);
-
-  const listRows = Math.max(1, startRow + boxH - 2 - curRow);
 
   if (queue.length === 0) {
-    pushLine(`   ${A.fgMuted}(Queue is currently empty)${A.reset}`);
-    for (let i = 1; i < listRows; i++) pushLine("");
-  } else {
-    // Windowed scrolling for queue list
-    const visibleCount = listRows;
-    let viewStart = 0;
-    if (queueIdx >= visibleCount) {
-      viewStart = queueIdx - visibleCount + 1;
-    }
-    const viewEnd = Math.min(queue.length, viewStart + visibleCount);
+    body.push(A.fgSubtext + "No queued messages." + A.reset);
+    body.push(A.fgMuted + "Type during an active task to enqueue." + A.reset);
+    return composeBox(cols, rows, {
+      title: `Queue (empty)`,
+      body,
+      footer: "esc close",
+    }).join("");
+  }
 
-    for (let i = viewStart; i < viewEnd; i++) {
-      const isSel = i === queueIdx;
-      const q = queue[i];
-      const bullet = isSel ? `${A.fgGreen}●${A.reset}` : ` `;
-      const idxStr = `${A.fgSubtext}${i + 1}.${A.reset}`;
-      const prefix = ` ${bullet} ${idxStr} `;
-      const maxTextLen = boxW - 12;
-      const textTrunc = truncate(q.text.replace(/\r?\n/g, " ↵ "), maxTextLen);
-      const textStyled = isSel
-        ? `${A.bold}${A.fgText}${textTrunc}${A.reset}`
-        : `${A.fgSubtext}${textTrunc}${A.reset}`;
+  const title = `Queue (${queue.length} task${queue.length === 1 ? "" : "s"})`;
 
-      pushLine(`${prefix}${textStyled}`);
-    }
+  const visibleCount = Math.min(MAX_DISPLAY, queue.length);
+  let viewStart = 0;
+  if (queueIdx >= visibleCount) viewStart = queueIdx - visibleCount + 1;
+  viewStart = Math.max(0, Math.min(viewStart, queue.length - visibleCount));
 
-    const rendered = viewEnd - viewStart;
-    for (let i = rendered; i < listRows; i++) {
-      pushLine("");
+  for (let i = viewStart; i < viewStart + visibleCount; i++) {
+    const q = queue[i];
+    const isSel = i === queueIdx;
+    const prefix = ` ${isSel ? A.fgGreen + "●" + A.reset : " "} ${A.fgSubtext}${i + 1}.${A.reset} `;
+    const textTrunc = truncate(q.text.replace(/\r?\n/g, " ↵ "), maxTextLen);
+    const textStyled = isSel
+      ? A.bold + A.fgText + textTrunc + A.reset
+      : A.fgSubtext + textTrunc + A.reset;
+    if (isSel) {
+      body.push(A.bgOverlay + prefix + A.bgOverlay + textStyled + A.reset);
+    } else {
+      body.push(prefix + textStyled);
     }
   }
 
-  // Footer bar with shortcuts
-  const footerText = " ↑↓ Navigate │ Enter Edit │ D Delete │ Ctrl+↑/↓ Reorder │ Esc Close ";
-  const botBarLen = Math.max(0, boxW - 2 - stripAnsi(footerText).length);
-  const bottomBorder =
-    A.fgBorder + "└" + A.fgSubtext + footerText + A.fgBorder + "─".repeat(botBarLen) + "┘" + A.reset;
-  out.push(T.goto(curRow, startCol) + bottomBorder);
+  if (queue.length > MAX_DISPLAY) {
+    body.push(A.fgMuted + "… and " + (queue.length - MAX_DISPLAY) + " more" + A.reset);
+  }
 
-  return out.join("");
+  return composeBox(cols, rows, {
+    title,
+    body,
+    footer: "↑↓ navigate · enter edit · d delete · esc close",
+  }).join("");
 }

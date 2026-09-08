@@ -45,9 +45,13 @@ export class BracketedPasteParser {
       if (!this.inPaste) {
         const startIdx = this.buffer.indexOf(BRACKETED_PASTE_START);
         if (startIdx === -1) {
-          // Check for partial BRACKETED_PASTE_START at the end of buffer
+          // Check for partial BRACKETED_PASTE_START at the end of buffer.
+          // Only buffer partials of >= 2 bytes ("\x1b[" or longer): a lone
+          // trailing ESC is a standalone Esc keypress, NOT the start of a
+          // bracketed paste, and must be dispatched immediately or the TUI
+          // freezes (Esc never reaches the key handler).
           let partialLen = 0;
-          for (let len = BRACKETED_PASTE_START.length - 1; len >= 1; len--) {
+          for (let len = BRACKETED_PASTE_START.length - 1; len >= 2; len--) {
             const prefix = BRACKETED_PASTE_START.slice(0, len);
             if (this.buffer.endsWith(prefix)) {
               partialLen = len;

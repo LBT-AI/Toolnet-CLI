@@ -204,9 +204,9 @@ describe("/key Modal Input & Paste Regression Tests", () => {
 
     const stripped = stripAnsi(rendered);
 
-    // Box has title & hint
-    expect(stripped).toContain("Set Key: mockprovider");
-    expect(stripped).toContain("Enter API Key (input will be masked):");
+    // Box has title & provider subtext
+    expect(stripped).toContain("Set API key");
+    expect(stripped).toContain("mockprovider");
 
     // Bullet characters are displayed
     expect(stripped).toContain("•••");
@@ -225,7 +225,8 @@ describe("/key Modal Input & Paste Regression Tests", () => {
     });
 
     const stripped = stripAnsi(rendered);
-    expect(stripped).toContain("Set Key: anthropic");
+    expect(stripped).toContain("Set API key");
+    expect(stripped).toContain("anthropic");
     expect(stripped).toContain("•••");
     expect(stripped).toContain("█");
     // Does not expose plaintext

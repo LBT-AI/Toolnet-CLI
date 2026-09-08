@@ -37,6 +37,11 @@ describe("Session UX & Interactive Manager Regression Suite", () => {
     messageQueue.clear();
     messageQueue.setIsProcessing(false);
 
+    // Reset singleton UI state that other suites sharing this worker may
+    // leave behind (bun reuses workers across files).
+    tuiState.overlay = { type: "none" };
+    tuiState.pendingConfirmation = null;
+    tuiState.showHelp = false;
     tuiState.messages = [];
     tuiState.isStreaming = false;
     tuiState.showSessionPicker = false;
@@ -295,6 +300,6 @@ describe("Session UX & Interactive Manager Regression Suite", () => {
     expect(stripped).toContain(curId);
     expect(stripped).toContain("(current)");
     expect(stripped).toContain("10 msgs");
-    expect(stripped).toContain("Enter Resume");
+    expect(stripped).toContain("enter resume");
   });
 });

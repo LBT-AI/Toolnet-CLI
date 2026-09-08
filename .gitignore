@@ -15,3 +15,5 @@ dist-bin/
 *.tmp
 test_sandbox/
 .clai/
+__pycache__/
+*.pyc

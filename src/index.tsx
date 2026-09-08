@@ -638,12 +638,15 @@ if (promptIdx >= 0) {
 
     async function ensureWorkspaceTrust(tui: any): Promise<boolean> {
       const { SessionTrustManager } = await import("./lib/security/sessionTrust");
+      const { isAlwaysTrusted } = await import("./lib/security/persistentTrust");
       const { requestApprovalModal } = await import("./tui/permissions/permissionModal");
       const tm = new SessionTrustManager();
       const { tuiState } = await import("./tui/state");
       const sid = tuiState.currentSessionId;
       
       const cwd = process.cwd();
+      // Persistent "Always trust this folder" rules skip the ask entirely.
+      if (isAlwaysTrusted("workspace_trust", cwd)) return true;
       if (tm.isTrustedForSession(sid, "workspace_trust", cwd, "workspace")) return true;
       if (tm.isDeniedForSession(sid, "workspace_trust", cwd)) return false;
 

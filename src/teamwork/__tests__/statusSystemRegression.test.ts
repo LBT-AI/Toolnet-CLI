@@ -178,11 +178,11 @@ describe("Realtime Task Status System (Agy CLI style)", () => {
       });
 
       const stripped = stripAnsi(output);
-      // Divider + 1 single status line
+      // Single status line only (idle has none; no divider here — the input divider below is the only rule).
       const lines = stripped.trimEnd().split("\n");
-      expect(lines.length).toBe(2);
+      expect(lines.length).toBe(1);
 
-      const statusLine = lines[1];
+      const statusLine = lines[0];
       expect(statusLine).toContain(SPINNER[2]);
       expect(statusLine).toContain("Running command…");
       expect(statusLine).toContain("1.4s");
@@ -227,8 +227,8 @@ describe("Realtime Task Status System (Agy CLI style)", () => {
       });
 
       const stripped = stripAnsi(output);
-      expect(stripped).toContain("● Ready");
-      expect(stripped).toContain("Enter: send");
+      // Idle = no working-status line at all (the header badge shows ● Idle).
+      expect(stripped).toBe("");
     });
   });
 });

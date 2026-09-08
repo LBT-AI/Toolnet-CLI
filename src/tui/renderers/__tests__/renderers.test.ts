@@ -24,7 +24,8 @@ describe("TUI Renderers Unit Tests", () => {
     });
     expect(output).toBeString();
     expect(output).toContain("ToolNet CLI");
-    expect(output).toContain("Build");
+    // Default Build mode shows the idle status badge, not a redundant mode tag.
+    expect(output).toContain("Idle");
   });
 
   it("renderHeader renders Plan mode and Bypass mode badges accurately", () => {
@@ -111,9 +112,11 @@ describe("TUI Renderers Unit Tests", () => {
     });
     expect(modal).toBeArray();
     const joined = stripAnsi(modal.join("\n"));
-    expect(joined).toContain("Security Approval Required");
-    expect(joined).toContain("[Y] Once");
-    expect(joined).toContain("[N] Deny");
+    expect(joined).toContain("Security approval");
+    expect(joined).toContain("Allow once");
+    expect(joined).toContain("Allow for this session");
+    expect(joined).toContain("Always trust this folder");
+    expect(joined).toContain("Deny");
   });
 
   it("renderToast renders centered notification badge", () => {
@@ -131,7 +134,7 @@ describe("TUI Renderers Unit Tests", () => {
       modelSearchQuery: "",
     });
     const stripped = stripAnsi(box);
-    expect(stripped).toContain("Select Model");
+    expect(stripped).toContain("Select model");
     expect(stripped).toContain("gpt-4o");
     expect(stripped).toContain("claude-3-5-sonnet");
   });
@@ -143,7 +146,7 @@ describe("TUI Renderers Unit Tests", () => {
       keyManagerConfirmDelete: null,
     });
     const strippedList = stripAnsi(listMode);
-    expect(strippedList).toContain("API Keys");
+    expect(strippedList).toContain("API keys");
     expect(strippedList).toContain("Provider");
     expect(strippedList).toContain("Status");
 
@@ -153,7 +156,7 @@ describe("TUI Renderers Unit Tests", () => {
       keyManagerConfirmDelete: null,
     });
     const strippedInput = stripAnsi(inputMode);
-    expect(strippedInput).toContain("Enter API Key");
+    expect(strippedInput).toContain("Set API key");
     expect(strippedInput).toContain("••••••••");
 
     const deleteMode = renderKeyManagerBox(80, 24, {
@@ -228,7 +231,7 @@ describe("TUI Renderers Unit Tests", () => {
       },
     });
     const strippedDetail = stripAnsi(detailBox);
-    expect(strippedDetail).toContain("Skill: autocad-drafting");
+    expect(strippedDetail).toContain("Skill · autocad-drafting");
     expect(strippedDetail).toContain("Enabled");
     expect(strippedDetail).toContain("Draft AIA standard drawings");
   });
@@ -255,7 +258,7 @@ describe("TUI Renderers Unit Tests", () => {
     expect(strippedQueueBox).toContain("Queue (2 tasks)");
     expect(strippedQueueBox).toContain("1. First task");
     expect(strippedQueueBox).toContain("2. Second task");
-    expect(strippedQueueBox).toContain("Ctrl+↑/↓ Reorder");
+    expect(strippedQueueBox).toContain("d delete");
   });
 
   it("renderSessionPickerBox renders sessions list and metadata accurately", () => {
@@ -293,7 +296,7 @@ describe("TUI Renderers Unit Tests", () => {
     expect(stripped).toContain("8 msgs");
     expect(stripped).toContain("sess_9876543210_xyz");
     expect(stripped).toContain("root/other-project");
-    expect(stripped).toContain("Enter Resume");
-    expect(stripped).toContain("D Delete");
+    expect(stripped).toContain("enter resume");
+    expect(stripped).toContain("d delete");
   });
 });

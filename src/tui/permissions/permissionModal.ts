@@ -1,6 +1,7 @@
 import { tuiState } from "../state";
 import { SessionTrustManager } from "../../lib/security/sessionTrust";
 import { securityEngine } from "../../lib/security/securityEngine";
+import { recordAlwaysTrust } from "../../lib/security/persistentTrust";
 import { setCurrentSessionId as bindCurrentContextSession } from "../../lib/context";
 
 export interface ApprovalModalRequest {
@@ -53,10 +54,16 @@ export async function requestApprovalModal(
   return new Promise<boolean>((resolve) => {
     tuiState.pendingConfirmation = {
       prompt: reason,
+      selectedIndex: 0,
       onDecision: (choice) => {
         if (choice === "a") {
           // "A" = allow for session: record under (toolName, targetKey).
           new SessionTrustManager().recordDecision(sessionId, toolName, targetKey, "SESSION");
+        } else if (choice === "t") {
+          // "T" = always trust: persist the rule so future runs never ask
+          // again, AND record session trust so the current session is covered.
+          recordAlwaysTrust(toolName, targetKey);
+          new SessionTrustManager().recordDecision(sessionId, toolName, targetKey, "ALWAYS");
         } else if (choice === "n") {
           // "N" = deny for session: later identical asks auto-deny.
           new SessionTrustManager().recordDecision(sessionId, toolName, targetKey, "DENIED");

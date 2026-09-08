@@ -31,6 +31,10 @@ describe("Queued Messages & Queue Manager Regression Suite", () => {
     messageQueue.setIsProcessing(false);
     resetInputState();
 
+    // Mirror the real startup flow (index.tsx calls tui.setState("ready")
+    // before the input loop); the Enter handler ignores submits while booting.
+    tuiState.appState = "ready";
+
     tuiState.messages = [];
     tuiState.isStreaming = false;
     tuiState.showQueueManager = false;
@@ -240,7 +244,7 @@ describe("Queued Messages & Queue Manager Regression Suite", () => {
     expect(strippedModal).toContain("Queue (2 tasks)");
     expect(strippedModal).toContain("1. First task in queue");
     expect(strippedModal).toContain("2. Second task in queue");
-    expect(strippedModal).toContain("Ctrl+↑/↓ Reorder");
+    expect(strippedModal).toContain("d delete");
   });
 
   it("9. Queue Manager keyboard navigation, edit, delete, reorder interactions", () => {

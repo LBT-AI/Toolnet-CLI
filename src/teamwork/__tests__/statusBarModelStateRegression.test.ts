@@ -62,8 +62,8 @@ describe("Status Bar & Model State Lifecycle Regression Suite", () => {
     });
     const stripped = stripAnsi(footer);
 
-    expect(stripped).toContain("Provider: Not configured");
-    expect(stripped).toContain("Model: Not selected");
+    expect(stripped).toContain("Not configured · Not selected");
+    expect(stripped).toContain("/root/project");
     expect(stripped).not.toContain("openai/gpt-4o");
     expect(stripped).not.toContain("gpt-4o");
   });
@@ -74,8 +74,7 @@ describe("Status Bar & Model State Lifecycle Regression Suite", () => {
 
     const footer = renderFooter(100);
     const stripped = stripAnsi(footer);
-    expect(stripped).toContain("Provider: Not configured");
-    expect(stripped).toContain("Model: Not selected");
+    expect(stripped).toContain("Not configured · Not selected");
     expect(stripped).not.toContain("gpt-4o");
 
     const sidebar = renderSidebar(tuiState.currentModel, Date.now(), 40);
@@ -110,8 +109,8 @@ describe("Status Bar & Model State Lifecycle Regression Suite", () => {
     });
     const stripped = stripAnsi(footer);
 
-    expect(stripped).toContain("Provider: Custom Offline");
-    expect(stripped).toContain("Model: Not selected");
+    expect(stripped).toContain("Custom Offline Provider · Not selected");
+    expect(stripped).toContain("/root/project");
     expect(stripped).not.toContain("non-existent-model");
     expect(stripped).not.toContain("gpt-4o");
   });
@@ -156,8 +155,8 @@ describe("Status Bar & Model State Lifecycle Regression Suite", () => {
       workspacePath: "/root/project",
     });
     const stripped = stripAnsi(footer);
-    expect(stripped).toContain("Provider: Live Provider");
-    expect(stripped).toContain("Model: custom-model-beta");
+    expect(stripped).toContain("Live Provider · custom-model-beta");
+    expect(stripped).toContain("/root/project");
 
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });

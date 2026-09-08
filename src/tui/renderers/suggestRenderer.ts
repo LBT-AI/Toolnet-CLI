@@ -1,5 +1,6 @@
 import { A } from "../../term";
-import { truncate, stripAnsi } from "../layout";
+import { stripAnsi, truncate } from "../layout";
+import { composeBox, computeBoxGeometry } from "./composeBox";
 
 export function renderSuggestionsPopup(
   cols: number,
@@ -11,47 +12,45 @@ export function renderSuggestionsPopup(
   const out: string[] = [];
   if (suggests.length === 0) return out;
 
-  const boxWidth = Math.min(cols - 4, 70);
-  const leftPad = 2;
+  const isNarrow = cols < 50;
+  const { boxW, startCol } = computeBoxGeometry(cols, 30, suggests.length, true, isNarrow ? 46 : 56);
 
-  // Header of command palette
-  const title = " Commands ";
-  const topBorder = " ".repeat(leftPad) + A.fgBorder + "┌─" + A.bold + A.fgCyan + title + A.reset + A.fgBorder + "─".repeat(Math.max(0, boxWidth - title.length - 2)) + "┐" + A.reset + "\r\n";
-  out.push(topBorder);
+  // Render the palette inline in the content area (it is part of the streamed
+  // frame, drawn above the input). Compact, single-line entries.
+  const leftPad = Math.max(1, Math.floor((cols - boxW) / 2));
+  const title = A.bold + A.fgCyan + " Commands " + A.reset;
+  const line = (content: string, clip: number) => {
+    const visible = truncate(stripAnsi(content) ? content : "", clip);
+    const pad = Math.max(0, boxW - stripAnsi(visible).length);
+    return " ".repeat(leftPad) + A.fgBorder + "│ " + A.reset + visible + " ".repeat(pad) + A.fgBorder + "│" + A.reset + "\r\n";
+  };
 
-  const maxItems = Math.max(1, Math.min(suggests.length, popupRows - 3));
+  out.push(" ".repeat(leftPad) + A.fgBorder + "╭" + "─".repeat(boxW - 2) + "╮" + A.reset + "\r\n");
+  out.push(" ".repeat(leftPad) + A.fgBorder + "│ " + A.reset + title + " ".repeat(Math.max(0, boxW - 2 - stripAnsi(title).length - 2)) + A.fgBorder + "│" + A.reset + "\r\n");
+
+  const maxItems = Math.max(1, Math.min(suggests.length, popupRows - 4));
   let startIdx = 0;
-  if (cmdSuggestIdx >= maxItems) {
-    startIdx = cmdSuggestIdx - maxItems + 1;
-  }
+  if (cmdSuggestIdx >= maxItems) startIdx = cmdSuggestIdx - maxItems + 1;
 
   for (let i = 0; i < maxItems; i++) {
     const si = startIdx + i;
     if (si >= suggests.length) break;
     const cmd = suggests[si];
     const selected = si === cmdSuggestIdx;
-
+    const namePad = isNarrow ? 8 : 12;
+    const nameText = cmd.name.padEnd(namePad, " ");
     const pointer = selected ? A.fgCyan + "● " + A.reset : "  ";
-    const nameFg = selected ? A.bold + A.fgCyan : A.fgText;
-    const nameText = cmd.name.padEnd(16);
-    const descText = truncate(cmd.desc || "", boxWidth - 24);
-    const lineContent = pointer + nameFg + nameText + A.reset + A.fgSubtext + descText + A.reset;
-    const strippedLen = stripAnsi(lineContent).length;
-    const innerPad = Math.max(0, boxWidth - strippedLen);
-
-    const row = " ".repeat(leftPad) + A.fgBorder + "│ " + A.reset + lineContent + " ".repeat(innerPad) + A.fgBorder + "│" + A.reset + "\r\n";
-    out.push(row);
+    const nameFmt = selected ? A.bold + A.fgCyan + nameText + A.reset : A.fgText + nameText + A.reset;
+    const descMax = Math.max(4, boxW - 4 - namePad - 6);
+    const descFmt = A.fgSubtext + truncate(cmd.desc || "", descMax) + A.reset;
+    let content = pointer + nameFmt + " " + descFmt;
+    if (selected) content = A.bgOverlay + content + A.reset;
+    out.push(line(content, boxW - 4));
   }
 
-  // Footer navigation hint
-  const hint = A.fgMuted + " ↑↓ navigate │ Enter/Tab select │ Esc close" + A.reset;
-  const hintStripped = stripAnsi(hint).length;
-  const hintPad = Math.max(0, boxWidth - hintStripped);
-  const hintRow = " ".repeat(leftPad) + A.fgBorder + "│ " + A.reset + hint + " ".repeat(hintPad) + A.fgBorder + "│" + A.reset + "\r\n";
-  out.push(hintRow);
-
-  const bottomBorder = " ".repeat(leftPad) + A.fgBorder + "└" + "─".repeat(boxWidth) + "┘" + A.reset + "\r\n";
-  out.push(bottomBorder);
+  const hint = A.fgMuted + "↑↓ navigate · Enter select · Esc close" + A.reset;
+  out.push(line(hint, boxW - 4));
+  out.push(" ".repeat(leftPad) + A.fgBorder + "╰" + "─".repeat(boxW - 2) + "╯" + A.reset + "\r\n");
 
   return out;
 }
