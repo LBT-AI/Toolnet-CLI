@@ -339,6 +339,10 @@ describe("TEAMWORK BASELINE", () => {
     const scheduler = new DynamicScheduler(graph, {
       gatewayUrl: "http://127.0.0.1:1", // unreachable → typed failure
       maxConcurrencyOverride: 1,
+      // Bound the worker: on CI the connect to 127.0.0.1:1 can hang instead
+      // of refusing, and without a timeout the harness's 120s default blows
+      // the test budget. 5s abort → typed PROVIDER_NETWORK failure.
+      timeoutMs: 5000,
     });
     const state = await scheduler.start();
     const node: any = graph.nodes[0];

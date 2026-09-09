@@ -65,6 +65,14 @@ export interface SchedulerOptions {
   agentDepth?: number;
   /** Hard cap on attempts per task (default 2, matching prior behavior). */
   defaultMaxAttempts?: number;
+  /**
+   * Per-worker hard timeout (ms) forwarded to the subagent harness. Without
+   * it a worker that hangs (e.g. a gateway that neither answers nor refuses)
+   * can block the whole scheduler for the harness's 120s default — far past
+   * any test or caller budget. Bounding it turns a hang into a typed
+   * PROVIDER_NETWORK failure.
+   */
+  timeoutMs?: number;
 }
 
 export type SchedulerEventType =
@@ -678,6 +686,7 @@ export class DynamicScheduler {
         {
           gatewayUrl: this.options.gatewayUrl,
           model: this.options.model || "default",
+          timeoutMs: this.options.timeoutMs,
           sessionId: this.options.sessionId || this.state.sessionId,
           sandboxMode: this.options.sandboxMode,
           workspaceRoot: this.options.workspaceRoot,
