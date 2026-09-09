@@ -259,6 +259,10 @@ export async function sendMessage(text: string): Promise<void> {
             return { result: r, allowed: true };
           }
 
+          // Propagate the request-level AbortSignal so Ctrl+C kills running
+          // processes (shell trees, fetches) — not just the HTTP stream.
+          const requestSignal = tuiState.abortController?.signal;
+
           // ── Layer 4 Phase 1: SINGLE GATEWAY FLOW ──────────────────────────
           // Step 1: unapproved gateway call → SecurityEngine decision (only eval).
           const gateway = async (userApproved: boolean) =>
@@ -271,6 +275,7 @@ export async function sendMessage(text: string): Promise<void> {
                 userApproved,
                 sessionId: tuiState.currentSessionId,
                 source: "tui",
+                signal: requestSignal,
               }
             );
 
@@ -318,6 +323,7 @@ export async function sendMessage(text: string): Promise<void> {
 
         const outcome = await executeToolBatch(parsedCalls, {
           cwd,
+          signal: tuiState.abortController?.signal,
           needsApproval: (name, args) => {
             // Classification-only check (no execution): routes approval-needing
             // calls to the sequential path so batching can't skip confirmation.
@@ -413,6 +419,83 @@ function stopSpinner(): void {
   statusManager.stop();
 }
 
+/**
+ * OAuth 2.0 Device Authorization Grant — end-to-end TUI wiring.
+ *
+ * Flow: request device code → show modal (user code + URL) → poll with the
+ * SAME device code → pending/slow_down handled per RFC 8628 → save the
+ * credential on success → refresh provider state. Esc/Ctrl+C aborts polling.
+ * All failures are recoverable (status + toast), never process.exit.
+ */
+export async function startOAuthDeviceFlow(provider: string): Promise<void> {
+  // Guard: one flow at a time.
+  if (tuiState.deviceCodeModal) return;
+
+  const { detectGatewayUrl, createGateway } = await import("../../lib/gateway");
+  const { runDeviceFlow, OAuthFlowError } = await import("../../lib/oauthDeviceFlow");
+  const baseUrl = detectGatewayUrl();
+  if (!baseUrl) {
+    tuiState.showToast("OAuth requires a ToolNet gateway URL (TOOLNET_API_URL)", 3500);
+    tuiState.setStatus("✖ No gateway configured for OAuth");
+    tuiState.requestRender();
+    return;
+  }
+  const gateway = createGateway(baseUrl);
+
+  tuiState.oauthAbort = new AbortController();
+  const signal = tuiState.oauthAbort.signal;
+
+  try {
+    const result = await runDeviceFlow(
+      gateway,
+      provider,
+      {
+        onDeviceCode: ({ userCode, verificationUri, verificationUriComplete }) => {
+          tuiState.deviceCodeModal = {
+            provider,
+            userCode,
+            verificationUri,
+            verificationUriComplete,
+            statusText: "Waiting for authorization…",
+          };
+          tuiState.requestRender();
+        },
+        onPolling: ({ attempt }) => {
+          if (tuiState.deviceCodeModal) {
+            tuiState.deviceCodeModal.statusText = `Waiting for authorization… (poll ${attempt})`;
+            tuiState.requestRender();
+          }
+        },
+      },
+      signal
+    );
+
+    tuiState.deviceCodeModal = null;
+    tuiState.oauthAbort = null;
+
+    if (result.connection || result.successWithoutConnection) {
+      // Save the credential under the provider id so resolveApiKey() finds it.
+      const { saveCliKey } = await import("../../lib/keys");
+      saveCliKey(provider, "oauth:" + provider);
+      const { setActiveProvider } = await import("../../providers");
+      setActiveProvider(provider);
+      tuiState.showToast("✅ " + provider + " authorized", 3000);
+      tuiState.setStatus("Provider authorized: " + provider);
+      await tuiState.refreshActiveModels();
+    } else {
+      tuiState.showToast("⚠️ Authorization completed but no connection returned", 3500);
+    }
+  } catch (err: any) {
+    tuiState.deviceCodeModal = null;
+    tuiState.oauthAbort = null;
+    const msg = err instanceof OAuthFlowError ? err.message : String(err?.message || err);
+    // Recoverable: show error in TUI, session stays alive.
+    tuiState.showToast("⚠️ OAuth: " + msg, 3500);
+    tuiState.setStatus("✖ OAuth failed: " + msg);
+  }
+  tuiState.requestRender();
+}
+
 export function buildTuiCommandContext(): any {
   return {
     addMessage: (role: "user" | "assistant" | "system", content: string) => {
@@ -431,6 +514,7 @@ export function buildTuiCommandContext(): any {
     openModelPicker: () => tuiState.openModelPicker(),
     openKeyManager: () => tuiState.openKeyManager(),
     openProviderPicker: () => providerPicker.open((s) => tuiState.setStatus(s), () => tuiState.requestRender()),
+    startOAuthDeviceFlow: (provider: string) => startOAuthDeviceFlow(provider),
     openSkillsPicker: (initialSkillName?: string) => tuiState.openSkillsPicker(initialSkillName),
     openQueueManager: () => tuiState.openQueueManager(),
     openSessionPicker: () => tuiState.openSessionPicker(),
@@ -461,6 +545,11 @@ export function buildTuiCommandContext(): any {
       tuiState.showToast(enabled ? `Bypass Mode ENABLED (${tuiState.bypassLevel.toUpperCase()})` : "Bypass Mode DISABLED");
       tuiState.setStatus(`Bypass Mode: ${enabled ? "ON" : "OFF"}${level ? ` (${level})` : ""}`);
       tuiState.requestRender();
+    },
+    // Teamwork abort hook: Ctrl+C while a DAG runs cancels the scheduler
+    // (and its subagents) instead of exiting the CLI.
+    registerTeamworkAbort: (ctrl: AbortController) => {
+      tuiState.teamworkAbort = ctrl;
     },
     getCurrentSessionId: () => tuiState.currentSessionId,
     setCurrentSessionId: (id: string) => { tuiState.currentSessionId = id; },

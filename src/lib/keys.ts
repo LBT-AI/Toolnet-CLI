@@ -213,7 +213,7 @@ export const credentialsStore = {
     return Boolean(getCliKey(cfg.id) || (cfg.apiKeyEnv && process.env[cfg.apiKeyEnv]) || cfg.apiKey);
   },
   async saveApiKey(key: string): Promise<void> {
-    fs.writeFileSync("/tmp/saveApiKey.log", "Called saveApiKey with key: " + key + "\n", {flag:"a"});
+    // Security: NEVER log the key anywhere (file or console).
     const { getActiveProviderConfig } = await import("../providers");
     const cfg = getActiveProviderConfig();
     if (cfg) {

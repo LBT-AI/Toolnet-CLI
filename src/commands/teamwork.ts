@@ -1,8 +1,7 @@
 import type { CommandContext, Command } from "./index";
 import { EventBus } from "../teamwork/eventBus";
 import { DynamicScheduler } from "../teamwork/dynamicScheduler";
-import { generateTaskGraph, getGraphNodeArray } from "../teamwork/smartPlanner";
-import { setIsDashboardActive, setDashboardNodes, setDashboardState } from "../teamwork/dashboardState";
+import { generateTaskGraph } from "../teamwork/smartPlanner";
 
 export const teamworkCommand: Command = {
   name: "teamwork",
@@ -53,16 +52,14 @@ export const teamworkCommand: Command = {
       const scheduler = new DynamicScheduler(taskGraph, {
         maxConcurrencyOverride: undefined
       });
-      
-      setIsDashboardActive(true);
-      setDashboardNodes(getGraphNodeArray(taskGraph));
-      setDashboardState(scheduler.getState());
 
-      scheduler.onEvent((event) => {
-        setDashboardNodes([...(scheduler as any).nodesList]);
-        setDashboardState(scheduler.getState());
-      });
-      
+      // Ctrl+C during a running teamwork DAG cancels the scheduler and its
+      // running subagents instead of killing the whole CLI.
+      const abortCtrl = new AbortController();
+      const onAbort = () => { try { scheduler.cancel(); } catch {} };
+      abortCtrl.signal.addEventListener("abort", onAbort, { once: true });
+      if ((ctx as any).registerTeamworkAbort) (ctx as any).registerTeamworkAbort(abortCtrl);
+
       const result = await scheduler.start();
       
       ctx.addMessage(

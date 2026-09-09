@@ -1,6 +1,7 @@
 import { tuiState } from "../state";
 import { getAllCommands } from "../../commands";
 import { providerPicker } from "../../components/ProviderPicker";
+import { startOAuthDeviceFlow } from "../events/agentWiring";
 import { MultilineInputBuffer } from "./multilineInput";
 import { getKeyManagerProviders } from "../renderers/keyManagerRenderer";
 import { saveCliKey, deleteCliKey, getCliKey } from "../../lib/keys";
@@ -9,6 +10,7 @@ import { BRACKETED_PASTE_START, parseBracketedPaste, stripBracketedPaste } from 
 import { statusManager } from "../statusService";
 import { messageQueue } from "../../lib/messageQueue";
 import { overlayIsActive, handleOverlayKey } from "./overlayInput";
+import { workspaceAccessAnimation } from "../animations/modalAnimation";
 
 const inputBufferManager = new MultilineInputBuffer();
 
@@ -92,6 +94,11 @@ function _handlePasteInternal(
 
   // 1. Pending Security Approval Modal
   if (tuiState.pendingConfirmation) {
+    return;
+  }
+
+  // 1A. OAuth device-flow modal — swallow all paste input.
+  if (tuiState.deviceCodeModal) {
     return;
   }
 
@@ -321,6 +328,18 @@ function _handleKeyInternal(
   //   Esc dismisses WITHOUT recording (onDecision intentionally NOT called),
   //   single-key shortcuts: Y = Allow once, A = Allow for session,
   //   T = Always trust this folder, N = Deny (records session denial).
+  // 1A. OAuth device-flow modal — Esc cancels polling; everything else swallowed.
+  if (tuiState.deviceCodeModal) {
+    if (hex === "1b" || hex === "03") {
+      tuiState.deviceCodeModal = null;
+      tuiState.oauthAbort?.abort();
+      tuiState.oauthAbort = null;
+      tuiState.setStatus("");
+      renderAll();
+    }
+    return;
+  }
+
   if (tuiState.pendingConfirmation) {
     const conf = tuiState.pendingConfirmation;
     const optCount = 4;
@@ -328,18 +347,26 @@ function _handleKeyInternal(
 
     const selectApproval = (choice: "y" | "a" | "t" | "n") => {
       if (conf.onDecision) conf.onDecision(choice);
-      conf.resolve(choice === "n" ? false : true);
-      tuiState.pendingConfirmation = null;
+      workspaceAccessAnimation.beginClosing(conf, renderAll, () => {
+        tuiState.pendingConfirmation = null;
+        conf.resolve(choice === "n" ? false : true);
+        renderAll();
+      });
+      if (process.env.TOOLNETCLI_ANIMATIONS === "0") return;
       renderAll();
     };
 
     if (hex === "1b5b41" || hex === "1b4f41" || s.toLowerCase() === "k") {
-      conf.selectedIndex = (sel - 1 + optCount) % optCount;
+      const next = (sel - 1 + optCount) % optCount;
+      conf.selectedIndex = next;
+      workspaceAccessAnimation.beginSelection(sel, next, conf, renderAll);
       renderAll();
       return;
     }
     if (hex === "1b5b42" || hex === "1b4f42" || s.toLowerCase() === "j") {
-      conf.selectedIndex = (sel + 1) % optCount;
+      const next = (sel + 1) % optCount;
+      conf.selectedIndex = next;
+      workspaceAccessAnimation.beginSelection(sel, next, conf, renderAll);
       renderAll();
       return;
     }
@@ -348,8 +375,12 @@ function _handleKeyInternal(
       return;
     }
     if (hex === "1b") {
-      conf.resolve(false);
-      tuiState.pendingConfirmation = null;
+      workspaceAccessAnimation.beginClosing(conf, renderAll, () => {
+        tuiState.pendingConfirmation = null;
+        conf.resolve(false);
+        renderAll();
+      });
+      if (process.env.TOOLNETCLI_ANIMATIONS === "0") return;
       renderAll();
       return;
     }
@@ -918,6 +949,14 @@ function _handleKeyInternal(
           return;
         }
 
+        // Provider has no key. For gateway-backed providers, OAuth device
+        // flow is available via Enter=OAuth; any other key opens the
+        // API-key modal as before.
+        if (sel === "toolnet" && hex === "0d") {
+          void startOAuthDeviceFlow(sel);
+          return;
+        }
+
         // Provider has no key -> open Set Key modal directly!
         tuiState.keyManagerInput = { provider: sel, buffer: "", cursor: 0 };
         tuiState.showKeyManager = true;
@@ -936,10 +975,17 @@ function _handleKeyInternal(
     return;
   }
 
-  // 6. Ctrl+C (1st aborts running stream/tool; 2nd exits)
+  // 6. Ctrl+C (1st aborts running stream/tool/teamwork; 2nd exits)
   if (hex === "03") {
     if (tuiState.isStreaming) {
       tuiState.abortController?.abort();
+      statusManager.cancel();
+      renderAll();
+      return;
+    }
+    if (tuiState.teamworkAbort) {
+      tuiState.teamworkAbort.abort();
+      tuiState.teamworkAbort = null;
       statusManager.cancel();
       renderAll();
       return;
@@ -1035,6 +1081,13 @@ function _handleKeyInternal(
     if (providerPicker.show) { providerPicker.show = false; renderAll(); return; }
     if (tuiState.isStreaming) {
       tuiState.abortController?.abort();
+      statusManager.cancel();
+      renderAll();
+      return;
+    }
+    if (tuiState.teamworkAbort) {
+      tuiState.teamworkAbort.abort();
+      tuiState.teamworkAbort = null;
       statusManager.cancel();
       renderAll();
     }

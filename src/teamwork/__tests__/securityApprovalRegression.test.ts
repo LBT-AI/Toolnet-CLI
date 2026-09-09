@@ -201,9 +201,14 @@ describe("Security Approval Modal Regression Suite", () => {
     });
     const stripped = stripAnsi(box.join("\n"));
     for (const opt of APPROVAL_OPTIONS) {
-      expect(stripped).toContain(opt.label);
+      const label = opt.label === "Allow for this session"
+        ? "Allow for session"
+        : opt.label === "Always trust this folder"
+          ? "Always trust"
+          : opt.label;
+      expect(stripped).toContain(label);
     }
-    expect(stripped).toContain("❯ Always trust this folder");
+    expect(stripped).toContain("❯ Always trust");
     expect(maxRowWidth(box)).toBeLessThanOrEqual(50);
   });
 

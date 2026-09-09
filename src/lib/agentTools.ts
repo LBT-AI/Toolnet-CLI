@@ -410,6 +410,8 @@ export interface ExecuteToolOptions {
   agentRole?: string;
   agentDepth?: number;
   source?: "tui" | "headless" | "subagent" | "teamwork" | "plugin" | "vision" | "mcp";
+  /** Abort signal — propagated to long-running executors (shell, fetch). */
+  signal?: AbortSignal;
 }
 
 // ── Raw tool execution (no cache, no compression) ──────────────────────
@@ -419,6 +421,10 @@ export interface ExecuteToolOptions {
 // (executeTool is a thin compatibility wrapper around the gateway).
 
 export async function _executeToolRaw(name: string, args: any, options?: ExecuteToolOptions): Promise<string> {
+  // Guard: pre-aborted request — nothing executes after cancellation.
+  if (options?.signal?.aborted) {
+    return JSON.stringify({ stdout: "", stderr: "Cancelled", exitCode: 130 });
+  }
   try {
     if (name === "get_cwd") {
       const res = toolGetCwd();
@@ -443,6 +449,7 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
         workspaceRoot: options?.workspaceRoot,
         sandboxMode: options?.sandboxMode,
         env: typeof args.env === "object" && args.env !== null ? args.env : undefined,
+        signal: options?.signal,
       });
       return JSON.stringify({ stdout: res.stdout || "", stderr: res.stderr || res.error || "", exitCode: res.exitCode });
     } else if (name === "tree") {
@@ -484,7 +491,7 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "web_fetch" || name === "web_crawl" || name === "fetch") {
       const url = args.url || args.link || "";
-      const res = await toolWebFetch(url);
+      const res = await toolWebFetch(url, options?.signal);
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "browser" || name === "browser_action" || name === "playwright") {
       const res = await executeBrowserTool(args);
@@ -549,6 +556,7 @@ export async function executeTool(name: string, args: any, options?: ExecuteTool
         agentRole: options?.agentRole,
         agentDepth: options?.agentDepth,
         source: options?.source,
+        signal: options?.signal,
       }
     );
     if (!res.allowed) {

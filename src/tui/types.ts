@@ -18,6 +18,19 @@ export interface PendingConfirmation {
   resolve: (val: boolean) => void;
 }
 
+/**
+ * OAuth device-flow modal state — rendered by renderAll as an overlay in the
+ * SAME render tree (never writes to stdout itself).
+ */
+export interface DeviceCodeModalState {
+  provider: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  /** Status line shown in the modal footer ("Waiting for authorization…"). */
+  statusText: string;
+}
+
 export interface InputState {
   buffer: string;
   cursor: number;

@@ -70,6 +70,8 @@ export interface ExecutionOptions {
   agentRole?: string;
   /** Nesting depth for subagent recursion gates. */
   agentDepth?: number;
+  /** Abort signal — cancelling stops provider calls AND running tools. */
+  signal?: AbortSignal;
   onChunk?: (chunk: string) => void;
   onEvent?: (event: string, data: any) => void;
 }

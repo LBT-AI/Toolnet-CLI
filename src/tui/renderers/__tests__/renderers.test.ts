@@ -3,7 +3,7 @@ import { renderHeader } from "../headerRenderer";
 import { renderChatMessages } from "../chatRenderer";
 import { renderSidebar } from "../sidebarRenderer";
 import { renderWorkingStatus, renderInputArea, renderFooter } from "../statusRenderer";
-import { renderConfirmationModal, renderToast } from "../modalRenderer";
+import { renderConfirmationModal, renderToast, APPROVAL_OPTIONS, calculateConfirmationModalWidth } from "../modalRenderer";
 import { renderModelPickerBox } from "../modelPickerRenderer";
 import { renderKeyManagerBox } from "../keyManagerRenderer";
 import { renderSkillsPickerBox } from "../skillsPickerRenderer";
@@ -11,7 +11,8 @@ import { renderQueueManagerBox } from "../queueManagerRenderer";
 import { renderQueuedMessagesPreview } from "../queuePreviewRenderer";
 import { renderSessionPickerBox } from "../sessionPickerRenderer";
 import { renderSuggestionsPopup } from "../suggestRenderer";
-import { stripAnsi } from "../../layout";
+import { stripAnsi, visibleWidth } from "../../layout";
+import { setNoColor } from "../../../term";
 
 describe("TUI Renderers Unit Tests", () => {
   it("renderHeader renders title, mode badge, and status without ANSI overflow", () => {
@@ -117,6 +118,58 @@ describe("TUI Renderers Unit Tests", () => {
     expect(joined).toContain("Allow for this session");
     expect(joined).toContain("Always trust this folder");
     expect(joined).toContain("Deny");
+  });
+
+  it("Workspace Access keeps every frame row exactly aligned across terminal sizes", () => {
+    const dimensions = [[50, 20], [58, 25], [60, 25], [80, 30], [120, 40]] as const;
+    const prompt = "Do you trust the folder /root/projects/toolnet/very-long-workspace-name?";
+
+    for (const [cols, rows] of dimensions) {
+      for (let selectedIndex = 0; selectedIndex < APPROVAL_OPTIONS.length; selectedIndex++) {
+        const frame = renderConfirmationModal(cols, rows, { prompt, selectedIndex, resolve: () => {} });
+        const modalWidth = calculateConfirmationModalWidth(cols);
+        expect(frame.length).toBeGreaterThan(2);
+        for (const line of frame) {
+          expect(visibleWidth(line)).toBe(modalWidth);
+        }
+        const clean = stripAnsi(frame.join("\n"));
+        expect(clean).not.toContain("🛡");
+        const expectedLabel = cols < 60
+          ? APPROVAL_OPTIONS[selectedIndex].label.replace(" for this session", " for session").replace("Always trust this folder", "Always trust")
+          : APPROVAL_OPTIONS[selectedIndex].label;
+        expect(clean).toContain(expectedLabel);
+      }
+    }
+  });
+
+  it("Workspace Access stays exact with ANSI enabled and NO_COLOR", () => {
+    const previous = process.env.NO_COLOR;
+    try {
+      delete process.env.NO_COLOR;
+      setNoColor(false);
+      const colored = renderConfirmationModal(58, 25, {
+        prompt: "Do you trust the folder /root/项目/宽路径?",
+        selectedIndex: 2,
+        resolve: () => {},
+      });
+      expect(colored.some((line) => line.includes("\x1b["))).toBe(true);
+      expect(colored.every((line) => visibleWidth(line) === 52)).toBe(true);
+
+      setNoColor(true);
+      const plain = renderConfirmationModal(58, 25, {
+        prompt: "Do you trust the folder /root/项目/宽路径?",
+        selectedIndex: 2,
+        resolve: () => {},
+      });
+      expect(plain.every((line) => visibleWidth(line) === 52)).toBe(true);
+      // Positioning escapes remain in the output; NO_COLOR suppresses style
+      // escapes while preserving absolute placement.
+      expect(plain.every((line) => !line.includes("\x1b[38;") && !line.includes("\x1b[1m"))).toBe(true);
+    } finally {
+      setNoColor(null);
+      if (previous === undefined) delete process.env.NO_COLOR;
+      else process.env.NO_COLOR = previous;
+    }
   });
 
   it("renderToast renders centered notification badge", () => {

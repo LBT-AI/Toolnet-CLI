@@ -24,11 +24,10 @@ export function resolveBannerDecision(input: {
   headless: boolean;
   noColor: boolean;
 }): BannerDecision {
-  if (input.noColor) return { run: false, variant: "text", reason: "no-color" };
   if (input.headless) return { run: false, variant: "text", reason: "headless" };
   if (input.flags.force) return { run: true, variant: "full", reason: "force" };
   if (input.flags.disable) return { run: false, variant: "text", reason: "no-splash" };
-  if (!input.isTty) return { run: false, variant: "text", reason: "no-tty" };
+  if (!input.isTty) return { run: true, variant: "full", reason: "no-tty" };
 
   const setting: BannerSetting = isKnownBannerSetting(input.setting) ? input.setting : "once";
   if (setting === "never") return { run: false, variant: "text", reason: "never" };

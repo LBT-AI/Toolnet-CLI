@@ -547,7 +547,8 @@ if (args.includes("--bypass") || args.includes("-b")) {
 // ---- Mode detection (early, before any mode-dependent logic) ----
 const isHeadless = args.includes("-p") || args.includes("--prompt");
 const isSimple = args.includes("--simple") || args.includes("-s");
-const isInteractiveMode = !isHeadless && !isSimple;
+const isBannerOnly = args.includes("--banner");
+const isInteractiveMode = !isHeadless && !isSimple && !isBannerOnly;
 
 // ---- Workspace init (deferred so subcommands are silent) ----
 initWorkspace();
@@ -589,7 +590,10 @@ if (isInteractiveMode && isTty() && !process.env.TOOLNET_HEADLESS) {
 const promptIdx = args.findIndex(
   (arg) => arg === "-p" || arg === "--prompt"
 );
-if (promptIdx >= 0) {
+if (isBannerOnly) {
+  const { showBannerIfEligible } = await import("./banner/banner");
+  await showBannerIfEligible({ argv: args });
+} else if (promptIdx >= 0) {
   const prompt = args[promptIdx + 1];
   if (!prompt || prompt.startsWith("-")) {
     console.error("Error: -p/--prompt requires a prompt.");
@@ -628,7 +632,6 @@ if (promptIdx >= 0) {
   } else {
 
     const { loadAppConfig } = await import("./lib/appConfig");
-    const { showBannerIfEligible } = await import("./banner/banner");
     const { mountTui } = await import("./tui/app");
     const { credentialsStore } = await import("./lib/keys");
 
@@ -682,6 +685,8 @@ if (promptIdx >= 0) {
 
     async function startInteractiveSession(): Promise<void> {
       await bootstrapConfig();
+      const { showBannerIfEligible } = await import("./banner/banner");
+      await showBannerIfEligible({ argv: args });
       const tui = await mountTui();
       await tui.waitUntilRendered();
       const trusted = await ensureWorkspaceTrust(tui);

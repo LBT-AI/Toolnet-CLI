@@ -47,6 +47,12 @@ export class TuiState {
   spinnerTimer: ReturnType<typeof setInterval> | null = null;
   pendingConfirmation: PendingConfirmation | null = null;
 
+  /** OAuth device-flow modal — pure state; renderAll composes it. */
+  deviceCodeModal: import("./types").DeviceCodeModalState | null = null;
+
+  /** Abort controller for the in-flight OAuth device polling loop. */
+  oauthAbort: AbortController | null = null;
+
   /** Tools / Harness panel overlay — when non-none, all keys route into the overlay. */
   overlay: Overlay = { type: "none" };
 
@@ -119,6 +125,9 @@ export class TuiState {
   filteredSessions: SessionItem[] = [];
 
   abortController: AbortController | null = null;
+
+  /** Active teamwork DAG scheduler abort hook — cancelled by Ctrl+C. */
+  teamworkAbort: AbortController | null = null;
   ctrlCCount = 0;
   ctrlCTimer: ReturnType<typeof setTimeout> | null = null;
   startTime = 0;

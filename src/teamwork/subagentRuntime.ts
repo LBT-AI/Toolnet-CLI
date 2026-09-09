@@ -26,6 +26,8 @@ export interface SubagentOptions {
   /** Real agent role propagated into the security context (never generic). */
   agentDepth?: number;
   source?: "tui" | "headless" | "subagent" | "teamwork" | "plugin" | "vision" | "mcp";
+  /** Abort signal — cancelling the parent request stops the child mid-run. */
+  signal?: AbortSignal;
 }
 
 export interface SubagentResult {
@@ -275,6 +277,8 @@ export async function executeSubagentTask(
       sandboxMode: options.sandboxMode,
       agentRole: role,
       agentDepth: options.agentDepth,
+      // Cancel propagation: parent abort ⇒ child provider call + tools abort.
+      signal: options.signal,
     });
 
     if (onEvent) {

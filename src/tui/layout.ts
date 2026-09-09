@@ -1,4 +1,6 @@
 import { getSize, A } from "../term";
+import stripAnsiPackage from "strip-ansi";
+import stringWidth from "string-width";
 
 export const ANSI_REGEX = /\x1b\[[^m]*m/g;
 
@@ -8,70 +10,116 @@ export const FOOTER_ROWS = 1;        // Bottom footer line
 export const RESERVED = HEADER_ROWS + INPUT_AREA_ROWS + FOOTER_ROWS; // 5
 
 export function stripAnsi(text: string): string {
-  return text.replace(ANSI_REGEX, "");
+  return stripAnsiPackage(text);
+}
+
+/** Width occupied by a string in terminal cells, excluding ANSI sequences. */
+export function visibleWidth(value: string): number {
+  if (!value) return 0;
+  return stringWidth(stripAnsi(value));
+}
+
+/** Pad a string to an exact visible terminal-cell width. */
+export function padVisible(value: string, width: number): string {
+  const current = visibleWidth(value);
+  if (current >= width) return value;
+  return value + " ".repeat(width - current);
 }
 
 /**
- * Truncates a string to `maxLen` VISIBLE characters. ANSI escape sequences are
- * preserved intact (never broken), and an ellipsis is appended when truncated.
- * Plain strings behave identically to a raw slice-based truncate.
+ * Truncate to terminal cells without slicing through a Unicode code point or
+ * ANSI escape sequence. The ellipsis itself occupies one cell.
+ */
+export function truncateVisible(value: string, width: number): string {
+  if (!value || width <= 0) return "";
+  if (visibleWidth(value) <= width) return value;
+  if (width === 1) return "…";
+
+  let out = "";
+  let cells = 0;
+  let i = 0;
+  while (i < value.length && cells < width - 1) {
+    if (value.charCodeAt(i) === 0x1b) {
+      const match = value.slice(i).match(/^\x1b(?:\[[0-?]*[ -\/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/);
+      if (match) {
+        out += match[0];
+        i += match[0].length;
+        continue;
+      }
+    }
+
+    const codePoint = String.fromCodePoint(value.codePointAt(i)!);
+    const codePointWidth = stringWidth(codePoint);
+    if (cells + codePointWidth > width - 1) break;
+    out += codePoint;
+    cells += codePointWidth;
+    i += codePoint.length;
+  }
+
+  // Reset protects the rest of the frame when the source was colored.
+  return out + "…" + (visibleWidth(value) > width ? "\x1b[0m" : "");
+}
+
+/**
+ * Truncate a string to `maxLen` terminal cells. Kept as the existing public
+ * alias used by the other renderers.
  */
 export function truncate(s: string, maxLen: number): string {
-  if (!s) return "";
-  if (stripAnsi(s).length <= maxLen) return s;
-  if (maxLen <= 1) return stripAnsi(s).slice(0, maxLen);
-  return truncateKeepingEscapes(s, maxLen - 1) + "…";
+  return truncateVisible(s, maxLen);
 }
 
-function truncateKeepingEscapes(s: string, maxVisible: number): string {
-  let out = "";
-  let visible = 0;
-  let i = 0;
-  while (i < s.length && visible < maxVisible) {
-    if (s.charCodeAt(i) === 0x1b && i + 1 < s.length && s[i + 1] === "[") {
-      let j = i + 2;
-      while (j < s.length && !(0x40 <= s.charCodeAt(j) && s.charCodeAt(j) <= 0x7b)) j++;
-      out += s.slice(i, j + 1);
-      i = j + 1;
-    } else {
-      out += s[i];
-      visible += 1;
-      i += 1;
-    }
-  }
-  return out;
-}
+/** Wrap on words where possible, then break long tokens by terminal cells. */
+export function wrapVisible(value: string, width: number): string[] {
+  if (width <= 0) return [value];
+  if (!value) return [""];
 
-export function fillLine(text: string, width: number, fg = A.fgText, bg = A.bgSurface): string {
-  const stripped = stripAnsi(text);
-  const pad = Math.max(0, width - stripped.length);
-  return bg + fg + text + " ".repeat(pad) + A.reset;
-}
-
-export function wrapText(text: string, width: number): string[] {
-  if (!text) return [""];
-  if (width <= 0) return [text];
   const lines: string[] = [];
-  const paragraphs = text.split("\n");
-  for (const para of paragraphs) {
-    if (para === "") {
+  for (const paragraph of value.split("\n")) {
+    if (!paragraph) {
       lines.push("");
       continue;
     }
-    let current = "";
-    for (const word of para.split(" ")) {
-      if (current === "") {
-        current = word;
-      } else if (current.length + 1 + word.length <= width) {
-        current += " " + word;
-      } else {
-        lines.push(current);
-        current = word;
+    let line = "";
+    for (const word of paragraph.split(/ +/)) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (visibleWidth(candidate) <= width) {
+        line = candidate;
+        continue;
       }
+      if (line) lines.push(line);
+      line = "";
+      let remainder = word;
+      while (visibleWidth(remainder) > width) {
+        // Consume an exact cell-safe prefix so a path is never silently
+        // altered while it is being wrapped.
+        const prefixWidth = Math.max(1, width);
+        let prefix = "";
+        let cells = 0;
+        for (const cp of Array.from(remainder)) {
+          const w = stringWidth(cp);
+          if (cells + w > prefixWidth) break;
+          prefix += cp;
+          cells += w;
+        }
+        if (!prefix) break;
+        lines.push(prefix);
+        remainder = remainder.slice(prefix.length);
+      }
+      line = remainder;
     }
-    if (current) lines.push(current);
+    if (line || lines.length === 0) lines.push(line);
   }
   return lines.length ? lines : [""];
+}
+
+export function fillLine(text: string, width: number, fg = A.fgText, bg = A.bgSurface): string {
+  const pad = Math.max(0, width - visibleWidth(text));
+  return bg + fg + text + " ".repeat(pad) + A.reset;
+}
+
+/** Backward-compatible name for terminal-cell-aware wrapping. */
+export function wrapText(text: string, width: number): string[] {
+  return wrapVisible(text, width);
 }
 
 export interface LayoutInfo {
@@ -95,8 +143,8 @@ export function computeLayout(activeSuggestsCount = 0, inputPromptLen = 2, curso
   const popupRows = activeSuggestsCount > 0 ? Math.min(activeSuggestsCount, 7) + 3 : 0;
   const statusRows = statusActive ? 1 : 0;
   const chatRows = Math.max(1, rows - RESERVED - statusRows - popupRows);
-  const cursorRow = rows - FOOTER_ROWS - 1; // Input prompt line (footer line is the last row)
-  const cursorCol = Math.min(inputPromptLen + 1 + cursorPos, cols - 1) + 1;
+  const cursorRow = rows - FOOTER_ROWS; // Input prompt line (footer line is the last row)
+  const cursorCol = Math.min(inputPromptLen + 1 + cursorPos, cols - 1);
 
   return {
     cols,

@@ -101,10 +101,19 @@ export class AgentHarness {
   async dispatchTool(
     name: string,
     args: any,
-    options: { cwd?: string; userApproved?: boolean; agentRole?: string; agentDepth?: number } = {}
+    options: { cwd?: string; userApproved?: boolean; agentRole?: string; agentDepth?: number; signal?: AbortSignal } = {}
   ): Promise<{ result: string; allowed: boolean; reason?: string }> {
     const cwd = options.cwd || this.config.currentCwd || process.cwd();
     const mode = this.config.sandboxMode || getSandboxMode();
+
+    // Guard: already cancelled — fail fast without executing.
+    if (options.signal?.aborted) {
+      return {
+        result: JSON.stringify({ stdout: "", stderr: "Cancelled", exitCode: 130 }),
+        allowed: false,
+        reason: "Cancelled",
+      };
+    }
 
     this.metrics.toolCallsRequested++;
 
@@ -120,6 +129,7 @@ export class AgentHarness {
       agentDepth: options.agentDepth || (this.activeMode === "SUBAGENT" ? 1 : 0),
       sessionId: this.config.sessionId,
       source: this.activeMode === "SUBAGENT" ? "subagent" : this.activeMode === "TEAMWORK" ? "teamwork" : "headless",
+      signal: options.signal,
     });
 
     if (gatewayRes.needsApproval) {
@@ -213,13 +223,15 @@ export class AgentHarness {
     this.activeMode = mode;
 
     // Support for cancel(): each loop installs a fresh AbortController so a
-    // concurrent cancel() can stop the provider request.
+    // concurrent cancel() can stop the provider request. An external signal
+    // (options.signal) is combined so a parent request cancel propagates here.
     const abort = new AbortController() as AbortController & { aborted?: boolean };
     this.loopAbortController = abort;
 
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const signals = [timeoutSignal];
     if (abort.signal) signals.push(abort.signal);
+    if (options.signal) signals.push(options.signal);
     const combinedSignal =
       typeof AbortSignal.any === "function"
         ? AbortSignal.any(signals as AbortSignal[])
@@ -445,6 +457,7 @@ export class AgentHarness {
           const res = await this.dispatchTool(name, args, {
             agentRole: options.agentRole,
             agentDepth: options.agentDepth ?? (this.activeMode === "SUBAGENT" ? 1 : 0),
+            signal: combinedSignal,
           });
 
           if (res.allowed) {
@@ -658,6 +671,14 @@ Your access is strictly limited to the policy described in [RUNTIME PERMISSION C
       gatewayUrl: options.gatewayUrl || this.config.gatewayUrl,
       model: options.model || this.config.model,
     });
+
+    // External cancel (options.signal / this.cancel()) must stop the DAG:
+    // abort the scheduler's workers and cancel the scheduler itself.
+    const cancelTeamwork = () => { try { scheduler.cancel(); } catch {} };
+    if (options.signal) {
+      if (options.signal.aborted) cancelTeamwork();
+      else options.signal.addEventListener("abort", cancelTeamwork, { once: true });
+    }
 
     const finalState = await scheduler.start();
 

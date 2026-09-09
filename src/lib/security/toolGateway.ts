@@ -207,6 +207,7 @@ export class ToolGateway {
         cwd,
         workspaceRoot: wsRoot,
         sandboxMode: mode,
+        signal: context.signal,
         userApproved: context.userApproved,
         sessionId: context.sessionId,
         agentRole: context.agentRole,

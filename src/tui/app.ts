@@ -4,7 +4,7 @@ import { renderHeader } from "./renderers/headerRenderer";
 import { renderChatMessages } from "./renderers/chatRenderer";
 import { renderSidebar } from "./renderers/sidebarRenderer";
 import { renderWorkingStatus, renderInputArea, renderFooter } from "./renderers/statusRenderer";
-import { renderConfirmationModal, renderToast, renderSecretInputModal } from "./renderers/modalRenderer";
+import { renderConfirmationModal, renderToast, renderSecretInputModal, renderDeviceCodeModal } from "./renderers/modalRenderer";
 import { renderModelPickerBox } from "./renderers/modelPickerRenderer";
 import { renderKeyManagerBox } from "./renderers/keyManagerRenderer";
 import { renderSkillsPickerBox } from "./renderers/skillsPickerRenderer";
@@ -19,7 +19,6 @@ import { A, T, getSize } from "../term";
 import { BracketedPasteParser, ENABLE_BRACKETED_PASTE } from "../lib/bracketedPaste";
 import { setupTerminalLifecycle, restoreTerminal, wrapErrorBoundary, onTerminalResize } from "../lib/terminalLifecycle";
 import { initWorkspace } from "../lib/codingAgent";
-import { showBannerIfEligible } from "../banner/banner";
 import { loadConfig } from "../lib/config";
 import { parseSessionArgs, loadSession, getLastSessionId, formatExitMessage } from "../lib/sessionPersistence";
 import { providerPicker } from "../components/ProviderPicker";
@@ -29,6 +28,7 @@ import { getActiveProviderConfig, getActiveProvider, autoRestoreActiveProvider }
 import { onProviderSwitch } from "../commands/provider";
 import { statusManager } from "./statusService";
 import { messageQueue } from "../lib/messageQueue";
+import { workspaceAccessAnimation } from "./animations/modalAnimation";
 
 setupTerminalLifecycle();
 
@@ -85,7 +85,7 @@ function buildFrame(): string {
     tuiState.isStreaming ||
     Boolean(tuiState.statusText) ||
     messageQueue.size() > 0;
-  const layout = computeLayout(activeSuggests.length, 3, tuiState.cursorPos, statusActive);
+  const layout = computeLayout(activeSuggests.length, 2, tuiState.cursorPos, statusActive);
   const { cols, rows, hasPanel, panelWidth, chatCols, chatRows, popupRows } = layout;
   const out: string[] = [];
 
@@ -173,6 +173,42 @@ function buildFrame(): string {
   // status/input/footer bars after resize or when a smaller frame is drawn).
   out.push(T.clearDown);
 
+  // ── Cursor positioning ─────────────────────────────────────────────────────
+  // Compute the absolute cursor position from the actual rendered input area.
+  // The input area sits directly above the footer: divider row, then up to 3
+  // visible input lines. The cursor must land on the exact line/column where
+  // the user is typing, not on the divider or a separate row.
+  const inputBuffer = tuiState.inputBuffer;
+  const inputLines = inputBuffer ? inputBuffer.split("\n") : [];
+  const maxInputLines = inputLines.length > 0 ? Math.min(3, inputLines.length) : 1;
+  const inputStartIdx = Math.max(0, inputLines.length - maxInputLines);
+
+  // Find which line and column the cursor is on within the input buffer
+  let cursorLine = 0;
+  let cursorColInLine = 0;
+  if (inputBuffer) {
+    let pos = 0;
+    for (let i = 0; i < inputLines.length; i++) {
+      const lineLen = inputLines[i].length;
+      if (pos + lineLen >= tuiState.cursorPos || i === inputLines.length - 1) {
+        cursorLine = i;
+        cursorColInLine = tuiState.cursorPos - pos;
+        break;
+      }
+      pos += lineLen + 1; // +1 for the newline character
+    }
+  }
+
+  const visibleLineIdx = cursorLine - inputStartIdx;
+
+  // The input area (from bottom): footer → last input line → ... → divider.
+  // Footer occupies the last terminal row. The last visible input line is at
+  // rows - 1, the second-to-last at rows - 2, etc.
+  // Prompt prefix ('> ' or '… ') is always 2 visible cells wide.
+  const promptWidth = 2;
+  layout.cursorRow = rows - 1 - (maxInputLines - 1 - visibleLineIdx);
+  layout.cursorCol = Math.min(promptWidth + 1 + cursorColInLine, cols - 1);
+
   // Cursor: only visible when nothing is layered on top of the main frame.
   const anyOverlayActive =
     tuiState.showHelp ||
@@ -182,6 +218,7 @@ function buildFrame(): string {
     tuiState.showSkillsPicker ||
     tuiState.showQueueManager ||
     tuiState.showSessionPicker ||
+    Boolean(tuiState.deviceCodeModal) ||
     providerPicker.show ||
     tuiState.overlay.type !== "none";
 
@@ -260,7 +297,30 @@ function buildFrame(): string {
   // are drawn after the base frame so the streaming cursor position is never
   // disturbed and the footer/input/status bars stay at their own rows.
   if (tuiState.pendingConfirmation) {
-    out.push(...renderConfirmationModal(cols, rows, tuiState.pendingConfirmation));
+    workspaceAccessAnimation.syncOpening(tuiState.pendingConfirmation, renderAll);
+    out.push(...renderConfirmationModal(
+      cols,
+      rows,
+      tuiState.pendingConfirmation,
+      workspaceAccessAnimation.getRenderState(),
+    ));
+  } else if (workspaceAccessAnimation.getSnapshot()) {
+    // Keep the closing frame in the same render tree until its elapsed-time
+    // transition completes; the engine clears the snapshot via its callback.
+    out.push(...renderConfirmationModal(
+      cols,
+      rows,
+      workspaceAccessAnimation.getSnapshot()!,
+      workspaceAccessAnimation.getRenderState(),
+    ));
+  } else {
+    // Guard against external state resets (test teardown, crash recovery, or
+    // another overlay replacing the modal) leaving an orphaned timer behind.
+    workspaceAccessAnimation.reset();
+  }
+
+  if (tuiState.deviceCodeModal) {
+    out.push(...renderDeviceCodeModal(cols, rows, tuiState.deviceCodeModal));
   }
 
   if (tuiState.toastMsg) {
@@ -388,8 +448,6 @@ export async function main(): Promise<void> {
   // Set status based on provider state (kept generic: the footer bar already
   // shows Provider/Model/Workspace, so the status line must not echo it).
   tuiState.setStatus("");
-
-  await showBannerIfEligible();
 
   const { resume, sessionId: requestedSessionId } = parseSessionArgs(process.argv.slice(2));
   if (requestedSessionId) {

@@ -1,9 +1,9 @@
 import { T } from "../term";
 import type { BannerVariant } from "./types";
 
-export const FULL_MIN_COLS = 84;
-export const FULL_MIN_ROWS = 16;
-export const COMPACT_MIN_COLS = 44;
+export const FULL_MIN_COLS = 80;
+export const FULL_MIN_ROWS = 8;
+export const COMPACT_MIN_COLS = 40;
 export const COMPACT_MIN_ROWS = 3;
 
 /** Bands for responsive banner: large terminal → full animation. */

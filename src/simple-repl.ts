@@ -416,14 +416,6 @@ export async function main() {
 
   await showBannerIfEligible();
 
-  print("");
-  print(C.bold + color.cyan + "  ╭━━━╮╭╮╭━╮╭━╮╭━┳╮╭━┳━╮" + C.reset);
-  print(C.bold + color.cyan + "  ┃╭━╮┃┃┃┃╭╯┃╭┫┃┃┃┃┃┃╭╯" + C.reset);
-  print(C.bold + color.cyan + "  ┃╰━╯┃┃╰╯╯┃╰╯┃┃┃┃┃┃┃╰╮" + C.reset);
-  print(C.bold + color.cyan + "  ┃╭━━╯┃╭╮┃┃╭╮┃╰╯╰╯┃┃╭╯" + C.reset);
-  print(C.bold + color.cyan + "  ┃┃   ┃┃┃┃┃┃┃┃╰╮╭╮┃┃╰╮" + C.reset);
-  print(C.bold + color.cyan + "  ╰╯   ╰╯╰╯╰╯╰╯ ╰╯╰╯╰━╯" + C.reset + "  " + color.subtext + "v" + (version || "?") + C.reset);
-  print(color.subtext + "  AI Coding Agent" + C.reset);
   const currentModel_default = getActiveDefaultModel() || "";
   print("");
   if (providerConfig) {

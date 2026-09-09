@@ -4,11 +4,11 @@ import { getToolnetHome } from "../lib/toolnetHome";
 import { loadAppConfig } from "../lib/appConfig";
 import { isNoColor } from "../term";
 import { parseBannerFlags, resolveBannerDecision, isKnownBannerSetting } from "./config";
-import { playCompact, playFull, playText, type PlayContext } from "./animator";
+import { playMascotBanner, canRenderMascot, type MascotPlayContext } from "./mascot";
+import { playB2Banner, type BannerPlayContext } from "./b2Banner";
 import { selectVariant } from "./terminal";
 import type { BannerDecision, BannerSetting, DoneInfo } from "./types";
-import { printToolNetBanner } from "./toolnet-banner";
-import { getVersion } from "../lib/version";
+import { printMascotBanner } from "./mascot";
 
 const BANNER_MARKER = ".banner-shown";
 
@@ -60,13 +60,11 @@ export interface ShowBannerOptions {
 
 export async function showBannerIfEligible(opts: ShowBannerOptions = {}): Promise<DoneInfo> {
   const argv = opts.argv ?? process.argv.slice(2);
-  const cols = opts.cols ?? process.stdout.columns ?? 100;
-  const rows = opts.rows ?? process.stdout.rows ?? 30;
+  const cols = Math.max(1, opts.cols ?? process.stdout.columns ?? 100);
+  const rows = Math.max(1, opts.rows ?? process.stdout.rows ?? 30);
   const isTty = opts.isTty ?? process.stdout.isTTY === true;
   const homeDir = opts.homeDir ?? getToolnetHome();
-  const version = opts.version;
   const setting: unknown = opts.setting !== undefined ? opts.setting : currentSetting();
-  const headless = opts.headless ?? isHeadlessEnv();
   const noColor = isNoColor();
   const seenOnce = hasBannerSeen(homeDir);
   const purposeSetting: BannerSetting = isKnownBannerSetting(setting) ? setting : "once";
@@ -76,37 +74,48 @@ export async function showBannerIfEligible(opts: ShowBannerOptions = {}): Promis
     setting,
     seenOnce,
     isTty,
-    headless,
+    headless: opts.headless ?? isHeadlessEnv(),
     noColor,
   });
 
   if (!decision.run) return { shown: false, variant: "text" };
 
   const variant = selectVariant(cols, rows);
-  const ctx: PlayContext = {
-    cols: Math.max(20, cols),
-    rows: Math.max(5, rows),
-    write: opts.write ?? ((s: string) => process.stdout.write(s)),
+  const ctx: BannerPlayContext = {
+    cols,
+    rows,
+    write: opts.write ?? ((value: string) => process.stdout.write(value)),
   };
+  const mascotEnabled = process.env.TOOLNETCLI_MASCOT !== "0";
+  const useMascot = mascotEnabled && canRenderMascot(cols, rows);
 
   try {
-    if (variant === "full") {
-      if (opts.write) {
-        await playFull(ctx, version);
-      } else {
-        await printToolNetBanner("TOOLNET", version ?? getVersion());
-      }
-    } else if (variant === "compact") {
-      await playCompact(ctx, version);
+    if (variant === "text") {
+      // Only terminals too short to hold the compact four-row lockup use a
+      // single line. This is still static and never scrolls the terminal.
+      ctx.write(`ToolNet CLI${noColor ? "" : "\x1b[0m"}\n`);
     } else {
-      await playText(ctx, version);
+      const mascotContext: MascotPlayContext = ctx;
+      if (useMascot) {
+        await playMascotBanner(mascotContext, {
+          noColor,
+          animate: isTty && process.env.TOOLNETCLI_ANIMATIONS !== "0",
+          inPlace: isTty,
+        });
+      } else {
+        await playB2Banner(ctx, {
+          noColor,
+          animate: isTty && process.env.TOOLNETCLI_ANIMATIONS !== "0",
+          inPlace: isTty,
+        });
+      }
     }
   } finally {
-    if (decision.reason === "setting-once" && purposeSetting === "once") markBannerSeen(homeDir);
+    if (decision.reason === "setting-once" && purposeSetting === "once" && isTty) markBannerSeen(homeDir);
   }
 
   return { shown: true, variant };
 }
 
-export { printToolNetBanner };
+export { printMascotBanner as printToolNetBanner };
 export type { BannerSetting };

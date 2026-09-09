@@ -51,6 +51,8 @@ export interface ToolBatchOptions {
   runTool: (name: string, args: any, id: string) => Promise<BatchRunResult>;
   /** Abort the whole batch if the same signature repeats more than this many times (per turn). 0 = off. */
   maxRepeat?: number;
+  /** Abort signal — when aborted, remaining (not-yet-started) calls are skipped with a Cancelled result. */
+  signal?: AbortSignal;
   /** Emit each tool result message as it is produced (id, name, content). */
   onMessage?: (msg: { id: string; name: string; content: string }) => void;
 }
@@ -107,19 +109,29 @@ export async function executeToolBatch(
       });
     }
 
+    // Guard: cancelled mid-batch — skip unstarted calls immediately.
+    if (opts.signal?.aborted) {
+      return JSON.stringify({ stdout: "", stderr: "Cancelled", exitCode: 130 });
+    }
+
     const res = await opts.runTool(call.name, call.args, call.id);
-    contentBySig.set(sig, res.result);
     executedCount++;
     return res.result;
   };
 
+  /** Record a result (or the Cancelled marker) per signature — every original
+   * tool_call id must still receive a message for the model contract. */
+  const record = (call: ToolCall, value: string): void => {
+    contentBySig.set(signatureForToolCall(call.name, call.args), value);
+  };
+
   // Step 3: run parallel batches concurrently.
   for (const batch of parallel) {
-    await Promise.all(batch.map((c) => runOne(c)));
+    await Promise.all(batch.map(async (c) => record(c, await runOne(c))));
   }
   // Step 4: run sequential calls one by one.
   for (const call of sequential) {
-    await runOne(call);
+    record(call, await runOne(call));
   }
 
   const messages = order.map((o) => ({

@@ -147,6 +147,10 @@ export class DynamicScheduler {
   private nodesList: TaskNode[];
   private budget: BudgetManager;
   private budgetExhaustedEmitted = false;
+  /** Prevents cancel() from resolving start() more than once. */
+  private startResolved = false;
+  /** Aborted on cancel() — running workers observe this and stop mid-execution. */
+  private workerAbort = new AbortController();
 
   constructor(graph: TaskGraph, options: SchedulerOptions = {}) {
     this.graph = graph;
@@ -288,8 +292,15 @@ export class DynamicScheduler {
 
     return new Promise((resolve) => {
       const checkCompletion = () => {
-        // Guard: terminal states are final — never re-resolve or resurrect.
+        // Terminal states are final — resolve the start() promise so callers
+        // awaiting it observe CANCELLED instead of hanging forever.
         if (TERMINAL_SCHEDULER_STATES.has(this.state.status)) {
+          if (this.state.status === "CANCELLED" && !this.startResolved) {
+            this.startResolved = true;
+            this.state.endTime = Date.now();
+            unsubscribeEvent();
+            resolve(this.getState());
+          }
           return;
         }
 
@@ -355,6 +366,11 @@ export class DynamicScheduler {
     this.state.status = "CANCELLED" as TaskStatus as SchedulerStatus;
     this.emitEvent("scheduler:failed", undefined, { reason: "CANCELLED" });
     activeSchedulers.delete(this);
+    // Wake any caller awaiting start() — cancel() is itself terminal.
+    this.emitEvent("task:skipped", "__scheduler_cancelled__", { reason: "CANCELLED" });
+    // Abort every running worker's subagent/provider/tool execution tree —
+    // cancelling the scheduler must also STOP the work, not just mark it.
+    try { this.workerAbort.abort(); } catch {}
     // Wake the start() promise so callers awaiting start() observe CANCELLED
     // instead of hanging forever on running workers.
     const stillRunning = [...(this.state.runningTaskIds || [])];
@@ -668,6 +684,9 @@ export class DynamicScheduler {
           cwd: this.options.cwd,
           agentDepth: this.options.agentDepth,
           source: "teamwork", // typed into SubagentOptions below
+          // Cancel propagation: scheduler.cancel() aborts the subagent's
+          // provider call and any running tool processes.
+          signal: this.workerAbort.signal,
           onEvent: (event, data) => {
             if (event === "subagent:tool") {
               this.emitEvent("task:progress", node.id, {

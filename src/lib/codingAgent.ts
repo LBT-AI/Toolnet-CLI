@@ -484,6 +484,8 @@ export interface ShellExecContext {
   sandboxMode?: "workspace" | "ask" | "full-access";
   env?: Record<string, string>;
   outputCapBytes?: number;
+  /** Abort signal — when aborted, the child process tree is killed (SIGTERM → SIGKILL). */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_SHELL_OUTPUT_CAP = 512 * 1024; // hard byte cap per stream
@@ -557,6 +559,49 @@ function killProcessTree(childPid: number): void {
   } catch {}
 }
 
+/**
+ * Graceful two-stage kill for aborts: SIGTERM to the process group, then
+ * SIGKILL after a short grace period if the child is still alive.
+ * Idempotent — safe to call multiple times.
+ */
+function killProcessTreeGraceful(childPid: number, graceMs = 1500): void {
+  if (process.platform === "win32") {
+    killProcessTree(childPid);
+    return;
+  }
+  let terminated = false;
+  try {
+    process.kill(-childPid, "SIGTERM");
+    terminated = true;
+  } catch {
+    try { process.kill(childPid, "SIGTERM"); terminated = true; } catch {}
+  }
+  if (!terminated) return;
+  setTimeout(() => {
+    try {
+      process.kill(childPid, 0); // liveness probe
+      killProcessTree(childPid); // still alive → hard kill
+    } catch {
+      // already exited — nothing to do
+    }
+  }, graceMs);
+}
+
+/**
+ * Attach an AbortSignal to a spawned child: on abort, kill the whole
+ * process group (SIGTERM first, then SIGKILL after the grace period).
+ * If the signal is already aborted, kills immediately.
+ */
+function attachAbortToChild(child: { pid?: number }, signal?: AbortSignal): void {
+  if (!signal || !child.pid) return;
+  if (signal.aborted) {
+    killProcessTreeGraceful(child.pid);
+    return;
+  }
+  const onAbort = () => killProcessTreeGraceful(child.pid!);
+  signal.addEventListener("abort", onAbort, { once: true });
+}
+
 export async function toolBash(command: string, timeoutMs = 30000, execCtx?: ShellExecContext): Promise<ToolResult> {
   const { spawn } = require("node:child_process");
   const { buildSandboxedCommandLine } = require("./security/sandboxExecutor");
@@ -593,6 +638,16 @@ export async function toolBash(command: string, timeoutMs = 30000, execCtx?: She
       error: `Permission Denied: ${vetoAnalysis.reason || "Catastrophic command blocked permanently."} (executor veto floor — not overridable)`,
       data: `Permission Denied: ${vetoAnalysis.reason || "Catastrophic command blocked permanently."}`,
       exitCode: 1,
+    };
+  }
+
+  // Guard 0: pre-aborted request — never spawn.
+  if (execCtx?.signal?.aborted) {
+    return {
+      success: false,
+      error: "Cancelled",
+      data: "Cancelled",
+      exitCode: 130,
     };
   }
 
@@ -666,12 +721,21 @@ export async function toolBash(command: string, timeoutMs = 30000, execCtx?: She
     let stdoutCapped = false;
     let stderrCapped = false;
     let timedOut = false;
+    let aborted = false;
     let settled = false;
 
     const timer = setTimeout(() => {
       timedOut = true;
       if (child.pid) killProcessTree(child.pid);
     }, timeoutMs);
+
+    // Abort wiring: Ctrl+C / request cancel kills the whole child tree.
+    attachAbortToChild(child, ctx.signal);
+    if (ctx.signal) {
+      const markAborted = () => { aborted = true; };
+      if (ctx.signal.aborted) markAborted();
+      else ctx.signal.addEventListener("abort", markAborted, { once: true });
+    }
 
     const cleanup = () => {
       clearTimeout(timer);
@@ -727,16 +791,19 @@ export async function toolBash(command: string, timeoutMs = 30000, execCtx?: She
       let finalStderr = stderrBuf;
       if (stderrCapped) finalStderr += capMarker;
 
-      const exitCode = timedOut ? 124 : (code ?? 0);
+      const exitCode = aborted ? 130 : (timedOut ? 124 : (code ?? 0));
       const { data: stdoutData, truncated: stdoutTrunc } = truncateOutput(finalStdout);
       const { data: stderrData, truncated: stderrTrunc } = truncateOutput(finalStderr);
 
-      if (exitCode !== 0 || timedOut) {
+      if (exitCode !== 0 || timedOut || aborted) {
         const combined = [stderrData, stdoutData].filter(Boolean).join("\n").trim();
+        const failMsg = aborted
+          ? "Cancelled"
+          : combined || (timedOut ? "Command timed out" : `Exited with code ${exitCode}`);
         resolve({
           success: false,
-          error: combined || (timedOut ? "Command timed out" : `Exited with code ${exitCode}`),
-          data: combined || (timedOut ? "Command timed out" : `Exited with code ${exitCode}`),
+          error: failMsg,
+          data: failMsg,
           stdout: stdoutData,
           stderr: stderrData,
           exitCode,
@@ -864,10 +931,13 @@ export function toolFileExists(filePath: string): ToolResult {
   }
 }
 
-export async function toolWebFetch(url: string): Promise<ToolResult & { _html?: string }> {
+export async function toolWebFetch(url: string, signal?: AbortSignal): Promise<ToolResult & { _html?: string }> {
   try {
     if (!url) {
       return { success: false, error: `Invalid URL: empty` };
+    }
+    if (signal?.aborted) {
+      return { success: false, error: "Cancelled" };
     }
     const { safeFetch, SafeFetchError } = await import("./security/safeFetch");
     const startTime = Date.now();
@@ -877,6 +947,7 @@ export async function toolWebFetch(url: string): Promise<ToolResult & { _html?: 
         timeoutMs: 20000,
         maxHops: 3,
         allowLocalhost: false,
+        signal,
         headers: {
           "User-Agent": "Mozilla/5.0 (compatible; ToolNet-CLI/1.0; +https://toolnet.ai)",
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",

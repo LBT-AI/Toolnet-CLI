@@ -18,11 +18,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setNoColor } from "../../term";
+import { visibleWidth } from "../../tui/layout";
 import { DEFAULT_APP_CONFIG, validateConfig, loadAppConfig, resetAppConfigCache } from "../../lib/appConfig";
 import { resolveBannerDecision, parseBannerFlags } from "../../banner/config";
 import { selectVariant } from "../../banner/terminal";
 import { hasBannerSeen, markBannerSeen, bannerSeenPath, showBannerIfEligible } from "../../banner/banner";
-import { playFull, playCompact, playText } from "../../banner/animator";
+import { playFull, playCompact } from "../../banner/animator";
+import { playMascotBanner, renderMascotBanner, MASCOT_TIMELINE, mascotLineWidths } from "../../banner/mascot";
 import { buildSteps, FRAMES, SPRITE_ROWS, OUTPUT_ROWS, BASE, PALETTE } from "../../banner/frames";
 import { renderStep, buildPalette } from "../../banner/renderer";
 import type { PlayContext } from "../../banner/animator";
@@ -109,10 +111,10 @@ describe("P8 — decision matrix", () => {
     expect(d.reason).toBe("no-splash");
   });
 
-  it("no-color / headless / non-TTY always skip", () => {
-    expect(resolveBannerDecision({ ...base, noColor: true }).run).toBe(false);
+  it("NO_COLOR and non-TTY remain eligible for a static, geometry-preserving banner", () => {
+    expect(resolveBannerDecision({ ...base, noColor: true }).run).toBe(true);
+    expect(resolveBannerDecision({ ...base, isTty: false }).run).toBe(true);
     expect(resolveBannerDecision({ ...base, headless: true }).run).toBe(false);
-    expect(resolveBannerDecision({ ...base, isTty: false }).run).toBe(false);
   });
 
   it("'once' + seen → skip, 'once' + fresh → run", () => {
@@ -136,13 +138,13 @@ describe("P8 — decision matrix", () => {
 // ---------------------------------------------------------------------------
 
 describe("P8 — responsive variants", () => {
-  it("full on large terminals", () => {
+  it("full on 80+ column terminals", () => {
     expect(selectVariant(120, 40)).toBe("full");
-    expect(selectVariant(84, 17)).toBe("full");
+    expect(selectVariant(80, 10)).toBe("full");
   });
-  it("compact on medium ones", () => {
-    expect(selectVariant(80, 10)).toBe("compact");
-    expect(selectVariant(44, 3)).toBe("compact");
+  it("compact on 40–79 column terminals", () => {
+    expect(selectVariant(60, 10)).toBe("compact");
+    expect(selectVariant(40, 4)).toBe("compact");
   });
   it("static text on tiny ones", () => {
     expect(selectVariant(30, 40)).toBe("text");
@@ -219,11 +221,34 @@ describe("P8 — animators restore the cursor", () => {
     expect(text.endsWith("\x1b[?25h\x1b[2K")).toBe(true);
   });
 
-  it("playText emits a single labeled line", async () => {
-    const { ctx, out } = capture();
-    await playText(ctx, "9.9.9-test");
-    expect(out()).toContain("ToolNet CLI v9.9.9-test");
+  it("mascot keeps its responsive geometry and survives NO_COLOR", () => {
+    for (const cols of [40, 50, 60, 80, 120]) {
+      const plain = renderMascotBanner(cols, MASCOT_TIMELINE.final, true);
+      const colored = renderMascotBanner(cols, MASCOT_TIMELINE.final, false);
+      const spriteRows = Math.ceil((32 * ({ 40: 20, 50: 22, 60: 24, 80: 28, 120: 28 } as Record<number, number>)[cols]) / 28);
+      expect(plain.length).toBe(Math.ceil(spriteRows / 2) + 2);
+      expect(plain.every((line) => visibleWidth(line) <= cols)).toBe(true);
+      expect(mascotLineWidths(cols)).toEqual(plain.map(visibleWidth));
+      expect(colored.map(visibleWidth)).toEqual(plain.map(visibleWidth));
+      expect(plain.join("\n")).toContain("TOOLNET");
+    }
   });
+
+  it("mascot animation is abortable and restores the cursor", async () => {
+    let output = "";
+    const controller = new AbortController();
+    const promise = playMascotBanner({ cols: 80, rows: 24, write: (value) => { output += value; } }, {
+      signal: controller.signal,
+      frameMs: 10,
+      noColor: true,
+      inPlace: true,
+    });
+    setTimeout(() => controller.abort(), 25);
+    await expect(promise).rejects.toThrow("Mascot animation aborted");
+    expect(output).toContain("\x1b[?25l");
+    expect(output).toContain("\x1b[?25h");
+  });
+
 });
 
 // ---------------------------------------------------------------------------
@@ -245,6 +270,10 @@ describe("P8 — showBannerIfEligible integration", () => {
     }) as any;
 
   let captured = "";
+
+  beforeEach(() => {
+    captured = "";
+  });
 
   it("fresh 'once' run: shows full banner and writes the marker", async () => {
     const res = await showBannerIfEligible(opts());
@@ -272,17 +301,48 @@ describe("P8 — showBannerIfEligible integration", () => {
     expect(hasBannerSeen(dir)).toBe(false);
   });
 
-  it("headless and non-TTY suppress without writing the marker", async () => {
+  it("headless suppresses, while non-TTY renders the final static banner", async () => {
     expect((await showBannerIfEligible(opts({ headless: true }))).shown).toBe(false);
-    expect((await showBannerIfEligible(opts({ isTty: false }))).shown).toBe(false);
+    const result = await showBannerIfEligible(opts({ isTty: false, cols: 80, rows: 20 }));
+    expect(result.shown).toBe(true);
+    expect(captured).toContain("TOOLNET");
+    expect(captured).not.toContain("\x1b[?25l");
     expect(hasBannerSeen(dir)).toBe(false);
   });
 
-  it("NO_COLOR suppresses without writing the marker", async () => {
+  it("NO_COLOR renders the same final geometry without color escapes", async () => {
     setNoColor(true);
-    expect((await showBannerIfEligible(opts())).shown).toBe(false);
+    const result = await showBannerIfEligible(opts({ cols: 80, rows: 20 }));
+    expect(result.shown).toBe(true);
+    expect(captured).toContain("TOOLNET");
+    expect(captured).not.toContain("\x1b[38;2;");
     setNoColor(false);
-    expect(hasBannerSeen(dir)).toBe(false);
+    expect(hasBannerSeen(dir)).toBe(true);
+  });
+
+  it("uses the mascot by default and B2 only when mascot is disabled", async () => {
+    const previousMascot = process.env.TOOLNETCLI_MASCOT;
+    try {
+      delete process.env.TOOLNETCLI_MASCOT;
+      await showBannerIfEligible(opts({ isTty: false, cols: 80, rows: 20 }));
+      expect(captured).toContain("TOOLNET");
+      expect(captured).not.toContain("◇");
+
+      captured = "";
+      process.env.TOOLNETCLI_MASCOT = "0";
+      await showBannerIfEligible(opts({ isTty: false, cols: 80, rows: 20 }));
+      expect(captured).toContain("◇");
+    } finally {
+      if (previousMascot === undefined) delete process.env.TOOLNETCLI_MASCOT;
+      else process.env.TOOLNETCLI_MASCOT = previousMascot;
+    }
+  });
+
+  it("medium terminals use B2 fallback when the mascot cannot fit vertically", async () => {
+    const res = await showBannerIfEligible(opts({ isTty: false, cols: 60, rows: 10, argv: ["--banner"] }));
+    expect(res.shown).toBe(true);
+    expect(captured).toContain("◇");
+    expect(captured).not.toContain("AI CODING CLI");
   });
 
   it("'never' and invalid config values never show or mark", async () => {
@@ -291,9 +351,9 @@ describe("P8 — showBannerIfEligible integration", () => {
     expect(hasBannerSeen(dir)).toBe(true);
   });
 
-  it("medium terminal degrades to compact but still marks once", async () => {
+  it("medium terminal degrades to compact B2", async () => {
     markBannerSeen(dir);
-    const res = await showBannerIfEligible(opts({ cols: 80, rows: 20, argv: ["--banner"] }));
+    const res = await showBannerIfEligible(opts({ cols: 60, rows: 10, argv: ["--banner"] }));
     expect(res.shown).toBe(true);
     expect(res.variant).toBe("compact");
   });
