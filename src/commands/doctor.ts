@@ -5,7 +5,12 @@ import { getCwdInfo } from "../lib/codingAgent";
 import { getCliKey } from "../lib/keys";
 import { bypassEngine } from "../lib/bypass";
 import { execSync } from "node:child_process";
+import { createRequire } from "node:module";
 import fs from "node:fs";
+
+// ESM has no global `require` on Node — resolve packages relative to this
+// module so playwright detection works regardless of runtime or bundler.
+const require = createRequire(import.meta.url);
 
 export const doctorCommand: Command = {
   name: "doctor",

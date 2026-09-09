@@ -229,6 +229,11 @@ bun run build
 
 CI additionally smoke-tests the CLI and Teamwork persistence on Node 22 and the minimum supported Node 20 runtime.
 
+> **Note — Node 20–21 persistence:** native SQLite (`node:sqlite`) requires Node 22.5+.
+> On Node 20–21, Teamwork checkpoints and context-cache stores automatically fall back
+> to the built-in JSON persistence store (`<db>.json` next to the requested path). The
+> same data model is preserved and nothing crashes — only raw SQL throughput differs.
+
 ---
 
 ## 📄 License

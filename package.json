@@ -29,9 +29,6 @@
     "prepack": "bun run build",
     "start": "bun dist/index.js",
     "start:node": "node dist/node/index.js",
-    "dev:boot": "tsx toolnet-cli.ts",
-    "build:boot": "tsc -p tsconfig.toolnet-cli.json",
-    "start:boot": "node dist/toolnet-cli.js",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "check": "bun run typecheck && bun test && bun run build",
@@ -49,24 +46,13 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "ansi-escapes": "^7.3.0",
     "chalk": "^6.0.0",
-    "log-update": "^8.0.0",
     "string-width": "^8.2.2",
     "strip-ansi": "7.1.2"
   },
   "devDependencies": {
-    "@opentui/core": "0.4.5",
-    "@opentui/solid": "0.4.5",
     "@types/bun": "1.4.0",
-    "solid-js": "1.9.12",
     "tsx": "^4.23.13",
     "typescript": "5.8.2"
-  },
-  "overrides": {
-    "@babel/core": "7.29.7",
-    "babel-plugin-module-resolver": {
-      "glob": "13.0.6"
-    }
   }
 }
