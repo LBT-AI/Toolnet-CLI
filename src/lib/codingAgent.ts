@@ -20,6 +20,30 @@ export let workspaceRoot = process.cwd();
 export let workspaceRoots: string[] = [process.cwd()];
 export let bypassPolicy = false;
 
+/**
+ * Pristine cwd captured when this module was first loaded in the process
+ * (before any test or /cd call can mutate it). Used as a stable anchor for
+ * test isolation: bun test reuses worker processes across test files, so a
+ * leaked `process.chdir()` or stale workspace global from one file would
+ * otherwise poison every later file in the same worker.
+ */
+const INITIAL_CWD = process.cwd();
+
+/**
+ * Test-isolation helper: restore all workspace globals and the process cwd
+ * to the pristine state captured at first module load. Safe to call in
+ * afterEach of any test that mutated workspace state (setWorkspaceRoot,
+ * setWorkspaceRoots, setCwd, initWorkspace, or toolBash with a cd).
+ */
+export function resetWorkspaceState(): void {
+  currentCwd = INITIAL_CWD;
+  workspaceRoot = INITIAL_CWD;
+  workspaceRoots = [INITIAL_CWD];
+  try {
+    process.chdir(INITIAL_CWD);
+  } catch {}
+}
+
 export function getWorkspaceRoots(): string[] {
   return [...workspaceRoots];
 }

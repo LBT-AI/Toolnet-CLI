@@ -191,11 +191,17 @@ describe("Session UX & Interactive Manager Regression Suite", () => {
     expect(tuiState.messages.length).toBe(1);
     expect(tuiState.messages[0].content).toBe("Build login");
 
-    // Open picker again and delete index 0 (which is s1 after resume and save)
+    // Open picker again and delete s1 deterministically: all session saves in
+    // this test can land within the same millisecond, so newest-first updatedAt
+    // ordering is ambiguous and "index 0" may be s2. Target s1 by index
+    // explicitly instead of assuming it sorts to the top.
     tuiState.openSessionPicker();
     tuiState.sessionSearchQuery = "";
     tuiState.filterSessions();
     expect(tuiState.filteredSessions.length).toBe(2);
+    const s1Idx = tuiState.filteredSessions.findIndex((s) => s.sessionId === s1);
+    expect(s1Idx).toBeGreaterThanOrEqual(0);
+    tuiState.sessionPickerIdx = s1Idx;
 
     // Press Delete ('d')
     handleKey("d", cb);

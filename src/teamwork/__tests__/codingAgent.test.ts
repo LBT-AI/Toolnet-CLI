@@ -7,6 +7,7 @@ import {
   toolWrite,
   getCwdInfo,
   setWorkspaceRoot,
+  resetWorkspaceState,
 } from "../../lib/codingAgent";
 
 describe("codingAgent Cross-Workspace Filesystem & Workspace Tracking", () => {
@@ -26,10 +27,7 @@ describe("codingAgent Cross-Workspace Filesystem & Workspace Tracking", () => {
   });
 
   afterEach(() => {
-    try {
-      process.chdir(originalCwd);
-    } catch {}
-    setWorkspaceRoot(originalCwd);
+    resetWorkspaceState();
   });
 
   afterAll(() => {

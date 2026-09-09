@@ -10,7 +10,7 @@ import { wrapErrorBoundary, restoreTerminal } from "../../lib/terminalLifecycle"
 import { MultilineInputBuffer } from "../../tui/input/multilineInput";
 import { handleKey, getInputState, setInputState, resetInputState } from "../../tui/input/inputHandler";
 import { tuiState } from "../../tui/state";
-import { initWorkspace, setWorkspaceRoots, setCwd, toolEdit, toolReplaceAll, toolWrite } from "../../lib/codingAgent";
+import { initWorkspace, resetWorkspaceState, toolEdit, toolReplaceAll, toolWrite } from "../../lib/codingAgent";
 import { helpCommand } from "../../commands/help";
 import { stripAnsi } from "../../tui/layout";
 
@@ -21,7 +21,6 @@ function tmpDir(): string {
 }
 
 describe("CLI UX Enhancements Regression Suite", () => {
-  const originalCwd = process.cwd();
   let testCwd: string;
 
   beforeEach(() => {
@@ -37,11 +36,7 @@ describe("CLI UX Enhancements Regression Suite", () => {
   });
 
   afterEach(() => {
-    try {
-      process.chdir(originalCwd);
-    } catch {}
-    setWorkspaceRoots([originalCwd]);
-    setCwd(originalCwd);
+    resetWorkspaceState();
     try {
       fs.rmSync(testCwd, { recursive: true, force: true });
     } catch {}

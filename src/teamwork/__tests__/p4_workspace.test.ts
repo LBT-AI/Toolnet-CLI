@@ -2,7 +2,7 @@ import { test, it, expect, describe, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { initWorkspace, getWorkspaceRoots, setWorkspaceRoots } from "../../lib/codingAgent";
+import { initWorkspace, getWorkspaceRoots, setWorkspaceRoots, resetWorkspaceState } from "../../lib/codingAgent";
 import { isPathInsideWorkspace, setSandboxMode } from "../../lib/permissions";
 import { buildMultiWorkspaceIndex, searchSymbols, getCrossWorkspaceCodeMap } from "../../lib/workspaceIndex";
 
@@ -56,7 +56,7 @@ describe("P4.16 & P4.17 — Multi-Project Workspace & Cross-Workspace Map", () =
   });
 
   afterEach(() => {
-    setWorkspaceRoots([process.cwd()]);
+    resetWorkspaceState();
     cleanDir(baseDir);
   });
 

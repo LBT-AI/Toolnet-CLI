@@ -13,7 +13,7 @@ import { buildMultiWorkspaceIndex, searchSymbols } from "../../lib/workspaceInde
 import { PluginManager } from "../../lib/plugins/pluginManager";
 import { validateAndLoadImage } from "../../lib/vision";
 
-import { setWorkspaceRoots } from "../../lib/codingAgent";
+import { setWorkspaceRoots, resetWorkspaceState } from "../../lib/codingAgent";
 
 function tmpDir(): string {
   const d = path.join(os.tmpdir(), "toolnet-scenario-test-" + Math.random().toString(36).slice(2));
@@ -35,7 +35,7 @@ describe("P4.26 & P4.27 — Integration Scenarios & Subsystem Regressions", () =
   });
 
   afterEach(() => {
-    setWorkspaceRoots([process.cwd()]);
+    resetWorkspaceState();
     cleanDir(dir);
   });
 

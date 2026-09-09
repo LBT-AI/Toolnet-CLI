@@ -86,11 +86,22 @@ import path from "node:path";
 
 export function loadCustomPersonas(): Record<string, string> {
   try {
-    const cwd = currentCwd || process.cwd();
-    const personasFile = path.join(cwd, ".toolnet", "personas.json");
-    if (fs.existsSync(personasFile)) {
-      const raw = fs.readFileSync(personasFile, "utf8");
-      return JSON.parse(raw);
+    // personas.json is project-level config living under the workspace root.
+    // Never trust a single cwd source: `currentCwd` is a module global that
+    // runtime /cd calls (and tests sharing a bun worker) can move, while the
+    // process cwd is the stable anchor. Search all candidates, first hit wins.
+    const candidates = [
+      workspaceRoot,
+      currentCwd,
+      process.cwd(),
+    ].filter((p): p is string => typeof p === "string" && p.length > 0);
+
+    for (const cwd of [...new Set(candidates)]) {
+      const personasFile = path.join(cwd, ".toolnet", "personas.json");
+      if (fs.existsSync(personasFile)) {
+        const raw = fs.readFileSync(personasFile, "utf8");
+        return JSON.parse(raw);
+      }
     }
   } catch {}
   return {};

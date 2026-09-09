@@ -3,6 +3,7 @@
  * Target File: src/lib/harness/agentHarness.ts
  */
 
+import fs from "node:fs";
 import { getActiveProvider, getActiveBaseUrl, getActiveDefaultModel, OpenAICompatibleProvider, type Provider } from "../../providers";
 import { agentTools, getMergedAgentTools, executeTool } from "../agentTools";
 import { workspaceRoot, currentCwd, initWorkspace } from "../codingAgent";
@@ -41,9 +42,19 @@ export class AgentHarness {
   private activeMode: ExecutionMode = "HEADLESS";
 
   constructor(config: HarnessConfig = {}) {
+    // Self-heal stale module-global roots. bun test reuses worker processes
+    // across test files (and a /cd at runtime can move cwd), so the module
+    // globals may point at a directory that no longer exists. A deleted root
+    // must never make later harnesses fail security evaluation — fall back to
+    // the stable process cwd, mirroring resolveShellExecCwd.
+    const stableRoot =
+      workspaceRoot && fs.existsSync(workspaceRoot) ? workspaceRoot : process.cwd();
+    const stableCwd =
+      currentCwd && fs.existsSync(currentCwd) ? currentCwd : stableRoot;
+
     this.config = {
-      workspaceRoot: config.workspaceRoot || workspaceRoot || process.cwd(),
-      currentCwd: config.currentCwd || currentCwd || process.cwd(),
+      workspaceRoot: config.workspaceRoot || stableRoot,
+      currentCwd: config.currentCwd || stableCwd,
       sessionId: config.sessionId || `session-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       model: config.model || getActiveDefaultModel() || "default",
       sandboxMode: config.sandboxMode || getSandboxMode(),

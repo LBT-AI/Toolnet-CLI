@@ -5,6 +5,7 @@ import {
   initWorkspace,
   setWorkspaceRoot,
   setWorkspaceRoots,
+  resetWorkspaceState,
   getCwdInfo,
   toolRead,
   toolBash,
@@ -34,8 +35,7 @@ describe("Workspace Management & Path Resolution", () => {
   });
 
   afterEach(() => {
-    setWorkspaceRoot(originalCwd);
-    setWorkspaceRoots([originalCwd]);
+    resetWorkspaceState();
     setSandboxMode("ask");
     if (fs.existsSync(testRoot)) {
       fs.rmSync(testRoot, { recursive: true, force: true });
