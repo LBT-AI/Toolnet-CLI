@@ -3,10 +3,13 @@ import * as path from "node:path";
 import { tuiState } from "../state";
 import { getCwdInfo } from "../../lib/codingAgent";
 import { getCliKey, loadCliKeys } from "../../lib/keys";
+import { getVersion } from "../../lib/version";
 import { contextEngine } from "../../lib/context";
 import { parseAndProcessInput } from "../../lib/attachments";
 import { getMergedAgentTools } from "../../lib/agentTools";
 import { getAgentSystemPrompt } from "../../lib/agentRuntime";
+import { extractLanguageRequest, setResponseLanguage } from "../../lib/language";
+import { applyReasoningOptions, supportsReasoning } from "../../lib/reasoning";
 import { getSandboxMode } from "../../lib/permissions";
 import { ToolGateway } from "../../lib/security/toolGateway";
 import { securityEngine } from "../../lib/security/securityEngine";
@@ -77,6 +80,15 @@ export async function sendMessage(text: string): Promise<void> {
 
   tuiState.messages.push({ role: "user", content: text });
   tuiState.messages.push({ role: "assistant", content: "" });
+
+  // Explicit language request ("trả lời bằng tiếng Việt", "用中文", ...)
+  // locks the response language for the session; otherwise it stays "auto"
+  // and the system prompt tells the model to mirror the latest user message.
+  const langRequest = extractLanguageRequest(text);
+  if (langRequest) {
+    tuiState.responseLanguage = langRequest;
+    setResponseLanguage(langRequest);
+  }
   tuiState.saveCurrentSession();
   let assistantIdx = tuiState.messages.length - 1;
 
@@ -85,6 +97,15 @@ export async function sendMessage(text: string): Promise<void> {
   let isReceivingStream = false;
 
   tuiState.abortController = new AbortController();
+
+  // Reset reasoning state for the new turn (capability-aware: phase only
+  // becomes "thinking" when the model actually reasons or streams reasoning).
+  tuiState.reasoningText = "";
+  tuiState.reasoningCollapsed = false;
+  tuiState.reasoningTokens = 0;
+  tuiState.reasoningElapsed = "";
+  tuiState.agentPhase = supportsReasoning(tuiState.currentModel) ? "thinking" : "idle";
+  tuiState.saveCurrentSession();
 
   pluginManager.triggerAgentStart({ sessionId: tuiState.currentSessionId, prompt: text });
 
@@ -173,23 +194,43 @@ export async function sendMessage(text: string): Promise<void> {
       const toolCallsMap: Record<number, any> = {};
 
       if (typeof provider.stream === "function") {
-        const streamIter = provider.stream({
-          model: tuiState.currentModel || getActiveDefaultModel() || "default",
-          messages: apiMessages,
-          tools: toolsForRequest,
-          tool_choice: toolChoiceForRequest,
-          headers: extraHeaders,
-          signal: tuiState.abortController?.signal,
-        });
+        const streamIter = provider.stream(
+          applyReasoningOptions(
+            {
+              model: tuiState.currentModel || getActiveDefaultModel() || "default",
+              messages: apiMessages,
+              tools: toolsForRequest,
+              tool_choice: toolChoiceForRequest,
+              headers: extraHeaders,
+              signal: tuiState.abortController?.signal,
+            },
+            tuiState.currentModel || getActiveDefaultModel() || "default",
+            tuiState.reasoningSettings
+          )
+        );
 
         for await (const chunk of streamIter) {
           const delta = chunk.choices?.[0]?.delta;
+          // Reasoning delta — only ever from what the API actually streams.
+          const reasoningDelta =
+            (delta as any)?.reasoning_content ?? (delta as any)?.reasoning ?? (delta as any)?.thinking;
+          if (reasoningDelta) {
+            if (tuiState.agentPhase !== "thinking") tuiState.agentPhase = "thinking";
+            tuiState.reasoningText += reasoningDelta;
+            if (!tuiState.reasoningElapsed) tuiState.reasoningElapsed = tuiState.elapsedDisplay || "";
+            statusManager.update("Thinking");
+            tuiState.requestRender();
+          }
           if (delta?.content) {
+            if (tuiState.agentPhase === "thinking") tuiState.agentPhase = "streaming";
             fullText += delta.content;
             tuiState.messages[assistantIdx] = { role: "assistant", content: fullText + "▊" };
             tuiState.scrollOffset = 0;
           }
           if (Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0) {
+            if (tuiState.agentPhase === "thinking" || tuiState.agentPhase === "streaming") {
+              tuiState.agentPhase = "working";
+            }
             for (const _tc of delta.tool_calls) {
               const tc = _tc as unknown as { index?: number; id?: string; function?: { name?: string; arguments?: string } };
               const idx = (tc.index ?? 0) as number;
@@ -203,6 +244,11 @@ export async function sendMessage(text: string): Promise<void> {
           }
           if (chunk.usage) {
             const u = chunk.usage;
+            const reasoningTokens =
+              (u as any).reasoning_tokens ||
+              u.completion_tokens_details?.reasoning_tokens ||
+              0;
+            if (reasoningTokens) tuiState.reasoningTokens = reasoningTokens;
             tuiState.lastTokens = `${u.prompt_tokens || 0} \u2192 ${u.completion_tokens || 0} (${u.total_tokens || 0})`;
             const tracker = getGlobalTracker();
             tracker.recordUsage({
@@ -356,9 +402,19 @@ export async function sendMessage(text: string): Promise<void> {
     }
 
     tuiState.scrollOffset = 0;
-    statusManager.done();
+    tuiState.agentPhase = "done";
+    const reasoningDoneMsg =
+      tuiState.reasoningTokens > 0
+        ? `Done · ${tuiState.reasoningTokens.toLocaleString()} reasoning tokens`
+        : undefined;
+    if (reasoningDoneMsg && tuiState.reasoningText) {
+      statusManager.done(`✔ ${reasoningDoneMsg}`);
+    } else {
+      statusManager.done();
+    }
   } catch (err: any) {
     if (err?.name === "AbortError") {
+      tuiState.agentPhase = "cancelled";
       statusManager.cancel();
       tuiState.messages.push({ role: "assistant", content: "(cancelled)" });
     } else if (err?.message?.includes("401") || err?.status === 401) {
@@ -388,6 +444,7 @@ export async function sendMessage(text: string): Promise<void> {
         }
       }
     } else {
+      tuiState.agentPhase = "error";
       statusManager.failed(err?.message || String(err));
       tuiState.messages.push({ role: "assistant", content: "✖ Error: " + (err?.message || String(err)) });
       tuiState.showToast("⚠️ " + (err?.message || String(err)), 3500);
@@ -507,6 +564,7 @@ export function buildTuiCommandContext(): any {
     },
     setStatusMsg: (s: string) => tuiState.setStatus(s),
     exit: () => {
+      process.stdout.write(`ToolNet CLI v${getVersion()} · /help for commands\r\n`);
       process.stdout.write("Goodbye!\r\n");
       process.exit(0);
     },
@@ -573,6 +631,29 @@ export function buildTuiCommandContext(): any {
     setAgentMode: (mode: "Build" | "Plan") => {
       tuiState.agentMode = mode;
       tuiState.setStatus("Mode: " + mode);
+    },
+    setReasoningEffort: (effort: "auto" | "low" | "medium" | "high" | "off") => {
+      const { supportsReasoningEffort } = require("../../lib/reasoning");
+      // Guard: models without configurable reasoning keep settings untouched.
+      if (!supportsReasoningEffort(tuiState.currentModel) && effort !== "off") {
+        tuiState.setStatus("Reasoning not configurable for this model");
+        return false;
+      }
+      if (effort === "off") {
+        tuiState.reasoningSettings = { enabled: false, effort: "auto" };
+      } else if (effort === "auto") {
+        tuiState.reasoningSettings = { enabled: true, effort: "auto" };
+      } else {
+        tuiState.reasoningSettings = { enabled: true, effort };
+      }
+      tuiState.saveCurrentSession();
+      tuiState.setStatus(`Reasoning: ${effort}`);
+      return true;
+    },
+    getReasoningStatus: () => {
+      const s = tuiState.reasoningSettings;
+      if (!s.enabled) return "off";
+      return s.effort === "auto" ? "auto (model default)" : s.effort;
     },
   };
 }

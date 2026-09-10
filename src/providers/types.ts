@@ -5,12 +5,27 @@
  * No direct ToolNet API gateway imports in core runtime.
  */
 
+/** Model reasoning/thinking capabilities — source of truth is the provider
+ *  API metadata when available; adapters may declare defaults. Never guess by
+ *  substring-matching the model id. */
+export interface ModelCapabilities {
+  /** Model performs reasoning before answering. */
+  reasoning: boolean;
+  /** API streams reasoning content deltas (thinking text) during generation. */
+  reasoningStream?: boolean;
+  /** Model accepts a configurable reasoning effort (low/medium/high). */
+  reasoningEffort?: boolean;
+  /** API reports reasoning token usage. */
+  reasoningTokens?: boolean;
+}
+
 export interface ModelInfo {
   id: string;
   name?: string;
   object: string;
   created: number;
   owned_by: string;
+  capabilities?: ModelCapabilities;
 }
 
 export interface ChatMessage {
@@ -47,6 +62,8 @@ export interface ChatRequest {
   tool_choice?: "auto" | "required" | "none";
   temperature?: number;
   max_tokens?: number;
+  /** Reasoning effort — ONLY set when the model declares reasoningEffort. */
+  reasoningEffort?: "low" | "medium" | "high";
   /** Extra HTTP headers (e.g. bypass headers) */
   headers?: Record<string, string>;
   /** Abort signal for cancellation */
@@ -97,7 +114,13 @@ export interface ChatChunk {
   model?: string;
   choices: {
     index: number;
-    delta: Partial<ChatMessage>;
+    delta: Partial<ChatMessage> & {
+      /** OpenAI-compatible reasoning/thinking text (DeepSeek reasoning_content,
+       *  Anthropic thinking, etc.). Normalized in the TUI, never raw. */
+      reasoning_content?: string;
+      reasoning?: string;
+      thinking?: string;
+    };
     finish_reason: string | null;
   }[];
   usage?: Usage;

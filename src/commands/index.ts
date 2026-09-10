@@ -32,6 +32,7 @@ import { updateCommand } from "./update";
 import { subagentCommand } from "./subagent";
 import { harnessCommand } from "./harness";
 import { keyCommand } from "./key";
+import { reasoningCommand } from "./reasoning";
 import { providerCommand } from "./provider";
 import { searchCommand } from "./search";
 import { policyCommand } from "./policy";
@@ -62,6 +63,10 @@ export interface CommandContext {
   clearMessages?: () => void;
   switchSession?: (sessionId: string) => boolean;
   setAgentMode?: (mode: "Build" | "Plan") => void;
+  /** Apply a reasoning effort change; returns false when unsupported. */
+  setReasoningEffort?: (effort: "auto" | "low" | "medium" | "high" | "off") => boolean;
+  /** Human summary of the current reasoning setting. */
+  getReasoningStatus?: () => string;
 }
 
 export interface Command {
@@ -105,6 +110,7 @@ const builtinCommands: Command[] = [
   subagentCommand,
   harnessCommand,
   keyCommand,
+  reasoningCommand,
   providerCommand,
   searchCommand,
   policyCommand,

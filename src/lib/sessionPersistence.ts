@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { getToolnetSessionsDir } from "./toolnetHome";
+import { getVersion } from "./version";
 
 export interface SessionMessage {
   role: string;
@@ -66,10 +67,11 @@ export function getSessionsDir(): string {
 }
 
 export function formatExitMessage(sessionId?: string, hasContent = false): string {
+  const version = getVersion();
   if (hasContent && sessionId && !sessionId.startsWith("turbo-") && !sessionId.startsWith("temp-")) {
-    return `\n\x1b[32mSession saved.\x1b[0m\n\nResume with:\n\x1b[1m\x1b[36mtoolnet resume ${sessionId}\x1b[0m\n\nGoodbye!\n`;
+    return `\n\x1b[32mSession saved.\x1b[0m\n\nResume with:\n\x1b[1m\x1b[36mtoolnet resume ${sessionId}\x1b[0m\n\n\x1b[2mToolNet CLI v${version} · /help for commands\x1b[0m\nGoodbye!\n`;
   }
-  return "Goodbye!\n";
+  return `\x1b[2mToolNet CLI v${version} · /help for commands\x1b[0m\nGoodbye!\n`;
 }
 
 /**

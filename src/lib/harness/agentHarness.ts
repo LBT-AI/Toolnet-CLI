@@ -14,6 +14,7 @@ import { saveSession, loadSession } from "../sessionPersistence";
 import { detectProjectFramework } from "../projectDetector";
 import { getCliKey } from "../keys";
 import { bypassEngine } from "../bypass";
+import { getLanguageDirective, getResponseLanguage } from "../language";
 import { ToolCache, createMetrics, type ToolCall, type DispatchResult, type ToolPlannerMetrics } from "./toolPlanner";
 import { compressToolResult } from "./toolOutputCompressor";
 import { executeToolBatch, signatureForToolCall } from "./toolExecutor";
@@ -542,7 +543,9 @@ ${permissionContext}
 
 Your access is strictly limited to the policy described in [RUNTIME PERMISSION CONTEXT] above.
 
-${memoryPrompt}${toolRules}`;
+${memoryPrompt}${toolRules}
+
+${getLanguageDirective(getResponseLanguage())}`;
     const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
 
     const messages: ContextMessage[] = [
@@ -577,7 +580,9 @@ ${permissionContext}
 
 Your access is strictly limited to the policy described in [RUNTIME PERMISSION CONTEXT] above.
 
-${memoryPrompt}${toolRules}`;
+${memoryPrompt}${toolRules}
+
+${getLanguageDirective(getResponseLanguage())}`;
     const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
 
     const messages: ContextMessage[] = [
@@ -597,7 +602,9 @@ ${memoryPrompt}${toolRules}`;
 
 ${permissionContext}
 
-Your access is strictly limited to the policy described in [RUNTIME PERMISSION CONTEXT] above.`;
+Your access is strictly limited to the policy described in [RUNTIME PERMISSION CONTEXT] above.
+
+${getLanguageDirective(getResponseLanguage())}`;
     const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
     const messages: ContextMessage[] = [
       { role: "system", content: systemPrompt },

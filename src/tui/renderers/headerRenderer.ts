@@ -29,7 +29,7 @@ export function renderHeader(
   }
 
   // Right side status badge (Idle / Working / Thinking / Error)
-  let statusBadge = A.reset + A.fgGreen + "● Idle" + A.reset;
+  let statusBadge = A.reset + A.fgCyan + "● Idle" + A.reset;
   if (state.isStreaming) {
     const sp = SPINNER[(state.spinnerIdx || 0) % SPINNER.length];
     const isThinking = (state.statusText || "").toLowerCase().includes("think");

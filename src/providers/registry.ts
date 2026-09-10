@@ -107,10 +107,10 @@ export function getDefaultProviderConfig(id: string): ProviderConfig {
       return {
         id: "toolnet",
         name: "ToolNet Gateway",
-        baseUrl: process.env.TOOLNET_BASE_URL || "https://api.toolnet.ai/v1",
+        baseUrl: process.env.TOOLNET_BASE_URL || "https://api.toolnet.tech/v1",
         type: "toolnet",
         apiKeyEnv: "TOOLNET_API_KEY",
-        defaultModel: "claude-3-5-sonnet",
+        defaultModel: "alims-intl.llm",
       };
     case "openai":
       return {

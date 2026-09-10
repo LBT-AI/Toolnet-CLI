@@ -87,7 +87,8 @@ describe("Session UX & Interactive Manager Regression Suite", () => {
 
   it("3. Empty session does not print fake resume command on exit", () => {
     const msg = formatExitMessage("sess_1772429481234_abc123", false);
-    expect(msg.trim()).toBe("Goodbye!");
+    expect(msg).toContain("Goodbye!");
+    expect(msg).toContain("/help for commands");
     expect(msg).not.toContain("Resume with:");
     expect(msg).not.toContain("Session saved.");
   });
@@ -95,7 +96,7 @@ describe("Session UX & Interactive Manager Regression Suite", () => {
   it("4. Temporary turbo IDs are not treated as resumable sessions", () => {
     // formatExitMessage for turbo ID
     const msg = formatExitMessage("turbo-request-9999", true);
-    expect(msg.trim()).toBe("Goodbye!");
+    expect(msg).toContain("Goodbye!");
     expect(msg).not.toContain("Resume with:");
 
     // save turbo file

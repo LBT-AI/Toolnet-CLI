@@ -4,11 +4,10 @@ import { getToolnetHome } from "../lib/toolnetHome";
 import { loadAppConfig } from "../lib/appConfig";
 import { isNoColor } from "../term";
 import { parseBannerFlags, resolveBannerDecision, isKnownBannerSetting } from "./config";
-import { playMascotBanner, canRenderMascot, type MascotPlayContext } from "./mascot";
-import { playB2Banner, type BannerPlayContext } from "./b2Banner";
+import { playB2Banner, printToolNetBanner, type BannerPlayContext } from "./b2Banner";
 import { selectVariant } from "./terminal";
+import { getVersion } from "../lib/version";
 import type { BannerDecision, BannerSetting, DoneInfo } from "./types";
-import { printMascotBanner } from "./mascot";
 
 const BANNER_MARKER = ".banner-shown";
 
@@ -86,29 +85,19 @@ export async function showBannerIfEligible(opts: ShowBannerOptions = {}): Promis
     rows,
     write: opts.write ?? ((value: string) => process.stdout.write(value)),
   };
-  const mascotEnabled = process.env.TOOLNETCLI_MASCOT !== "0";
-  const useMascot = mascotEnabled && canRenderMascot(cols, rows);
 
   try {
     if (variant === "text") {
       // Only terminals too short to hold the compact four-row lockup use a
       // single line. This is still static and never scrolls the terminal.
-      ctx.write(`ToolNet CLI${noColor ? "" : "\x1b[0m"}\n`);
+      ctx.write(`◇ ToolNet CLI${noColor ? "" : "\x1b[0m"}\n`);
     } else {
-      const mascotContext: MascotPlayContext = ctx;
-      if (useMascot) {
-        await playMascotBanner(mascotContext, {
-          noColor,
-          animate: isTty && process.env.TOOLNETCLI_ANIMATIONS !== "0",
-          inPlace: isTty,
-        });
-      } else {
-        await playB2Banner(ctx, {
-          noColor,
-          animate: isTty && process.env.TOOLNETCLI_ANIMATIONS !== "0",
-          inPlace: isTty,
-        });
-      }
+      await playB2Banner(ctx, {
+        noColor,
+        animate: isTty && process.env.TOOLNETCLI_ANIMATIONS !== "0",
+        inPlace: isTty,
+        tagline: `AI Coding CLI · v${opts.version ?? getVersion()} · AgentHarness 2.0`,
+      });
     }
   } finally {
     if (decision.reason === "setting-once" && purposeSetting === "once" && isTty) markBannerSeen(homeDir);
@@ -117,5 +106,5 @@ export async function showBannerIfEligible(opts: ShowBannerOptions = {}): Promis
   return { shown: true, variant };
 }
 
-export { printMascotBanner as printToolNetBanner };
+export { printToolNetBanner };
 export type { BannerSetting };

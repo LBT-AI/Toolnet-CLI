@@ -4,6 +4,7 @@
  */
 
 import { agentTools } from "../lib/agentTools";
+import { getLanguageDirective, getResponseLanguage } from "../lib/language";
 import { workspaceRoot, currentCwd } from "../lib/codingAgent";
 import { contextEngine, childSessionId, createChildSessionContext, deleteSessionContext, getSessionContext, type SessionContext } from "../lib/context";
 import type { AgentRole, TaskNode } from "./types";
@@ -170,6 +171,8 @@ Workspace Root: ${workspaceRoot}
 Working Directory: ${currentCwd}
 
 ${baseMemory}
+
+${getLanguageDirective(getResponseLanguage())}
 
 Operational Rules:
 - Execute necessary tools immediately.

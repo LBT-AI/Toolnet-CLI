@@ -9,13 +9,13 @@ describe("final B2 Twin Portal banner", () => {
     expect(WORDMARK_CONCEPTS[0].name).toBe("TWIN PORTAL");
   });
 
-  it("renders a recognisable custom symbol and custom TOOLNET lettering", () => {
+  it("renders the figlet TOOLNET wordmark with a gray tagline and no mascot", () => {
     const lines = wordmarkPlainLines("B2", 120);
     const text = lines.join("\n");
-    expect(text).not.toContain("█");
-    expect(text).toContain("◇");
-    expect(text).toContain("╭");
+    expect(text).toContain("████████╗"); // figlet T glyph
     expect(text).toContain("AI CODING CLI");
+    expect(text).not.toContain("▄▄▄▄▄▄▄▄▄"); // pixel mascot is gone
+    expect(text).not.toContain("◇"); // no symbol on the desktop lockup
     expect(text).not.toContain("terminal-native intelligence");
     expect(lines.length).toBe(7);
   });
@@ -33,10 +33,10 @@ describe("final B2 Twin Portal banner", () => {
     }
   });
 
-  it("uses compact four-row geometry below 80 columns", () => {
+  it("uses compact three-row geometry below 80 columns", () => {
     for (const cols of [40, 50, 60]) {
       const lines = renderWordmark("B2", { cols, noColor: true });
-      expect(lines.length).toBe(4);
+      expect(lines.length).toBe(3);
       expect(lines.some((line) => stripAnsi(line).includes("◇"))).toBe(true);
       expect(lines.every((line) => visibleWidth(line) <= cols)).toBe(true);
       expect(b2Geometry(cols).compact).toBe(true);
@@ -58,11 +58,12 @@ describe("final B2 Twin Portal banner", () => {
     const plain = renderWordmark("B2", { cols: 80, noColor: true });
     expect(colored.some((line) => line.includes("\x1b["))).toBe(true);
     expect(colored.map(visibleWidth)).toEqual(plain.map(visibleWidth));
-    expect(stripAnsi(plain.join("\n"))).toContain("◇");
+    expect(stripAnsi(plain.join("\n"))).toContain("████████╗");
   });
 
-  it("uses the requested elapsed-time timeline", () => {
-    expect(B2_TIMELINE).toEqual({ core: 180, portal: 400, connections: 600, pulse: 760, wordmark: 1050, final: 1200 });
+  it("uses a tight sub-second elapsed-time timeline", () => {
+    expect(B2_TIMELINE).toEqual({ core: 120, portal: 260, connections: 400, pulse: 540, wordmark: 700, final: 800 });
+    expect(B2_TIMELINE.final).toBeLessThan(1000);
   });
 });
 
@@ -72,7 +73,7 @@ describe("B2 preview geometry", () => {
     for (const cols of [40, 50, 60, 80, 120]) {
       const metrics = b2Geometry(cols);
       expect(metrics.width).toBeLessThanOrEqual(cols);
-      expect(metrics.height).toBeGreaterThanOrEqual(4);
+      expect(metrics.height).toBeGreaterThanOrEqual(3);
       expect(metrics.height).toBeLessThanOrEqual(7);
     }
   });

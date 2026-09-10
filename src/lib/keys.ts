@@ -70,7 +70,6 @@ export function loadCliKeys(): Record<string, string> {
 }
 
 export function saveCliKey(provider: string, key: string): void {
-  fs.writeFileSync("/tmp/saveApiKey.log", "Called saveCliKey with " + provider + "\n", {flag:"a"});
   const normProvider = provider.toLowerCase().trim();
   const keys = loadCliKeys();
   keys[normProvider] = key.trim();
@@ -80,7 +79,6 @@ export function saveCliKey(provider: string, key: string): void {
     fs.writeFileSync(getKeysFile(), JSON.stringify(keys, null, 2), { encoding: "utf8", mode: 0o600 });
   } catch (err) {
     console.error("Failed to save CLI key:", err);
-    fs.writeFileSync("/tmp/saveApiKey.log", "Failed: " + err + "\n", {flag:"a"});
   }
 }
 

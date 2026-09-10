@@ -6,6 +6,7 @@ import { bypassEngine } from "./bypass";
 import { getSandboxMode } from "./permissions";
 import { getPermissionContextPrompt } from "./security/permissionContext";
 import { getHarness, AgentHarness } from "./harness";
+import { getLanguageDirective, getResponseLanguage } from "./language";
 import type { ContextMessage } from "./context/types";
 
 export interface AgentRuntimeOptions {
@@ -62,6 +63,8 @@ FINAL ANSWER:
 - Provide copyable commands if relevant.
 - Do NOT repeat raw tool output verbatim.
 - If not found: state exactly where you searched.
+
+${getLanguageDirective(getResponseLanguage())}
 
   <skills>
 You can use specialized 'skills' to help you with complex tasks. Each skill has a name and a description.

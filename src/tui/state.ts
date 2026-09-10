@@ -13,6 +13,12 @@ import {
 } from "../lib/skillsLoader";
 import { messageQueue } from "../lib/messageQueue";
 import { setCurrentSessionId as bindCurrentContextSession } from "../lib/context";
+import { setResponseLanguage } from "../lib/language";
+import {
+  DEFAULT_REASONING_SETTINGS,
+  type AgentPhase,
+  type ReasoningSettings,
+} from "../lib/reasoning";
 import type { SessionItem } from "./renderers/sessionPickerRenderer";
 
 export const SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
@@ -29,6 +35,18 @@ export class TuiState {
   }
   currentModel = "";
   agentMode: "Build" | "Plan" = "Build";
+  /** Response language preference — "auto" follows the user's latest message. */
+  responseLanguage: "vi" | "en" | "zh" | "auto" = "auto";
+
+  /** Agent lifecycle phase (thinking / working / streaming / done ...). */
+  agentPhase: AgentPhase = "idle";
+  /** Reasoning/thinking configuration — capability-aware. */
+  reasoningSettings: ReasoningSettings = { ...DEFAULT_REASONING_SETTINGS };
+  /** Streamed reasoning text from the provider (only when actually provided). */
+  reasoningText = "";
+  reasoningCollapsed = false;
+  reasoningTokens = 0;
+  reasoningElapsed = "";
   bypassMode = bypassEngine.isEnabled();
   bypassLevel = bypassEngine.getLevel();
 
@@ -151,6 +169,8 @@ export class TuiState {
       saveSession(this.currentSessionId, this.messages, {
         model: this.currentModel,
         agentMode: this.agentMode,
+        responseLanguage: this.responseLanguage,
+        reasoningSettings: this.reasoningSettings,
         queuedMessages: messageQueue.getAllTexts(),
       });
     }
@@ -200,6 +220,9 @@ export class TuiState {
 
     try {
       const models = await provider.listModels();
+      // Index capability metadata (reasoning etc.) for the whole TUI.
+      const { setModelCapabilities } = await import("../lib/reasoning");
+      setModelCapabilities(models || []);
       const realModels = (models || []).filter((m) => m && m.id && typeof m.id === "string").map((m) => m.id);
       if (realModels.length > 0) {
         this.availableModels = realModels;
@@ -582,6 +605,10 @@ export class TuiState {
     if (loaded.metadata?.model) this.currentModel = loaded.metadata.model;
     if (loaded.metadata?.provider) this.providerName = loaded.metadata.provider;
     if (loaded.metadata?.agentMode) this.agentMode = loaded.metadata.agentMode;
+    if (loaded.metadata?.responseLanguage) {
+      this.responseLanguage = loaded.metadata.responseLanguage;
+      setResponseLanguage(this.responseLanguage);
+    }
 
     if (Array.isArray(loaded.metadata?.queuedMessages)) {
       messageQueue.restore(loaded.metadata.queuedMessages);

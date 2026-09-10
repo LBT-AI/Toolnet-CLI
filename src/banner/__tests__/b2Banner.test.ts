@@ -18,7 +18,7 @@ describe("B2 Twin Portal elapsed-time banner", () => {
     expect(output).not.toContain("\x1b[?25l");
     expect(output).not.toContain("\x1b[?25h");
     expect(output).toContain("\n");
-    expect(stripAnsi(output)).toContain("◇");
+    expect(stripAnsi(output)).toContain("████████╗"); // figlet TOOLNET, no mascot
   });
 
   it("animates through elapsed time and restores the cursor exactly once", async () => {

@@ -68,6 +68,21 @@ export function truncate(s: string, maxLen: number): string {
   return truncateVisible(s, maxLen);
 }
 
+/** Keep the trailing `maxWidth` terminal cells of a string (cell-safe). */
+export function tailByCells(value: string, maxWidth: number): string {
+  if (maxWidth <= 0) return "";
+  const cps = Array.from(value);
+  const out: string[] = [];
+  let cells = 0;
+  for (let i = cps.length - 1; i >= 0; i--) {
+    const w = stringWidth(cps[i]);
+    if (cells + w > maxWidth) break;
+    out.unshift(cps[i]);
+    cells += w;
+  }
+  return out.join("");
+}
+
 /** Wrap on words where possible, then break long tokens by terminal cells. */
 export function wrapVisible(value: string, width: number): string[] {
   if (width <= 0) return [value];
@@ -140,9 +155,15 @@ export function computeLayout(activeSuggestsCount = 0, inputPromptLen = 2, curso
   const hasPanel = cols >= 120;
   const panelWidth = hasPanel ? 36 : 0;
   const chatCols = hasPanel ? cols - panelWidth : cols;
-  const popupRows = activeSuggestsCount > 0 ? Math.min(activeSuggestsCount, 7) + 3 : 0;
   const statusRows = statusActive ? 1 : 0;
-  const chatRows = Math.max(1, rows - RESERVED - statusRows - popupRows);
+  // Command palette: a large sheet anchored above the composer — roughly
+  // 65-75% of the content viewport (never a tiny centered popup).
+  const contentRows = Math.max(6, rows - RESERVED - statusRows);
+  const popupRows =
+    activeSuggestsCount > 0
+      ? Math.max(6, Math.min(contentRows - 1, Math.floor(contentRows * 0.72)))
+      : 0;
+  const chatRows = Math.max(1, contentRows - popupRows);
   const cursorRow = rows - FOOTER_ROWS; // Input prompt line (footer line is the last row)
   const cursorCol = Math.min(inputPromptLen + 1 + cursorPos, cols - 1);
 

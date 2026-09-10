@@ -1,6 +1,7 @@
 import { A } from "../../term";
 import { stripAnsi, truncate } from "../layout";
 import { getModelTags } from "../../lib/modelTags";
+import { getModelCapabilities } from "../../lib/reasoning";
 import { composeBox, computeBoxGeometry } from "./composeBox";
 
 const MAX_DISPLAY = 10;
@@ -16,10 +17,16 @@ export function renderModelPickerBox(
   }
 ): string {
   const filtered = state.filteredModels.length > 0 ? state.filteredModels : ["No models available"];
-  const list = filtered.slice(0, MAX_DISPLAY);
+  const total = filtered.length;
+  const winSize = Math.min(MAX_DISPLAY, total);
+  // Defensive clamp: index must never escape [0, total-1].
+  const idx = Math.max(0, Math.min(state.modelPickerIdx, total - 1));
+  // Auto-scroll: keep the selection centered in the window, clamped to bounds.
+  const listStart = Math.max(0, Math.min(idx - Math.floor(winSize / 2), Math.max(0, total - winSize)));
+  const visible = filtered.slice(listStart, listStart + winSize);
 
   const isNarrow = cols < 60;
-  const { boxW } = computeBoxGeometry(cols, rows, list.length + 3, true, isNarrow ? 46 : 60);
+  const { boxW } = computeBoxGeometry(cols, rows, winSize + 3, true, isNarrow ? 46 : 60);
 
   const body: string[] = [];
 
@@ -31,28 +38,40 @@ export function renderModelPickerBox(
 
   body.push("");
 
-  const listStart = Math.max(0, Math.min(state.modelPickerIdx - Math.floor(MAX_DISPLAY / 2), Math.max(0, list.length - MAX_DISPLAY)));
-  const visible = list.slice(listStart, listStart + Math.min(MAX_DISPLAY, list.length));
-
   for (let i = 0; i < visible.length; i++) {
     const modelIdx = listStart + i;
     const model = visible[i];
     const selected = modelIdx === state.modelPickerIdx;
     const isCurrent = model === state.currentModel;
     const tags = getModelTags(model);
-    const maxText = Math.max(8, boxW - 14 - stripAnsi(tags).length);
-    const text = truncate(model, maxText);
+    // Capability badge — from the API's model metadata (not name guessing).
+    // Narrow terminals get a compact "R" marker right after the name (so it
+    // is never pushed off the end of the row by the descriptive tags).
+    const caps = getModelCapabilities(model);
+    const capBadge = caps?.reasoning
+      ? isNarrow
+        ? A.fgCyan + A.bold + " R" + A.reset
+        : A.fgCyan + A.bold + "  THINKING" + A.reset
+      : "";
+    const maxText = Math.max(8, boxW - 14 - stripAnsi(tags + capBadge).length);
+    let text = truncate(model, maxText);
+    if (isNarrow && caps?.reasoning) {
+      // Keep "R" glued to the model id on mobile even when the row is tight.
+      const nameCap = Math.max(6, boxW - 18 - stripAnsi(tags).length);
+      text = truncate(model, nameCap);
+      text += capBadge;
+    }
     if (selected) {
-      const line = A.bgOverlay + "  " + A.fgCyan + A.bold + "● " + A.reset + A.bgOverlay + A.fgText + A.bold + text + A.reset + A.bgOverlay + " " + A.fgMuted + tags + A.reset;
+      const line = A.bgOverlay + "  " + A.fgCyan + A.bold + "● " + A.reset + A.bgOverlay + A.fgText + A.bold + text + A.reset + A.bgOverlay + " " + A.fgMuted + tags + capBadge + A.reset;
       body.push(line);
     } else {
       const marker = isCurrent ? A.fgGreen + "✓ " + A.reset : "  ";
-      body.push(marker + A.fgText + text + A.reset + " " + A.fgMuted + tags + A.reset);
+      body.push(marker + A.fgText + text + A.reset + " " + A.fgMuted + tags + capBadge + A.reset);
     }
   }
 
-  if (list.length > MAX_DISPLAY) {
-    body.push(A.fgMuted + "… and " + (filtered.length - MAX_DISPLAY) + " more" + A.reset);
+  if (total > winSize) {
+    body.push(A.fgMuted + "… and " + (total - winSize) + " more" + A.reset);
   }
 
   return composeBox(cols, rows, {

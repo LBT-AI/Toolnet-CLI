@@ -1,4 +1,7 @@
 import { test, it, expect, describe, beforeEach, afterEach } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { tuiState } from "../../tui/state";
 import { handleKey, handlePaste, getInputState, setInputState, resetInputState } from "../../tui/input/inputHandler";
 import { saveCliKey, deleteCliKey, getCliKey } from "../../lib/keys";
@@ -6,7 +9,17 @@ import { renderKeyManagerBox } from "../../tui/renderers/keyManagerRenderer";
 import { stripAnsi } from "../../tui/layout";
 
 describe("/key Modal Input & Paste Regression Tests", () => {
+  let isolatedTmp: string;
+  let origEnv: Record<string, string | undefined>;
+
   beforeEach(() => {
+    // Isolate key writes into a temp dir — never touch the real
+    // ~/.toolnetcli/cli-keys.json.
+    origEnv = { ...process.env };
+    isolatedTmp = fs.mkdtempSync(path.join(os.tmpdir(), "key-modal-test-"));
+    process.env.TOOLNETCLI_CONFIG_DIR = isolatedTmp;
+    process.env.DATA_DIR = isolatedTmp;
+
     resetInputState();
     tuiState.showKeyManager = false;
     tuiState.keyManagerInput = null;
@@ -21,11 +34,15 @@ describe("/key Modal Input & Paste Regression Tests", () => {
   });
 
   afterEach(() => {
+    // Cleanup runs while the isolated env is still active, then we restore
+    // the real environment so the deletes never hit the user's config.
     deleteCliKey("mockprovider");
     deleteCliKey("openai");
     deleteCliKey("anthropic");
     tuiState.closeKeyManager();
     resetInputState();
+    process.env = origEnv;
+    try { fs.rmSync(isolatedTmp, { recursive: true, force: true }); } catch {}
   });
 
   it("1. Single key typing into Set Key modal", () => {

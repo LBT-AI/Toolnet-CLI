@@ -12,6 +12,7 @@ import type {
   Provider,
   ProviderConfig,
   ModelInfo,
+  ModelCapabilities,
   ChatRequest,
   ChatResponse,
   ChatChunk,
@@ -19,6 +20,7 @@ import type {
 import { resolveApiKey } from "./registry";
 
 export const TOOLNET_DEFAULT_MODELS: ModelInfo[] = [
+  { id: "alims-intl.llm", name: "Alibaba Intl LLM", object: "model", created: Date.now(), owned_by: "combo" },
   { id: "claude-3-5-sonnet", name: "Claude 3.5 Sonnet", object: "model", created: Date.now(), owned_by: "toolnet" },
   { id: "claude-3-7-sonnet", name: "Claude 3.7 Sonnet", object: "model", created: Date.now(), owned_by: "toolnet" },
   { id: "gpt-4o", name: "GPT-4o", object: "model", created: Date.now(), owned_by: "toolnet" },
@@ -39,6 +41,24 @@ export function normalizeToolNetBaseUrl(rawUrl: string): { rootUrl: string; v1Ur
   const rootUrl = clean.endsWith("/v1") ? clean.slice(0, -3) : clean;
   const v1Url = clean.endsWith("/v1") ? clean : `${clean}/v1`;
   return { rootUrl, v1Url };
+}
+
+/**
+ * Maps gateway capability metadata to ModelCapabilities.
+ * reasoningStream/reasoningTokens default to true when the model reasons and
+ * the gateway exposes a thinking format; reasoningEffort is only true when
+ * the gateway explicitly declares it (never assumed).
+ */
+function toModelCapabilities(
+  c: Record<string, unknown> & { reasoning?: boolean; thinkingFormat?: string | null; thinkingCanDisable?: boolean }
+): ModelCapabilities {
+  const reasoning = Boolean(c.reasoning);
+  return {
+    reasoning,
+    reasoningStream: reasoning ? true : false,
+    reasoningEffort: Boolean(c.reasoningEffort) || false,
+    reasoningTokens: reasoning ? true : false,
+  };
 }
 
 export class ToolNetProvider implements Provider {
@@ -92,12 +112,23 @@ export class ToolNetProvider implements Provider {
         signal: AbortSignal.timeout(2000),
       });
       if (!res.ok) return TOOLNET_DEFAULT_MODELS;
-      const data = (await res.json()) as { data?: { id: string; object?: string; created?: number; owned_by?: string }[] };
+      const data = (await res.json()) as {
+        data?: {
+          id: string;
+          object?: string;
+          created?: number;
+          owned_by?: string;
+          capabilities?: Record<string, unknown> & { reasoning?: boolean; thinkingFormat?: string | null; thinkingCanDisable?: boolean };
+        }[];
+      };
       const models = (data.data || []).map((m) => ({
         id: m.id,
         object: m.object || "model",
         created: m.created || 0,
         owned_by: m.owned_by || "toolnet",
+        // Source of truth: the gateway's own capability metadata when present.
+        // Never substring-guess model ids.
+        capabilities: m.capabilities ? toModelCapabilities(m.capabilities) : undefined,
       }));
       return models.length > 0 ? models : TOOLNET_DEFAULT_MODELS;
     } catch {
@@ -122,6 +153,9 @@ export class ToolNetProvider implements Provider {
       body.tools = request.tools;
       body.tool_choice = request.tool_choice ?? "auto";
     }
+    if (request.reasoningEffort) {
+      body.reasoning_effort = request.reasoningEffort;
+    }
 
     const res = await fetch(`${this.v1Url}/chat/completions`, {
       method: "POST",
@@ -138,6 +172,19 @@ export class ToolNetProvider implements Provider {
       throw new Error(`HTTP ${res.status}: ${errText}`);
     }
 
+    // Some ToolNet gateway builds append a "data: [DONE]" stream sentinel to
+    // non-streaming responses, so read the raw text and strip it before
+    // parsing. Real fetch Response always has .text(); minimal test mocks
+    // only expose .json(), so keep that path as a fallback.
+    if (typeof (res as any).text === "function") {
+      const raw = await res.text();
+      const cleaned = raw.replace(/\s*data:\s*\[DONE\]\s*$/, "").trim();
+      try {
+        return JSON.parse(cleaned) as ChatResponse;
+      } catch {
+        throw new Error(`Invalid JSON from chat endpoint (status ${res.status})`);
+      }
+    }
     return (await res.json()) as ChatResponse;
   }
 
@@ -158,6 +205,9 @@ export class ToolNetProvider implements Provider {
     if (request.tools && request.tools.length > 0) {
       body.tools = request.tools;
       body.tool_choice = request.tool_choice ?? "auto";
+    }
+    if (request.reasoningEffort) {
+      body.reasoning_effort = request.reasoningEffort;
     }
 
     const res = await fetch(`${this.v1Url}/chat/completions`, {

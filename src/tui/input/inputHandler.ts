@@ -43,9 +43,32 @@ export function resetInputState(): void {
 export function getSuggestions(input: string) {
   if (!input.startsWith("/")) return [];
   const search = input.toLowerCase().slice(1);
-  return getAllCommands()
-    .filter((c) => c.name.startsWith(search) || c.aliases.some((a) => a.startsWith(search)))
-    .map((c) => ({ name: "/" + c.name, desc: c.description }));
+  const all = getAllCommands();
+  if (!search) {
+    return all.map((c) => ({ name: "/" + c.name, desc: c.description }));
+  }
+
+  // Primary: command name / alias prefix — precise, minimal noise.
+  const nameHits = all.filter(
+    (c) => c.name.startsWith(search) || c.aliases.some((a) => a.startsWith(search))
+  );
+  if (nameHits.length > 0) {
+    return nameHits.map((c) => ({ name: "/" + c.name, desc: c.description }));
+  }
+
+  // Secondary: description word-prefix, only when nothing matched by name
+  // (so "/pro" stays /provider instead of every "protocol/provider" text).
+  if (search.length >= 2) {
+    return all
+      .filter((c) =>
+        c.description
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .some((w) => w.startsWith(search))
+      )
+      .map((c) => ({ name: "/" + c.name, desc: c.description }));
+  }
+  return [];
 }
 
 /**
@@ -402,13 +425,15 @@ function _handleKeyInternal(
 
   // 2. Model Picker navigation
   if (tuiState.showModelPicker) {
-    if (hex === "1b5b41" || hex === "1b4f41") { // Up
-      tuiState.modelPickerIdx = tuiState.modelPickerIdx <= 0 ? tuiState.filteredModels.length - 1 : tuiState.modelPickerIdx - 1;
+    if (hex === "1b5b41" || hex === "1b4f41") { // Up — wrap around with modulo
+      const len = Math.max(1, tuiState.filteredModels.length);
+      tuiState.modelPickerIdx = (tuiState.modelPickerIdx - 1 + len) % len;
       renderAll();
       return;
     }
-    if (hex === "1b5b42" || hex === "1b4f42") { // Down
-      tuiState.modelPickerIdx = tuiState.modelPickerIdx >= tuiState.filteredModels.length - 1 ? 0 : tuiState.modelPickerIdx + 1;
+    if (hex === "1b5b42" || hex === "1b4f42") { // Down — wrap around with modulo
+      const len = Math.max(1, tuiState.filteredModels.length);
+      tuiState.modelPickerIdx = (tuiState.modelPickerIdx + 1) % len;
       renderAll();
       return;
     }
@@ -1012,24 +1037,63 @@ function _handleKeyInternal(
     return;
   }
 
+  // 7B. Ctrl+T — collapse / expand the Thinking panel (only meaningful when
+  //     reasoning content was actually streamed this turn).
+  if (hex === "14" || s === "\x14") {
+    if (tuiState.reasoningText || tuiState.reasoningCollapsed) {
+      tuiState.reasoningCollapsed = !tuiState.reasoningCollapsed;
+      renderAll();
+      return;
+    }
+  }
+
   // 8. Slash Command Suggestions Palette (Priority handler when palette is OPEN)
   const suggests = getSuggestions(inputBufferManager.getText());
   if (suggests.length > 0) {
-    // 8A. Up Arrow — navigate up in palette
-    if (hex === "1b5b41" || hex === "1b4f41") {
-      tuiState.cmdSuggestIdx = tuiState.cmdSuggestIdx <= 0 ? suggests.length - 1 : tuiState.cmdSuggestIdx - 1;
+    // 8A. Up Arrow / Ctrl+P — navigate up in palette (wrap around)
+    if (hex === "1b5b41" || hex === "1b4f41" || hex === "10" || s === "\x10") {
+      const len = Math.max(1, suggests.length);
+      tuiState.cmdSuggestIdx = (tuiState.cmdSuggestIdx - 1 + len) % len;
       renderAll();
       return;
     }
 
-    // 8B. Down Arrow — navigate down in palette
-    if (hex === "1b5b42" || hex === "1b4f42") {
-      tuiState.cmdSuggestIdx = tuiState.cmdSuggestIdx >= suggests.length - 1 ? 0 : tuiState.cmdSuggestIdx + 1;
+    // 8B. Down Arrow / Ctrl+N — navigate down in palette (wrap around)
+    if (hex === "1b5b42" || hex === "1b4f42" || hex === "0e" || s === "\x0e") {
+      const len = Math.max(1, suggests.length);
+      tuiState.cmdSuggestIdx = (tuiState.cmdSuggestIdx + 1) % len;
       renderAll();
       return;
     }
 
-    // 8C. Tab — autocomplete highlighted command into input without executing
+    // 8C. PgUp / PgDn — page up/down in palette
+    const PALETTE_PAGE = 6;
+    if (hex === "1b5b357e") { // PgUp
+      const len = Math.max(1, suggests.length);
+      tuiState.cmdSuggestIdx = (tuiState.cmdSuggestIdx - PALETTE_PAGE + len) % len;
+      renderAll();
+      return;
+    }
+    if (hex === "1b5b367e") { // PgDn
+      const len = Math.max(1, suggests.length);
+      tuiState.cmdSuggestIdx = (tuiState.cmdSuggestIdx + PALETTE_PAGE) % len;
+      renderAll();
+      return;
+    }
+
+    // 8D. Home / End — jump to first / last command
+    if (hex === "1b5b48" || hex === "1b4f48") { // Home
+      tuiState.cmdSuggestIdx = 0;
+      renderAll();
+      return;
+    }
+    if (hex === "1b5b46" || hex === "1b4f46") { // End
+      tuiState.cmdSuggestIdx = Math.max(0, suggests.length - 1);
+      renderAll();
+      return;
+    }
+
+    // 8E. Tab — autocomplete highlighted command into input without executing
     if (hex === "09") {
       const safeIdx = Math.max(0, Math.min(tuiState.cmdSuggestIdx, suggests.length - 1));
       const selected = suggests[safeIdx]?.name;
@@ -1043,7 +1107,7 @@ function _handleKeyInternal(
       return;
     }
 
-    // 8D. Enter — execute highlighted command directly without submitting raw input
+    // 8F. Enter — execute highlighted command directly without submitting raw input
     if (hex === "0d" || hex === "0a" || s === "\r" || s === "\n") {
       const safeIdx = Math.max(0, Math.min(tuiState.cmdSuggestIdx, suggests.length - 1));
       const selected = suggests[safeIdx]?.name;
@@ -1059,7 +1123,7 @@ function _handleKeyInternal(
       }
     }
 
-    // 8E. Escape — close palette and clear slash input
+    // 8G. Escape — close palette and clear slash input
     if (hex === "1b") {
       inputBufferManager.clear();
       tuiState.inputBuffer = "";

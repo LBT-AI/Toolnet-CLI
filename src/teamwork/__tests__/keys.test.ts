@@ -1,14 +1,32 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { saveCliKey, getCliKey, deleteCliKey, listAllCliKeys, maskApiKey } from "../../lib/keys";
 import { dispatchCommand, type CommandContext } from "../../commands/index";
 
 describe("API Key Management & Alibaba/DashScope Support", () => {
+  let isolatedTmp: string;
+  let origEnv: Record<string, string | undefined>;
+
   beforeEach(() => {
+    // Isolate all key writes into a temp dir — never touch the real
+    // ~/.toolnetcli/cli-keys.json (these tests save/delete real keys).
+    origEnv = { ...process.env };
+    isolatedTmp = fs.mkdtempSync(path.join(os.tmpdir(), "keys-test-"));
+    process.env.TOOLNETCLI_CONFIG_DIR = isolatedTmp;
+    process.env.DATA_DIR = isolatedTmp;
+
     delete process.env.DASHSCOPE_API_KEY;
     delete process.env.ALIBABA_API_KEY;
     deleteCliKey("alibaba");
     deleteCliKey("dashscope");
     deleteCliKey("openai");
+  });
+
+  afterEach(() => {
+    process.env = origEnv;
+    try { fs.rmSync(isolatedTmp, { recursive: true, force: true }); } catch {}
   });
 
   afterEach(() => {

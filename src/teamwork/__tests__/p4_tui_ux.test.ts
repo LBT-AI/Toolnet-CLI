@@ -1,4 +1,7 @@
-import { test, it, expect, describe, beforeEach } from "bun:test";
+import { test, it, expect, describe, beforeEach, afterEach } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { MultilineInputBuffer } from "../../tui/input/multilineInput";
 import { parseDiffStats, renderCompactDiffSummary, renderUnifiedDiffLines } from "../../tui/renderers/diffRenderer";
 import { renderSidebar } from "../../tui/renderers/sidebarRenderer";
@@ -12,6 +15,26 @@ import { computeLayout, stripAnsi, truncate } from "../../tui/layout";
 import { isNoColor, setNoColor, A } from "../../term";
 import { handleKey, getInputState, setInputState, resetInputState } from "../../tui/input/inputHandler";
 import { tuiState } from "../../tui/state";
+
+// Isolate every key/config write into a temp dir so these tests can never
+// touch the user's real ~/.toolnetcli (cli-keys.json / providers.json).
+let p4IsolatedTmp: string | null = null;
+let p4OrigEnv: Record<string, string | undefined> = {};
+
+beforeEach(() => {
+  p4OrigEnv = { ...process.env };
+  p4IsolatedTmp = fs.mkdtempSync(path.join(os.tmpdir(), "p4-tui-ux-"));
+  process.env.TOOLNETCLI_CONFIG_DIR = p4IsolatedTmp;
+  process.env.DATA_DIR = p4IsolatedTmp;
+});
+
+afterEach(() => {
+  process.env = p4OrigEnv;
+  if (p4IsolatedTmp) {
+    try { fs.rmSync(p4IsolatedTmp, { recursive: true, force: true }); } catch {}
+  }
+  p4IsolatedTmp = null;
+});
 
 describe("P4.1 — TUI Modular Independence", () => {
   it("TUI modules import independently without side effects", async () => {
@@ -271,19 +294,23 @@ describe("TUI Redesign — Header & Working Status & Footer", () => {
 });
 
 describe("TUI Redesign — Command Palette & Model Picker", () => {
-  it("Command Palette renders boxed popup with navigation hints", () => {
+  it("Command Palette renders large command sheet with 2-line rows and hints", () => {
     const suggests = [
       { name: "/model", desc: "Switch active model" },
       { name: "/provider", desc: "Manage AI providers" },
       { name: "/session", desc: "Save or load sessions" },
     ];
-    const lines = renderSuggestionsPopup(80, 8, suggests, 0, "\x1b[36m");
+    const lines = renderSuggestionsPopup(80, 18, suggests, 0, "\x1b[36m");
     const joined = lines.join("");
+    const stripped = stripAnsi(joined);
 
-    expect(joined).toContain("Commands");
-    expect(joined).toContain("/model");
-    expect(joined).toContain("/provider");
-    expect(joined).toContain("↑↓ navigate");
+    // Full-width sheet with top border, 2-line command blocks and hint row.
+    expect(stripped).toContain("╭");
+    expect(stripped).toContain("/model");
+    expect(stripped).toContain("Switch active model");
+    expect(stripped).toContain("/provider");
+    expect(stripped).toContain("↑↓ navigate");
+    expect(stripped).toContain("1 / 3");
   });
 
   it("Model Picker renders filter box and tag badges", () => {

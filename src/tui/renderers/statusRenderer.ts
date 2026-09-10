@@ -1,7 +1,8 @@
 import { A, T } from "../../term";
-import { stripAnsi, truncate } from "../layout";
+import { stripAnsi, truncate, visibleWidth, tailByCells } from "../layout";
 import { getCwdInfo } from "../../lib/codingAgent";
 import { SPINNER, tuiState } from "../state";
+import { supportsReasoning, reasoningEffortLabel } from "../../lib/reasoning";
 
 export interface WorkingStatusState {
   showHelp: boolean;
@@ -19,6 +20,8 @@ export interface FooterState {
   currentModel?: string;
   workspacePath?: string;
   lastTokens?: string;
+  agentMode?: string;
+  bypassMode?: boolean;
 }
 
 /**
@@ -74,9 +77,8 @@ export function renderWorkingStatus(
   }
 
   const maxContent = Math.max(8, cols - 3);
-  const visibleContent = stripAnsi(content).length > maxContent ? truncate(content, maxContent) : content;
-  const stripped = stripAnsi(visibleContent);
-  const pad = Math.max(0, cols - 1 - stripped.length);
+  const visibleContent = visibleWidth(content) > maxContent ? truncate(content, maxContent) : content;
+  const pad = Math.max(0, cols - 1 - visibleWidth(visibleContent));
 
   return T.clearLine + fg + " " + visibleContent + A.reset + queueBadge + " ".repeat(pad) + "\r\n";
 }
@@ -107,8 +109,7 @@ export function renderInputArea(
   if (!inputBuffer) {
     const prompt = A.reset + A.fgCyan + A.bold + "> " + A.reset;
     const placeholder = A.fgMuted + "Enter a coding task or / for commands" + A.reset;
-    const stripped = stripAnsi(prompt + placeholder);
-    const pad = Math.max(0, cols - 1 - stripped.length);
+    const pad = Math.max(0, cols - 1 - visibleWidth(prompt + placeholder));
     return divider + T.clearLine + prompt + placeholder + " ".repeat(pad) + A.reset + "\r\n";
   }
 
@@ -126,12 +127,14 @@ export function renderInputArea(
     const maxInputWidth = Math.max(10, cols - promptWidth - 3);
     const rawText = lines[i];
     const lineText = isFirst && lines.length > 1 ? rawText + " ↵" : rawText;
-    const visible = lineText.length > maxInputWidth
-      ? "…" + lineText.slice(-(maxInputWidth - 1))
-      : lineText;
+    // Truncate by terminal cells so CJK/emoji input never overflows the row.
+    const visible =
+      visibleWidth(lineText) > maxInputWidth
+        ? "…" + tailByCells(lineText, maxInputWidth - 1)
+        : lineText;
+
     const textFormatted = A.fgText + visible + A.reset;
-    const stripped = stripAnsi(prompt + textFormatted);
-    const pad = Math.max(0, cols - 1 - stripped.length);
+    const pad = Math.max(0, cols - 1 - visibleWidth(prompt + textFormatted));
     outLines.push(T.clearLine + prompt + textFormatted + " ".repeat(pad) + A.reset + "\r\n");
   }
 
@@ -139,9 +142,9 @@ export function renderInputArea(
 }
 
 /**
- * Bottom bar: `provider · model · workspace` in one tight line, no labels,
- * no divider (the input divider already separates content from chrome).
- * Under 50 cols it stays the same line, just truncated harder.
+ * Bottom bar: `provider · model · [Plan|Bypass] · tokens · workspace` in one
+ * tight line, no labels, no divider (the input divider already separates
+ * content from chrome). Under 50 cols it stays one line, just truncated.
  */
 export function renderFooter(
   cols: number,
@@ -149,6 +152,9 @@ export function renderFooter(
 ): string {
   const providerName = state?.providerName ?? tuiState.providerName;
   const currentModel = state?.currentModel ?? tuiState.currentModel;
+  const agentMode = state?.agentMode ?? tuiState.agentMode;
+  const bypassMode = state?.bypassMode ?? tuiState.bypassMode;
+  const lastTokens = state?.lastTokens;
   const { workspaceRoot } = getCwdInfo();
   const wsPath = state?.workspacePath ?? workspaceRoot;
 
@@ -172,18 +178,36 @@ export function renderFooter(
   const item = (fg: string, text: string, max: number) => fg + truncate(text, max) + A.reset;
   const sep = A.fgMuted + " · " + A.reset;
 
-  // Budget the terminal width: provider gets most, model second, cwd last.
-  const maxTotal = cols - 1;
-  const provMax = Math.max(6, Math.floor(maxTotal * 0.4));
-  const modelMax = Math.max(6, Math.floor((maxTotal - provMax - 3) * 0.45));
-  const wsMax = Math.max(4, maxTotal - provMax - modelMax - 4);
+  // Mode tag — only when non-default (Bypass or Plan); plain Build shows nothing.
+  let modeTag = "";
+  if (bypassMode) {
+    modeTag = A.reset + A.fgRed + A.bold + "Bypass" + A.reset;
+  } else if (agentMode === "Plan") {
+    modeTag = A.reset + A.fgYellow + A.bold + "Plan" + A.reset;
+  }
 
-  const content = " " + item(providerFg, provVisible, provMax) + sep + item(modelFg, modelVisible, modelMax) + sep + item(wsFg, wsPath || process.cwd(), wsMax);
+  const segments: string[] = [item(providerFg, provVisible, 24)];
+  segments.push(item(modelFg, modelVisible, 24));
+  if (modeTag) segments.push(modeTag);
+  // Reasoning tag — capability-aware: only for models that actually reason,
+  // and only while reasoning is enabled. Never guessed from the model name.
+  if (
+    currentModel &&
+    isModelSelected &&
+    supportsReasoning(currentModel) &&
+    tuiState.reasoningSettings.enabled
+  ) {
+    const rLabel = reasoningEffortLabel(tuiState.reasoningSettings);
+    segments.push(A.reset + A.fgCyan + "reasoning: " + rLabel + A.reset);
+  }
+  if (lastTokens) segments.push(A.reset + A.fgSubtext + lastTokens + A.reset);
+  segments.push(item(wsFg, wsPath || process.cwd(), 28));
 
-  const maxContent = Math.max(10, maxTotal);
+  const content = " " + segments.join(sep);
+
+  const maxContent = Math.max(10, cols - 1);
   const bar = truncate(content, maxContent);
-  const strippedLen = stripAnsi(bar).length;
-  const padding = Math.max(0, maxTotal - strippedLen);
+  const padding = Math.max(0, cols - 1 - visibleWidth(bar));
 
   // Bottom bar: NO trailing newline. The footer sits on the very last grid
   // row; a '\r\n' at the bottom row would make a real terminal scroll the

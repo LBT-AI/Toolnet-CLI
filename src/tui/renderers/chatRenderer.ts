@@ -118,6 +118,9 @@ export function renderChatMessages(
       ? primaryColor + A.bold + " ❯ " + A.reset
       : A.fgCyan + A.bold + " ✦ " + A.reset;
     const prefixIndent = "   ";
+    // Visual hierarchy: assistant responses get a soft background block so
+    // they read as distinct from user prompts (which stay on the bare panel).
+    const msgBg = isUser ? "" : A.bgTool;
     const wrapWidth = Math.max(20, chatCols - prefixIndent.length - 2);
 
     const cleanContent = redactOutputSecrets(msg.content || "");
@@ -152,10 +155,10 @@ export function renderChatMessages(
           inCodeBlock = !inCodeBlock;
           if (inCodeBlock) {
             codeLang = content.trim().slice(3).toLowerCase();
-            chatLines.push(linePrefix + A.fgBorder + "┌─ " + A.fgCyan + (codeLang || "code") + " " + "─".repeat(Math.max(0, wrapWidth - 8 - (codeLang || "code").length)) + A.reset);
+            chatLines.push(msgBg + linePrefix + A.fgBorder + "┌─ " + A.fgCyan + (codeLang || "code") + " " + "─".repeat(Math.max(0, wrapWidth - 8 - (codeLang || "code").length)) + A.reset);
             continue;
           } else {
-            chatLines.push(linePrefix + A.fgBorder + "└" + "─".repeat(Math.max(0, wrapWidth - 2)) + A.reset);
+            chatLines.push(msgBg + linePrefix + A.fgBorder + "└" + "─".repeat(Math.max(0, wrapWidth - 2)) + A.reset);
             continue;
           }
         }
@@ -176,7 +179,7 @@ export function renderChatMessages(
               .replace(/\b(true|false|null|undefined)\b/g, A.fgPeach + "$1" + A.fgText)
               .replace(/(["'`])(.*?)(["'`])/g, A.fgGreen + "$1$2$3" + A.fgText);
           }
-          chatLines.push(linePrefix + A.fgBorder + "│ " + A.reset + color + content + A.reset);
+          chatLines.push(msgBg + linePrefix + A.fgBorder + "│ " + A.reset + msgBg + color + content + A.reset);
           continue;
         }
 
@@ -188,7 +191,7 @@ export function renderChatMessages(
           inThoughtBlock = false;
         }
 
-        chatLines.push(linePrefix + color + content + A.reset);
+        chatLines.push(msgBg + linePrefix + color + content + A.reset);
       }
     }
     chatLines.push("");

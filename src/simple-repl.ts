@@ -8,6 +8,7 @@ import { printToolStart, printToolEnd } from "./lib/tool-format";
 import * as readline from "node:readline";
 import { showBannerIfEligible } from "./banner/banner";
 import { bypassEngine } from "./lib/bypass";
+import { getVersion } from "./lib/version";
 
 // ─── True color ANSI helpers (Catppuccin Mocha) ──────────────────────────
 
@@ -478,6 +479,7 @@ export async function main() {
         setModel,
         setStatusMsg: (_msg: string) => {},
         exit: () => {
+          print(color.subtext + `ToolNet CLI v${getVersion()} · /help for commands` + C.reset);
           print(color.subtext + "Goodbye!" + C.reset);
           rl.close();
           process.exit(0);

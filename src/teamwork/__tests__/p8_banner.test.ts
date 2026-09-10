@@ -1,16 +1,15 @@
 /**
- * P8 — Startup banner (Copilot-style) tests.
+ * P8 — Startup banner (wordmark) tests.
  *
- * Locks in the new ToolNet startup banner:
+ * Locks in the ToolNet startup wordmark (◇ symbol + TOOLNET lettering):
  *  1. `banner` config key: default "once", validated on load/set.
  *  2. Decision rules: no-color / headless / non-TTY / `--no-splash` skip;
  *     `--banner` forces; `once` marker short-circuits; `never` skips.
- *  3. Responsive bands: large terminal → full animation, medium → compact,
- *     tiny → static text line.
- *  4. Frames: 20-row sprite → 10 output rows (half-block), step count and
- *     wall-clock starts are monotonic; total under 3s.
- *  5. Renderer emits truecolor ANSI runs only, restores cursor in `finally`.
- *  6. `once` persists a `.banner-shown` marker in the toolnet home dir.
+ *  3. Responsive bands: large terminal → full lockup, medium → compact,
+ *     tiny → single-line ◇ ToolNet CLI text.
+ *  4. Wordmark geometry: sub-second timeline, symbol + lettering inside
+ *     width at every band, cursor restored by the animation.
+ *  5. `once` persists a `.banner-shown` marker in the toolnet home dir.
  */
 
 import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
@@ -18,16 +17,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setNoColor } from "../../term";
-import { visibleWidth } from "../../tui/layout";
+import { stripAnsi, visibleWidth } from "../../tui/layout";
 import { DEFAULT_APP_CONFIG, validateConfig, loadAppConfig, resetAppConfigCache } from "../../lib/appConfig";
 import { resolveBannerDecision, parseBannerFlags } from "../../banner/config";
 import { selectVariant } from "../../banner/terminal";
 import { hasBannerSeen, markBannerSeen, bannerSeenPath, showBannerIfEligible } from "../../banner/banner";
-import { playFull, playCompact } from "../../banner/animator";
-import { playMascotBanner, renderMascotBanner, MASCOT_TIMELINE, mascotLineWidths } from "../../banner/mascot";
-import { buildSteps, FRAMES, SPRITE_ROWS, OUTPUT_ROWS, BASE, PALETTE } from "../../banner/frames";
-import { renderStep, buildPalette } from "../../banner/renderer";
-import type { PlayContext } from "../../banner/animator";
+import { playB2Banner, renderB2Banner, B2_TIMELINE, type BannerPlayContext } from "../../banner/b2Banner";
 
 setDefaultTimeout(60_000);
 
@@ -53,9 +48,9 @@ afterEach(() => {
 });
 
 /** Captures writes into a single string buffer. */
-function capture(): { ctx: PlayContext; out: () => string } {
+function capture(): { ctx: BannerPlayContext; out: () => string } {
   let buf = "";
-  const ctx: PlayContext = { cols: 120, rows: 40, write: (s: string) => void (buf += s) };
+  const ctx: BannerPlayContext = { cols: 120, rows: 40, write: (s: string) => void (buf += s) };
   return { ctx, out: () => buf };
 }
 
@@ -154,101 +149,60 @@ describe("P8 — responsive variants", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. Frames
+// 4. Wordmark geometry
 // ---------------------------------------------------------------------------
 
-describe("P8 — frames", () => {
-  it("sprite dimensions and frame count match the half-block renderer", () => {
-    expect(SPRITE_ROWS).toBe(20);
-    expect(OUTPUT_ROWS).toBe(10);
-    expect(FRAMES.length).toBe(10);
-    for (const frame of ["open", "ear", "blink", "sparkle-l", "sparkle-r"]) {
-      expect(FRAMES.some((f) => f.title === frame)).toBe(true);
-    }
-  });
-
-  it("every base row is exactly 80 chars with only known glyphs", () => {
-    const known = new Set(Object.keys(PALETTE).concat("."));
-    for (const row of BASE) {
-      expect(row.length).toBe(80);
-      for (const ch of row) expect(known.has(ch)).toBe(true);
-    }
-  });
-
-  it("step timeline is monotonic, complete, and under 3s", () => {
-    const { steps, starts, totalMs } = buildSteps();
-    expect(steps.length).toBe(5 + FRAMES.length + 3 + 1 + 4);
-    for (let i = 1; i < starts.length; i++) expect(starts[i]).toBeGreaterThanOrEqual(starts[i - 1]);
-    const sum = steps.reduce((a, s) => a + s.durationMs, 0);
-    expect(totalMs).toBe(sum);
-    expect(totalMs).toBeLessThan(3000);
-    expect(starts[0]).toBe(0);
-  });
-
-  it("frames render viewable output rows with truecolor runs", () => {
-    const { steps } = buildSteps();
-    const live = steps.find((s) => s.rows.length === SPRITE_ROWS && s.opacity === 1)!;
-    const pal = buildPalette(PALETTE, "#0A2430", 1, 1, 0, "#062B2C");
-    const { spriteLines, outputRows } = renderStep(live, pal);
-    expect(outputRows).toBe(OUTPUT_ROWS);
-    expect(spriteLines.length).toBe(OUTPUT_ROWS);
-    expect(spriteLines.join("")).toContain("\x1b[38;2;");
-    expect(spriteLines.join("")).not.toContain("."); // no raw sprite chars leak
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 5. Animators
-// ---------------------------------------------------------------------------
-
-describe("P8 — animators restore the cursor", () => {
-  it("playFull hides first and shows + clears in the end", async () => {
-    const { ctx, out } = capture();
-    await playFull(ctx, "9.9.9-test");
-    const text = out();
-    expect(text.startsWith("\x1b[?25l")).toBe(true);
-    expect(text).toContain("TOOLNET");
-    expect(text).toContain("v9.9.9-test");
-    expect(text.endsWith("\x1b[?25h\x1b[J\x1b[H")).toBe(true);
-  });
-
-  it("playCompact ends with cursor visible and a cleared line", async () => {
-    const { ctx, out } = capture();
-    await playCompact(ctx, "9.9.9-test");
-    const text = out();
-    expect(text.startsWith("\x1b[?25l")).toBe(true);
-    expect(text).toContain("ToolNet CLI");
-    expect(text.endsWith("\x1b[?25h\x1b[2K")).toBe(true);
-  });
-
-  it("mascot keeps its responsive geometry and survives NO_COLOR", () => {
+describe("P8 — wordmark geometry", () => {
+  it("renders the compact ◇ symbol lockup on narrow terminals and the figlet wordmark on wide ones", () => {
     for (const cols of [40, 50, 60, 80, 120]) {
-      const plain = renderMascotBanner(cols, MASCOT_TIMELINE.final, true);
-      const colored = renderMascotBanner(cols, MASCOT_TIMELINE.final, false);
-      const spriteRows = Math.ceil((32 * ({ 40: 20, 50: 22, 60: 24, 80: 28, 120: 28 } as Record<number, number>)[cols]) / 28);
-      expect(plain.length).toBe(Math.ceil(spriteRows / 2) + 2);
-      expect(plain.every((line) => visibleWidth(line) <= cols)).toBe(true);
-      expect(mascotLineWidths(cols)).toEqual(plain.map(visibleWidth));
-      expect(colored.map(visibleWidth)).toEqual(plain.map(visibleWidth));
-      expect(plain.join("\n")).toContain("TOOLNET");
+      const lines = renderB2Banner(cols, B2_TIMELINE.final, true);
+      expect(lines.length).toBeGreaterThan(0);
+      expect(lines.every((line) => visibleWidth(line) <= cols)).toBe(true);
+      const text = lines.join("\n");
+      expect(text).not.toContain("▄▄▄▄▄▄▄▄▄"); // no pixel mascot anywhere
+      if (cols < 80) {
+        expect(text).toContain("◇");
+        expect(text).toContain("TOOLNET"); // clean text wordmark
+      } else {
+        expect(text).toContain("████████╗"); // figlet T glyph
+        expect(text).not.toContain("◇");
+      }
     }
   });
 
-  it("mascot animation is abortable and restores the cursor", async () => {
-    let output = "";
-    const controller = new AbortController();
-    const promise = playMascotBanner({ cols: 80, rows: 24, write: (value) => { output += value; } }, {
-      signal: controller.signal,
-      frameMs: 10,
-      noColor: true,
-      inPlace: true,
-    });
-    setTimeout(() => controller.abort(), 25);
-    await expect(promise).rejects.toThrow("Mascot animation aborted");
-    expect(output).toContain("\x1b[?25l");
-    expect(output).toContain("\x1b[?25h");
+  it("uses the compact three-row lockup below 80 columns and the seven-row desktop lockup at 80+", () => {
+    for (const cols of [40, 50, 60]) expect(renderB2Banner(cols, B2_TIMELINE.final, true).length).toBe(3);
+    for (const cols of [80, 120]) expect(renderB2Banner(cols, B2_TIMELINE.final, true).length).toBe(7);
   });
 
+  it("timeline is sub-second and monotonic", () => {
+    const entries = Object.entries(B2_TIMELINE);
+    for (let i = 1; i < entries.length; i++) {
+      expect(entries[i][1]).toBeGreaterThanOrEqual(entries[i - 1][1]);
+    }
+    expect(B2_TIMELINE.final).toBeLessThan(1000);
+    expect(B2_TIMELINE.core).toBeGreaterThan(0);
+  });
+
+  it("NO_COLOR keeps identical geometry without color escapes", () => {
+    for (const cols of [40, 60, 80, 120]) {
+      const plain = renderB2Banner(cols, B2_TIMELINE.final, true);
+      const colored = renderB2Banner(cols, B2_TIMELINE.final, false);
+      expect(colored.map(visibleWidth)).toEqual(plain.map(visibleWidth));
+      expect(colored.join("")).toContain("\x1b[");
+      expect(plain.join("")).not.toContain("\x1b[");
+    }
+  });
+
+  it("animation restores the cursor exactly once and ends on the final lockup", async () => {
+    const { ctx, out } = capture();
+    await playB2Banner(ctx, { animate: true, inPlace: true, noColor: true, frameMs: 50 });
+    const text = out();
+    expect(text.startsWith("\x1b[?25l")).toBe(true);
+    expect((text.match(/\x1b\[\?25l/g) ?? []).length).toBe(1);
+    expect((text.match(/\x1b\[\?25h/g) ?? []).length).toBe(1);
+    expect(text).toContain("████████╗"); // figlet TOOLNET
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -305,7 +259,8 @@ describe("P8 — showBannerIfEligible integration", () => {
     expect((await showBannerIfEligible(opts({ headless: true }))).shown).toBe(false);
     const result = await showBannerIfEligible(opts({ isTty: false, cols: 80, rows: 20 }));
     expect(result.shown).toBe(true);
-    expect(captured).toContain("TOOLNET");
+    expect(captured).toContain("████████╗");
+    expect(captured).toContain("AgentHarness 2.0");
     expect(captured).not.toContain("\x1b[?25l");
     expect(hasBannerSeen(dir)).toBe(false);
   });
@@ -314,35 +269,22 @@ describe("P8 — showBannerIfEligible integration", () => {
     setNoColor(true);
     const result = await showBannerIfEligible(opts({ cols: 80, rows: 20 }));
     expect(result.shown).toBe(true);
-    expect(captured).toContain("TOOLNET");
+    expect(captured).toContain("████████╗");
     expect(captured).not.toContain("\x1b[38;2;");
     setNoColor(false);
     expect(hasBannerSeen(dir)).toBe(true);
   });
 
-  it("uses the mascot by default and B2 only when mascot is disabled", async () => {
-    const previousMascot = process.env.TOOLNETCLI_MASCOT;
-    try {
-      delete process.env.TOOLNETCLI_MASCOT;
-      await showBannerIfEligible(opts({ isTty: false, cols: 80, rows: 20 }));
-      expect(captured).toContain("TOOLNET");
-      expect(captured).not.toContain("◇");
+  it("always uses the wordmark — full lockup on desktop, compact on narrow", async () => {
+    await showBannerIfEligible(opts({ isTty: false, cols: 80, rows: 20 }));
+    expect(stripAnsi(captured)).toContain("████████╗");
+    expect(captured).toContain("AgentHarness 2.0");
+    expect(captured).not.toContain("\x1b[?25l");
 
-      captured = "";
-      process.env.TOOLNETCLI_MASCOT = "0";
-      await showBannerIfEligible(opts({ isTty: false, cols: 80, rows: 20 }));
-      expect(captured).toContain("◇");
-    } finally {
-      if (previousMascot === undefined) delete process.env.TOOLNETCLI_MASCOT;
-      else process.env.TOOLNETCLI_MASCOT = previousMascot;
-    }
-  });
-
-  it("medium terminals use B2 fallback when the mascot cannot fit vertically", async () => {
-    const res = await showBannerIfEligible(opts({ isTty: false, cols: 60, rows: 10, argv: ["--banner"] }));
-    expect(res.shown).toBe(true);
+    captured = "";
+    await showBannerIfEligible(opts({ isTty: false, cols: 60, rows: 10, argv: ["--banner"] }));
     expect(captured).toContain("◇");
-    expect(captured).not.toContain("AI CODING CLI");
+    expect(captured).not.toContain("AgentHarness 2.0"); // compact band omits the long tagline
   });
 
   it("'never' and invalid config values never show or mark", async () => {

@@ -1,5 +1,5 @@
 import { tuiState } from "./state";
-import { computeLayout, stripAnsi } from "./layout";
+import { computeLayout, stripAnsi, visibleWidth } from "./layout";
 import { renderHeader } from "./renderers/headerRenderer";
 import { renderChatMessages } from "./renderers/chatRenderer";
 import { renderSidebar } from "./renderers/sidebarRenderer";
@@ -11,6 +11,7 @@ import { renderSkillsPickerBox } from "./renderers/skillsPickerRenderer";
 import { renderQueueManagerBox } from "./renderers/queueManagerRenderer";
 import { renderSessionPickerBox } from "./renderers/sessionPickerRenderer";
 import { renderSuggestionsPopup } from "./renderers/suggestRenderer";
+import { renderReasoningPanel } from "./renderers/reasoningPanel";
 import { renderToolsPanelBox } from "./renderers/toolsPanelRenderer";
 import { renderHarnessPanelBox } from "./renderers/harnessPanelRenderer";
 import { handleKey, handlePaste, getSuggestions, getInputState, setInputState, resetInputState } from "./input/inputHandler";
@@ -18,6 +19,8 @@ import { sendMessage } from "./events/agentWiring";
 import { A, T, getSize } from "../term";
 import { BracketedPasteParser, ENABLE_BRACKETED_PASTE } from "../lib/bracketedPaste";
 import { setupTerminalLifecycle, restoreTerminal, wrapErrorBoundary, onTerminalResize } from "../lib/terminalLifecycle";
+import { setResponseLanguage } from "../lib/language";
+import { reasoningEffortLabel } from "../lib/reasoning";
 import { initWorkspace } from "../lib/codingAgent";
 import { loadConfig } from "../lib/config";
 import { parseSessionArgs, loadSession, getLastSessionId, formatExitMessage } from "../lib/sessionPersistence";
@@ -112,6 +115,20 @@ function buildFrame(): string {
   const verbose = process.env.TOOLNET_DEBUG === "1" || process.argv.includes("--verbose");
   const chatLines = renderChatMessages(tuiState.messages, chatCols, primaryColor, verbose);
 
+  // 2A. Thinking panel — only when the upstream API actually streamed
+  //     reasoning content (or a collapsed summary exists); never fabricated.
+  if (tuiState.reasoningText || tuiState.reasoningCollapsed) {
+    chatLines.push(
+      ...renderReasoningPanel(chatCols, {
+        text: tuiState.reasoningText,
+        elapsed: tuiState.reasoningElapsed,
+        effort: reasoningEffortLabel(tuiState.reasoningSettings),
+        collapsed: tuiState.reasoningCollapsed,
+        tokens: tuiState.reasoningTokens,
+      })
+    );
+  }
+
   // Scroll offset clamping
   const totalLines = chatLines.length;
   const maxScroll = Math.max(0, totalLines - chatRows);
@@ -128,8 +145,10 @@ function buildFrame(): string {
   // frame and leaving stale duplicate provider/input/workspace rows behind.
   for (let i = 0; i < chatRows; i++) {
     const line = visibleLines[i] ?? "";
-    const stripped = stripAnsi(line);
-    const chatPad = Math.max(0, chatCols - 1 - stripped.length);
+    // Pad by TERMINAL CELLS, not JS string length: CJK/emoji occupy 2 cells,
+    // and under-padding lets the terminal soft-wrap the row, which shifts the
+    // whole frame and makes new lines overwrite old ones.
+    const chatPad = Math.max(0, chatCols - 1 - visibleWidth(line));
     const chatPart = line + " ".repeat(chatPad) + A.reset;
 
     if (hasPanel) {
@@ -162,10 +181,12 @@ function buildFrame(): string {
   // 9. Input Area — drawn exactly once (divider + prompt line)
   out.push(renderInputArea(cols, tuiState.inputBuffer, primaryColor));
 
-  // 10. Bottom Status Rule — provider · model · workspace, drawn exactly once
+  // 10. Bottom Status Rule — provider · model · mode · tokens · workspace
   out.push(renderFooter(cols, {
     providerName: tuiState.providerName,
     currentModel: tuiState.currentModel,
+    agentMode: tuiState.agentMode,
+    bypassMode: tuiState.bypassMode,
     lastTokens: tuiState.lastTokens,
   }));
 
@@ -183,13 +204,15 @@ function buildFrame(): string {
   const maxInputLines = inputLines.length > 0 ? Math.min(3, inputLines.length) : 1;
   const inputStartIdx = Math.max(0, inputLines.length - maxInputLines);
 
-  // Find which line and column the cursor is on within the input buffer
+  // Find which line and column the cursor is on within the input buffer.
+  // The buffer cursor is a code-point index; we map it to terminal cells via
+  // visibleWidth so CJK/emoji before the cursor don't misplace the caret.
   let cursorLine = 0;
   let cursorColInLine = 0;
   if (inputBuffer) {
     let pos = 0;
     for (let i = 0; i < inputLines.length; i++) {
-      const lineLen = inputLines[i].length;
+      const lineLen = Array.from(inputLines[i]).length;
       if (pos + lineLen >= tuiState.cursorPos || i === inputLines.length - 1) {
         cursorLine = i;
         cursorColInLine = tuiState.cursorPos - pos;
@@ -206,8 +229,9 @@ function buildFrame(): string {
   // rows - 1, the second-to-last at rows - 2, etc.
   // Prompt prefix ('> ' or '… ') is always 2 visible cells wide.
   const promptWidth = 2;
+  const cursorPrefix = Array.from(inputLines[cursorLine] ?? "").slice(0, cursorColInLine).join("");
   layout.cursorRow = rows - 1 - (maxInputLines - 1 - visibleLineIdx);
-  layout.cursorCol = Math.min(promptWidth + 1 + cursorColInLine, cols - 1);
+  layout.cursorCol = Math.min(promptWidth + 1 + visibleWidth(cursorPrefix), cols - 1);
 
   // Cursor: only visible when nothing is layered on top of the main frame.
   const anyOverlayActive =
@@ -457,6 +481,10 @@ export async function main(): Promise<void> {
       tuiState.messages = loaded.messages as any;
       if (loaded.metadata?.model) tuiState.currentModel = loaded.metadata.model;
       if (loaded.metadata?.agentMode) tuiState.agentMode = loaded.metadata.agentMode;
+      if (loaded.metadata?.responseLanguage) {
+        tuiState.responseLanguage = loaded.metadata.responseLanguage;
+        setResponseLanguage(loaded.metadata.responseLanguage);
+      }
       if (loaded.metadata?.queuedMessages && Array.isArray(loaded.metadata.queuedMessages)) {
         messageQueue.restore(loaded.metadata.queuedMessages);
       }
