@@ -18,6 +18,7 @@ import { analyzePrompt, buildSystemPromptForTask } from "./taskUnderstanding";
 import { TaskContextManager } from "./taskContext";
 import { bypassEngine } from "../bypass";
 import { getLanguageDirective, getResponseLanguage } from "../language";
+import { getModelCapabilities } from "../reasoning";
 import { ToolCache, createMetrics, type ToolCall, type ToolPlannerMetrics } from "./toolPlanner";
 import { executeToolBatch, signatureForToolCall } from "./toolExecutor";
 import { toolRegistry } from "./toolRegistry";
@@ -273,11 +274,13 @@ export class AgentHarness {
     }
 
     this.emitEvent("agent:start", mode, { model, totalMessages: messages.length });
+    this.agentState.transition("thinking");
 
     while (turnsUsed < maxTurns) {
       turnsUsed++;
 
       if (Date.now() - startTime > timeoutMs) {
+        this.agentState.transition("error", "timeout");
         this.emitEvent("agent:error", mode, { error: `Execution timed out after ${timeoutMs}ms` });
         return {
           success: false,
@@ -304,18 +307,29 @@ export class AgentHarness {
         });
       }
 
+      // §2/§3 — capability-gate tool definitions: models that declare
+      // `tools: false` never receive tool schemas, so they cannot pretend to
+      // call tools. Models without native tool calling still receive schemas;
+      // their structured JSON tool blocks are parsed by the adapter below.
+      const caps = getModelCapabilities(model);
+      const toolsForRequest =
+        caps?.tools === false
+          ? undefined
+          : options.toolsOverride || toolRegistry.schemas();
+
       let chatRes;
       try {
         chatRes = await provider.chat({
           model,
           messages: prep.messages as any,
-          tools: options.toolsOverride || toolRegistry.schemas(),
-          tool_choice: options.toolChoice || "auto",
+          tools: toolsForRequest,
+          tool_choice: toolsForRequest ? options.toolChoice || "auto" : undefined,
           headers: extraHeaders,
           signal: combinedSignal,
         });
       } catch (netErr: any) {
         if (abort.signal?.aborted) {
+          this.agentState.transition("cancelled");
           this.emitEvent("agent:error", mode, { error: "Execution cancelled by user" });
           return {
             success: false,
@@ -331,6 +345,7 @@ export class AgentHarness {
           };
         }
         const errorMsg = `Gateway network error: Network/Gateway connection failed: ${netErr?.message || String(netErr)}`;
+        this.agentState.transition("error", "network");
         this.emitEvent("agent:error", mode, { error: errorMsg });
         return {
           success: false,
@@ -349,6 +364,11 @@ export class AgentHarness {
       const choice = chatRes.choices?.[0];
       const assistantMsg = choice?.message;
 
+      // §2 — normalize through the ModelAdapter contract. For models with
+      // nativeToolCalls=false, a structured JSON tool block inside the text
+      // content is parsed into toolCalls here — never by the TUI or the loop.
+      const normalized = normalizeChatResponse(chatRes, model);
+
       if (chatRes.usage) {
         contextEngine.recordUsage(
           {
@@ -363,6 +383,7 @@ export class AgentHarness {
       }
 
       if (!assistantMsg) {
+        this.agentState.transition("error", "empty-response");
         return {
           success: false,
           output: "",
@@ -383,7 +404,7 @@ export class AgentHarness {
         ...(assistantMsg.tool_calls ? { tool_calls: assistantMsg.tool_calls } : {}),
       });
 
-      const toolCalls = assistantMsg.tool_calls;
+      const toolCalls = normalized.toolCalls;
       if (!toolCalls || toolCalls.length === 0) {
         if (bypassEngine.isEnabled() && bypassEngine.getConfig().autoEscalate && turnsUsed < maxTurns) {
           const refusal = bypassEngine.checkRefusal(assistantMsg.content || "");
@@ -406,6 +427,7 @@ export class AgentHarness {
         }
 
         const finalOutput = assistantMsg.content || "";
+        this.agentState.transition("responding");
         this.emitEvent("agent:complete", mode, { output: finalOutput, turnsUsed, toolCallsCount });
 
         if (this.loopAbortController) {
@@ -435,11 +457,11 @@ export class AgentHarness {
         };
       }
 
-      const parsedCalls: ToolCall[] = toolCalls.map((call: any) => {
-        let toolArgs: any = {};
-        try { toolArgs = JSON.parse(call.function.arguments || "{}"); } catch {}
-        return { id: call.id, name: call.function.name, args: toolArgs };
-      });
+      const parsedCalls: ToolCall[] = toolCalls.map((tc) => ({
+        id: tc.id,
+        name: tc.name,
+        args: (tc.arguments ?? {}) as Record<string, unknown>,
+      }));
 
       const needsApproval = (name: string, args: any): boolean => {
         const cwd = this.config.currentCwd || process.cwd();
@@ -449,6 +471,7 @@ export class AgentHarness {
       };
 
       let loopAborted = false;
+      this.agentState.transition("executing-tool");
       const outcome = await executeToolBatch(parsedCalls, {
         cwd: this.config.currentCwd || process.cwd(),
         needsApproval,
@@ -496,7 +519,10 @@ export class AgentHarness {
       this.metrics.toolCallsDeduplicated += outcome.deduplicatedCount;
       this.metrics.toolCallsBatched += outcome.parallelCalls;
 
+      this.agentState.transition("thinking", "tool-batch-complete");
+
       if (loopAborted) {
+        this.agentState.transition("error", "loop-detected");
         this.emitEvent("agent:error", mode, { error: "Infinite loop detected: exceeded maximum repetition of identical tool calls." });
         return {
           success: false,
@@ -515,6 +541,7 @@ export class AgentHarness {
       this.emitEvent("agent:thinking", mode, { turnsUsed, toolCallsCount });
     }
 
+    this.agentState.transition("error", "max-turns");
     return {
       success: false,
       output: "",
