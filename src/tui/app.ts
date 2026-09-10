@@ -1,5 +1,6 @@
 import { tuiState } from "./state";
 import { computeLayout, stripAnsi, visibleWidth } from "./layout";
+import { resolveViewport } from "./viewport";
 import { renderHeader } from "./renderers/headerRenderer";
 import { renderChatMessages } from "./renderers/chatRenderer";
 import { renderSidebar } from "./renderers/sidebarRenderer";
@@ -129,12 +130,14 @@ function buildFrame(): string {
     );
   }
 
-  // Scroll offset clamping
+  // ── Viewport resolve — the ONLY scroll decision point, once per frame ──
+  // Layout was computed above; resolve the follow-tail/anchor window against
+  // the measured height and mirror it into legacy scrollOffset for readers.
   const totalLines = chatLines.length;
-  const maxScroll = Math.max(0, totalLines - chatRows);
-  const clampedScroll = Math.min(tuiState.scrollOffset, maxScroll);
-  const startLine = Math.max(0, totalLines - chatRows - clampedScroll);
-  const visibleLines = chatLines.slice(startLine, startLine + chatRows);
+  const window = resolveViewport(tuiState.chatViewport, totalLines, chatRows);
+  // Legacy mirror: scrollOffset keeps its old meaning (rows scrolled past bottom).
+  tuiState.scrollOffset = Math.max(0, totalLines - chatRows - window.start);
+  const visibleLines = chatLines.slice(window.start, window.end);
 
   // 3. Sidebar Lines
   const panelLines = hasPanel ? renderSidebar(tuiState.currentModel, tuiState.startTime, panelWidth) : [];

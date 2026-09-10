@@ -1,4 +1,5 @@
 import { tuiState } from "../state";
+import { scrollUp, scrollDown, scrollPage } from "../viewport";
 import { getAllCommands } from "../../commands";
 import { providerPicker } from "../../components/ProviderPicker";
 import { startOAuthDeviceFlow } from "../events/agentWiring";
@@ -1179,9 +1180,10 @@ function _handleKeyInternal(
     return;
   }
 
-  // 13. Page Up / Page Down — scrolling
-  if (hex === "1b5b357e") { tuiState.scrollOffset += 5; renderAll(); return; } // PgUp
-  if (hex === "1b5b367e") { tuiState.scrollOffset = Math.max(0, tuiState.scrollOffset - 5); renderAll(); return; } // PgDn
+  // 13. Page Up / Page Down — scrolling (detaches from the tail; PgUp/PgDn do
+  // not re-arm follow-tail — only scrolling back to the bottom does).
+  if (hex === "1b5b357e") { scrollPage(tuiState.chatViewport, tuiState.messages.length, 30, 1); renderAll(); return; } // PgUp
+  if (hex === "1b5b367e") { scrollPage(tuiState.chatViewport, tuiState.messages.length, 30, -1); renderAll(); return; } // PgDn
 
   // 14. Shift+Enter / Alt+Enter / Ctrl+J — Insert newline in input
   const isShiftEnter =
@@ -1224,7 +1226,7 @@ function _handleKeyInternal(
       return;
     }
     // Scroll chat up if history empty
-    tuiState.scrollOffset++;
+    scrollUp(tuiState.chatViewport, tuiState.messages.length, 30);
     renderAll();
     return;
   }
@@ -1253,7 +1255,7 @@ function _handleKeyInternal(
       return;
     }
     // Scroll chat down
-    tuiState.scrollOffset = Math.max(0, tuiState.scrollOffset - 1);
+    scrollDown(tuiState.chatViewport, tuiState.messages.length, 30);
     renderAll();
     return;
   }

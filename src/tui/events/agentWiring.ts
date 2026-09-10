@@ -20,6 +20,7 @@ import { loadSession, formatExitMessage } from "../../lib/sessionPersistence";
 import { A } from "../../term";
 import { updateCrashToolResult, markCleanExit } from "../../lib/crashRecovery";
 import { restoreTerminal } from "../../lib/terminalLifecycle";
+import { pinToTail } from "../viewport";
 import { getGlobalTracker } from "../../lib/usage";
 import { pluginManager } from "../../lib/plugins/pluginManager";
 import { getActiveProvider, getActiveApiKey, getActiveDefaultModel } from "../../providers";
@@ -92,7 +93,7 @@ export async function sendMessage(text: string): Promise<void> {
   tuiState.saveCurrentSession();
   let assistantIdx = tuiState.messages.length - 1;
 
-  tuiState.scrollOffset = 0;
+  pinToTail(tuiState.chatViewport);
   statusManager.start("Thinking…");
   let isReceivingStream = false;
 
@@ -219,13 +220,17 @@ export async function sendMessage(text: string): Promise<void> {
             tuiState.reasoningText += reasoningDelta;
             if (!tuiState.reasoningElapsed) tuiState.reasoningElapsed = tuiState.elapsedDisplay || "";
             statusManager.update("Thinking");
-            tuiState.requestRender();
+            // Coalesced repaint: never one full frame per reasoning token.
+            tuiState.requestStreamRender();
           }
           if (delta?.content) {
             if (tuiState.agentPhase === "thinking") tuiState.agentPhase = "streaming";
             fullText += delta.content;
             tuiState.messages[assistantIdx] = { role: "assistant", content: fullText + "▊" };
-            tuiState.scrollOffset = 0;
+            // Follow-tail lives in chatViewport (resolved once per frame in
+            // buildFrame) — do NOT reset scrollOffset here; that fought the
+            // user's scroll position and re-laid-out the frame every token.
+            tuiState.requestStreamRender();
           }
           if (Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0) {
             if (tuiState.agentPhase === "thinking" || tuiState.agentPhase === "streaming") {
@@ -401,7 +406,7 @@ export async function sendMessage(text: string): Promise<void> {
       }
     }
 
-    tuiState.scrollOffset = 0;
+    pinToTail(tuiState.chatViewport);
     tuiState.agentPhase = "done";
     const reasoningDoneMsg =
       tuiState.reasoningTokens > 0

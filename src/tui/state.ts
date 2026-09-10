@@ -2,6 +2,7 @@ import { saveSession, loadSession, listAllSessions, deleteSessionFile, createNew
 import { bypassEngine } from "../lib/bypass";
 import type { Msg, PendingConfirmation, Overlay } from "./types";
 import { updateCrashGoal } from "../lib/crashRecovery";
+import { createChatViewport, type ChatViewportState } from "./viewport";
 import {
   loadAllSkills,
   loadResolvedSkillsSync,
@@ -58,7 +59,32 @@ export class TuiState {
 
   inputBuffer = "";
   cursorPos = 0;
+  /** Kept for backward compatibility: 0 = pinned to tail (see chatViewport). */
   scrollOffset = 0;
+  /**
+   * Conversation viewport scroll model — single source of truth for follow-tail
+   * anchoring during streaming (see tui/viewport.ts). `scrollOffset` mirrors
+   * `chatViewport.topRow` after every resolve for legacy readers.
+   */
+  chatViewport: ChatViewportState = createChatViewport();
+
+  /**
+   * Stream render coalescing: stream deltas arrive far faster than the terminal
+   * can repaint full frames (~30-60 tokens/s vs a full rewrap of every message
+   * per frame). Buffer the request and repaint at most every STREAM_FRAME_MS,
+   * so N tokens per window cost ONE layout+render instead of N.
+   */
+  private streamRenderScheduled = false;
+  private static STREAM_FRAME_MS = 33;
+
+  requestStreamRender(): void {
+    if (this.streamRenderScheduled) return;
+    this.streamRenderScheduled = true;
+    setTimeout(() => {
+      this.streamRenderScheduled = false;
+      this.requestRender();
+    }, TuiState.STREAM_FRAME_MS);
+  }
   statusText = "";
   isStreaming = false;
   spinnerIdx = 0;
