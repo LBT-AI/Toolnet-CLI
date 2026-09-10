@@ -5,19 +5,21 @@
 
 import fs from "node:fs";
 import { getActiveProvider, getActiveBaseUrl, getActiveDefaultModel, OpenAICompatibleProvider, type Provider } from "../../providers";
-import { agentTools, getMergedAgentTools, executeTool } from "../agentTools";
-import { workspaceRoot, currentCwd, initWorkspace } from "../codingAgent";
-import { contextEngine, type ContextMessage, sessionMemory } from "../context";
-import { securityEngine, redactSecrets, type SandboxMode, getPermissionContextPrompt, clampSandboxMode } from "../security";
+import { getMergedAgentTools } from "../agentTools";
+import { workspaceRoot, currentCwd } from "../codingAgent";
+import { contextEngine, type ContextMessage } from "../context";
+import { securityEngine, type SandboxMode, getPermissionContextPrompt, clampSandboxMode } from "../security";
 import { getSandboxMode, setSandboxMode } from "../permissions";
-import { saveSession, loadSession } from "../sessionPersistence";
+import { saveSession } from "../sessionPersistence";
 import { detectProjectFramework } from "../projectDetector";
-import { getCliKey } from "../keys";
 import { bypassEngine } from "../bypass";
 import { getLanguageDirective, getResponseLanguage } from "../language";
-import { ToolCache, createMetrics, type ToolCall, type DispatchResult, type ToolPlannerMetrics } from "./toolPlanner";
-import { compressToolResult } from "./toolOutputCompressor";
+import { ToolCache, createMetrics, type ToolCall, type ToolPlannerMetrics } from "./toolPlanner";
 import { executeToolBatch, signatureForToolCall } from "./toolExecutor";
+import { toolRegistry } from "./toolRegistry";
+import { createWorkspaceContext, type WorkspaceContext } from "./workspace";
+import { AgentStateMachine } from "./agentState";
+import { normalizeChatResponse } from "./modelAdapter";
 import type {
   ExecutionMode,
   ExecutionOptions,
@@ -41,6 +43,8 @@ export class AgentHarness {
   private toolCallHistory: string[] = [];
   private loopAbortController: (AbortController & { aborted?: boolean }) | null = null;
   private activeMode: ExecutionMode = "HEADLESS";
+  private agentState = new AgentStateMachine();
+  private workspaceCtx: WorkspaceContext;
 
   constructor(config: HarnessConfig = {}) {
     // Self-heal stale module-global roots. bun test reuses worker processes
@@ -68,11 +72,27 @@ export class AgentHarness {
       setSandboxMode(config.sandboxMode);
     }
 
+    this.workspaceCtx = createWorkspaceContext({
+      root: this.config.workspaceRoot,
+      cwd: this.config.currentCwd,
+      sandboxMode: this.config.sandboxMode as WorkspaceContext["sandboxMode"],
+    });
+
     this.emitEvent("harness:init", "HEADLESS", {
       workspaceRoot: this.config.workspaceRoot,
       sessionId: this.config.sessionId,
       model: this.config.model,
     });
+  }
+
+  // ── Workspace awareness (§8) ─────────────────────────────────────────────
+
+  getWorkspace(): WorkspaceContext {
+    return { ...this.workspaceCtx };
+  }
+
+  getAgentState(): string {
+    return this.agentState.state;
   }
 
   // ── Event Bus ─────────────────────────────────────────────────────────────
@@ -282,7 +302,7 @@ export class AgentHarness {
         chatRes = await provider.chat({
           model,
           messages: prep.messages as any,
-          tools: options.toolsOverride || getMergedAgentTools(),
+          tools: options.toolsOverride || toolRegistry.schemas(),
           tool_choice: options.toolChoice || "auto",
           headers: extraHeaders,
           signal: combinedSignal,
