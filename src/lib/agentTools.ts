@@ -27,6 +27,8 @@ import {
 import { getMcpAgentTools as getMcpRunnerAgentTools, executeMcpTool } from "./mcpRunner";
 import { executeBrowserTool } from "./browserTool";
 import { ToolCache } from "./harness/toolPlanner";
+import { toolRegistry } from "./harness/toolRegistry";
+import type { ToolExecutionContext } from "./security/types";
 
 // ── Shared tool cache — used by ALL callers (TUI, AgentRuntime, SubAgent, Harness)
 const _toolCache = new ToolCache();
@@ -575,6 +577,23 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
       const mcpResult = await executeMcpTool(name, args);
       if (mcpResult !== null) {
         return mcpResult;
+      }
+      const regEntry = toolRegistry.get(name);
+      if (regEntry?.execute) {
+        const ctx: ToolExecutionContext = options
+          ? {
+              cwd: options.cwd,
+              workspaceRoot: options.workspaceRoot,
+              sandboxMode: options.sandboxMode,
+              signal: options.signal,
+              sessionId: options.sessionId,
+              agentRole: options.agentRole,
+              agentDepth: options.agentDepth,
+              source: options.source,
+            }
+          : {};
+        const result = await regEntry.execute(args, ctx);
+        return result;
       }
       return JSON.stringify({ stdout: "", stderr: `Unknown tool: ${name}`, exitCode: 1 });
     }

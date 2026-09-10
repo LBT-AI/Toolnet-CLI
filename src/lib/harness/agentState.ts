@@ -1,10 +1,3 @@
-/**
- * AgentState — §16  Canonical lifecycle state machine.
- *
- * Replaces the scattered booleans (isRunning / isThinking / isToolRunning /
- * isWaiting) with a single typed state + explicit transitions.
- */
-
 export type AgentState =
   | "idle"
   | "thinking"
@@ -22,7 +15,6 @@ export interface AgentStateTransition {
   reason?: string;
 }
 
-/** Allowed edges — anything not listed is an illegal transition. */
 const ALLOWED: Record<AgentState, AgentState[]> = {
   idle: ["thinking"],
   thinking: ["executing-tool", "awaiting-permission", "responding", "cancelled", "error"],
@@ -35,7 +27,6 @@ const ALLOWED: Record<AgentState, AgentState[]> = {
 };
 
 export function isValidTransition(from: AgentState, to: AgentState): boolean {
-  // Allow self-loops (e.g. staying in thinking while streaming)
   if (from === to) return true;
   const next = ALLOWED[from];
   return Boolean(next && next.includes(to));
@@ -55,15 +46,10 @@ export class AgentStateMachine {
     return () => this.listeners.delete(listener);
   }
 
-  /**
-   * Attempt a transition. Throws in dev/test when the edge is illegal so
-   * bugs in the agent loop surface immediately.
-   */
   transition(to: AgentState, reason?: string): void {
     const from = this._state;
     if (!isValidTransition(from, to)) {
       const msg = `Illegal AgentState transition: ${from} → ${to}${reason ? ` (${reason})` : ""}`;
-      // In production we still allow it (fail-open for UX), but log.
       if (process.env.NODE_ENV === "test") {
         throw new Error(msg);
       }
@@ -79,7 +65,6 @@ export class AgentStateMachine {
     }
   }
 
-  /** Force reset to idle (e.g. after cancel/error recovery). */
   reset(): void {
     const from = this._state;
     this._state = "idle";

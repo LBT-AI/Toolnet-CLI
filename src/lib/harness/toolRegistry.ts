@@ -92,7 +92,9 @@ const REGISTRY: ToolDefinition[] = [
   }),
   tool({
     name: "read_file",
-    description: "Read content of a file. Use offset/limit to paginate large files.",
+    description: `Read file contents from the current workspace.
+Use before editing unfamiliar files to understand the existing code.
+Prefer targeted reads with offset/limit over reading the entire repository.`,
     parameters: {
       type: "object",
       properties: {
@@ -112,7 +114,10 @@ const REGISTRY: ToolDefinition[] = [
   }),
   tool({
     name: "write_file",
-    description: "Write or overwrite content to a file.",
+    description: `Create a new file or replace an existing file in the workspace.
+Use this tool when the user explicitly asks you to create/write a file
+or when implementation requires a new file.
+Do not say a file was created until this tool succeeds.`,
     parameters: {
       type: "object",
       properties: {
@@ -135,7 +140,9 @@ const REGISTRY: ToolDefinition[] = [
   }),
   tool({
     name: "edit_file",
-    description: "Replace an exact string in a file with a new string (first occurrence).",
+    description: `Replace an exact string in a file with a new string (first occurrence).
+Use for small targeted edits in existing files.
+Provide the exact old_string as it appears in the file.`,
     parameters: {
       type: "object",
       properties: {
@@ -171,7 +178,8 @@ const REGISTRY: ToolDefinition[] = [
   }),
   tool({
     name: "replace_all",
-    description: "Replace ALL occurrences of a string in a file.",
+    description: `Replace ALL occurrences of a string in a file.
+Use when the same change must be applied everywhere in a file.`,
     parameters: {
       type: "object",
       properties: {
@@ -212,7 +220,9 @@ const REGISTRY: ToolDefinition[] = [
   }),
   tool({
     name: "apply_patch",
-    description: "Apply a structured unified diff patch to target file(s) in the workspace. Fully undoable via /undo.",
+    description: `Apply a unified diff patch to one or more files.
+Prefer this for multi-hunk or multi-file edits when you have the exact diff text.
+The patch must use standard unified diff format (---/+++ headers).`,
     parameters: { type: "object", properties: { patch: { type: "string", description: "Unified diff / patch text" } }, required: ["patch"] },
     risk: "write",
     category: "Workspace",
@@ -273,7 +283,10 @@ const REGISTRY: ToolDefinition[] = [
   }),
   tool({
     name: "grep",
-    description: "Search for text/regex pattern recursively across files.",
+    description: `Search project files for symbols, strings, imports, routes,
+functions, classes, configuration values, or usages.
+Use this to locate relevant code before editing.
+`,
     parameters: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" }, include: { type: "string" } }, required: ["pattern"] },
     risk: "read",
     category: "Search",
@@ -297,7 +310,9 @@ const REGISTRY: ToolDefinition[] = [
   }),
   tool({
     name: "glob",
-    description: "Find files by glob pattern (e.g. '*.ts', 'src/**/*.js').",
+    description: `Find files by glob pattern.
+Use to locate files matching a pattern, e.g. '*.test.ts', 'src/**/*.ts'.
+`,
     parameters: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" } }, required: ["pattern"] },
     risk: "read",
     category: "Search",
@@ -321,7 +336,50 @@ const REGISTRY: ToolDefinition[] = [
   }),
   tool({
     name: "shell",
-    description: "Run a bash shell command.",
+    description: `Run shell commands in the workspace.
+Use for tests, builds, typechecks, linting and project inspection.
+Do not use destructive commands unless necessary and permitted.
+`,
+    parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    risk: "execute",
+    category: "Shell",
+    async execute(input: { command?: string; cmd?: string }, ctx) {
+      const cmd = input.command || input.cmd || "";
+      const { toolBash } = await import("../codingAgent");
+      const res = await toolBash(cmd, 30000, {
+        cwd: ctx.cwd,
+        workspaceRoot: ctx.workspaceRoot,
+        sandboxMode: ctx.sandboxMode as "workspace" | "ask" | "full-access" | undefined,
+        signal: ctx.signal,
+      });
+      return JSON.stringify({ stdout: res.stdout || "", stderr: res.stderr || res.error || "", exitCode: res.exitCode });
+    },
+  }),
+  tool({
+    name: "bash",
+    description: `Run a shell command in the workspace.
+Alias for shell. Use for tests, builds, typechecks, linting and project inspection.
+`,
+    parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    risk: "execute",
+    category: "Shell",
+    async execute(input: { command?: string; cmd?: string }, ctx) {
+      const cmd = input.command || input.cmd || "";
+      const { toolBash } = await import("../codingAgent");
+      const res = await toolBash(cmd, 30000, {
+        cwd: ctx.cwd,
+        workspaceRoot: ctx.workspaceRoot,
+        sandboxMode: ctx.sandboxMode as "workspace" | "ask" | "full-access" | undefined,
+        signal: ctx.signal,
+      });
+      return JSON.stringify({ stdout: res.stdout || "", stderr: res.stderr || res.error || "", exitCode: res.exitCode });
+    },
+  }),
+  tool({
+    name: "run_command",
+    description: `Run a shell command in the workspace.
+Alias for shell. Use for tests, builds, typechecks, linting and project inspection.
+`,
     parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
     risk: "execute",
     category: "Shell",

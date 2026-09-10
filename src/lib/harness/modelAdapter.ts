@@ -35,11 +35,8 @@ export interface AgentToolCall {
 }
 
 export interface AgentModelResponse {
-  /** Final assistant text (may be empty when toolCalls are present). */
   content: string;
-  /** Optional concise reasoning summary when the model exposes it. */
   reasoningSummary?: string;
-  /** Normalized tool calls — empty when the model is answering. */
   toolCalls: AgentToolCall[];
   usage?: {
     inputTokens?: number;
@@ -47,7 +44,6 @@ export interface AgentModelResponse {
     reasoningTokens?: number;
     totalTokens?: number;
   };
-  /** Provider finish_reason when available (stop / tool_calls / length …). */
   finishReason?: string | null;
 }
 
@@ -65,21 +61,12 @@ export interface AgentModelRequest {
 
 import { getModelCapabilities } from "../reasoning";
 
-/**
- * Runtime capabilities seen by the adapter. Undefined → unknown → assume
- * the model is capable (fail-open for tool delivery, fail-closed for fake
- * success is handled elsewhere — claimGuard + verification).
- */
 function resolveCaps(modelId: string): ModelCapabilities | undefined {
   return getModelCapabilities(modelId);
 }
 
 // ── Structured tool protocol (non-native tool calling) ──────────────────────
 
-/**
- * Strict JSON schema for one structured tool call. We only accept this shape —
- * prose like "I created test.py" is never parsed.
- */
 interface StructuredToolCall {
   type: "tool_call";
   tool: string;
@@ -124,27 +111,19 @@ function isStructuredToolCall(v: unknown): v is StructuredToolCall {
   return true;
 }
 
-/**
- * Try to extract structured tool calls from plain text content.
- * We look for fenced ```json blocks and for bare JSON objects.
- * Returns null when nothing strict matches.
- */
 export function parseStructuredToolCalls(content: string): AgentToolCall[] | null {
   if (!content || typeof content !== "string") return null;
 
   const candidates: string[] = [];
 
-  // 1) ```json ... ``` blocks (most common for non-native models)
   for (const m of content.matchAll(/```(?:json)?\s*\n([\s\S]*?)\n```/g)) {
     const inner = m[1].trim();
     if (inner) candidates.push(inner);
   }
-  // 2) Bare JSON objects on their own line — only when the whole content is JSON-ish
   const trimmed = content.trim();
   if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
     candidates.push(trimmed);
   }
-  // 3) Array of tool calls
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
     candidates.push(trimmed);
   }
@@ -193,7 +172,6 @@ function normalizeToolCallsFromResponse(msg: ChatMessage): AgentToolCall[] {
       try {
         args = JSON.parse(rawArgs);
       } catch {
-        // Malformed JSON from provider — keep raw string as fallback
         args = rawArgs;
       }
     } else if (rawArgs && typeof rawArgs === "object") {
@@ -234,22 +212,12 @@ export class ModelAdapter {
     return this.provider.id;
   }
 
-  /**
-   * Non-streaming complete — returns a fully normalized AgentModelResponse.
-   * This is what the agent loop (runAgent) uses. The TUI streaming path
-   * should use stream() below and coalesce deltas.
-   */
   async complete(req: AgentModelRequest): Promise<AgentModelResponse> {
     const caps = resolveCaps(req.model);
 
-    // Capability guard: when the model has explicitly declared tools=false,
-    // never hand it tool definitions. It will answer with text only.
     const toolsForRequest =
       caps?.tools === false ? undefined : (req.tools as ChatRequest["tools"]);
 
-    // When the model advertises tools but not nativeToolCalls, we still give
-    // it the schemas but also enable the structured-protocol fallback below.
-    // The provider adapter may ignore tools it doesn't understand — that's fine.
     const chatReq: ChatRequest = {
       model: req.model,
       messages: req.messages,
@@ -268,13 +236,9 @@ export class ModelAdapter {
       return { content: "", toolCalls: [], usage: usageFromResponse(res.usage), finishReason: choice?.finish_reason ?? null };
     }
 
-    // Native tool calls
     let toolCalls = normalizeToolCallsFromResponse(msg);
     let content = msg.content ?? "";
 
-    // Structured fallback — only when the model lacks native tool calling.
-    // We deliberately check nativeToolCalls !== true (explicit opt-out) so
-    // unknown models stay on the native path.
     const needsStructuredFallback =
       toolCalls.length === 0 &&
       Boolean(content) &&
@@ -284,12 +248,10 @@ export class ModelAdapter {
       const structured = parseStructuredToolCalls(content);
       if (structured && structured.length > 0) {
         toolCalls = structured;
-        // When we extracted structured calls, the prose wrapper is not the answer
         content = "";
       }
     }
 
-    // Never synthesize tool calls from prose — only strict JSON above counts.
     return {
       content,
       toolCalls,
@@ -298,10 +260,6 @@ export class ModelAdapter {
     };
   }
 
-  /**
-   * Streaming complete — yields normalized deltas. The caller is responsible
-   * for accumulating content/toolCalls and for coalescing repaints.
-   */
   async *stream(req: AgentModelRequest): AsyncIterable<{
     contentDelta?: string;
     reasoningDelta?: string;
@@ -310,7 +268,6 @@ export class ModelAdapter {
     finishReason?: string | null;
   }> {
     if (typeof this.provider.stream !== "function") {
-      // Fallback to non-streaming
       const res = await this.complete(req);
       if (res.content) yield { contentDelta: res.content };
       for (let i = 0; i < res.toolCalls.length; i++) {
@@ -355,7 +312,6 @@ export class ModelAdapter {
       const contentDelta = delta.content as string | undefined;
       if (contentDelta) yield { contentDelta };
 
-      // Tool call deltas — OpenAI streaming shape may send index + partials
       const rawToolDeltas = (delta as { tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> }).tool_calls;
       if (Array.isArray(rawToolDeltas)) {
         for (const td of rawToolDeltas) {
@@ -377,14 +333,17 @@ export class ModelAdapter {
   }
 }
 
-/**
- * Convenience: one-shot normalize of a ChatResponse without constructing an adapter.
- * Useful in tests and in harness resume paths.
- */
 export function normalizeChatResponse(res: ChatResponse, modelId?: string): AgentModelResponse {
   const choice = res.choices?.[0];
   const msg = choice?.message;
-  if (!msg) return { content: "", toolCalls: [], usage: usageFromResponse(res.usage), finishReason: choice?.finish_reason ?? null };
+  if (!msg) {
+    return {
+      content: "",
+      toolCalls: [],
+      usage: usageFromResponse(res.usage),
+      finishReason: choice?.finish_reason ?? null,
+    };
+  }
 
   let toolCalls = normalizeToolCallsFromResponse(msg);
   let content = msg.content ?? "";
@@ -402,5 +361,10 @@ export function normalizeChatResponse(res: ChatResponse, modelId?: string): Agen
     }
   }
 
-  return { content, toolCalls, usage: usageFromResponse(res.usage), finishReason: choice?.finish_reason ?? null };
+  return {
+    content,
+    toolCalls,
+    usage: usageFromResponse(res.usage),
+    finishReason: choice?.finish_reason ?? null,
+  };
 }

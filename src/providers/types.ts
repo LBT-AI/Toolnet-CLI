@@ -21,6 +21,13 @@ export interface ModelCapabilities {
    *  agent loop must not hand it tool definitions (it would ignore them and
    *  narrate fake success). Undefined = unknown → assume capable. */
   tools?: boolean;
+  /** True when the model supports native OpenAI-style tool_calls. False
+   *  means the adapter must use the structured tool protocol fallback. */
+  nativeToolCalls?: boolean;
+  /** Model can process image inputs. */
+  vision?: boolean;
+  /** Provider streams ChatChunk deltas for this model. */
+  streaming?: boolean;
 }
 
 export interface ModelInfo {

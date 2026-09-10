@@ -11,7 +11,11 @@ import { contextEngine, type ContextMessage } from "../context";
 import { securityEngine, type SandboxMode, getPermissionContextPrompt, clampSandboxMode } from "../security";
 import { getSandboxMode, setSandboxMode } from "../permissions";
 import { saveSession } from "../sessionPersistence";
-import { detectProjectFramework } from "../projectDetector";
+import { detectProjectFramework, buildProjectContext } from "../projectDetector";
+import { getCodingAgentPolicy, getCodingAgentToolUseGuidance } from "../codingAgentPolicy";
+import { ChangeTracker } from "./changeTracker";
+import { analyzePrompt, buildSystemPromptForTask } from "./taskUnderstanding";
+import { TaskContextManager } from "./taskContext";
 import { bypassEngine } from "../bypass";
 import { getLanguageDirective, getResponseLanguage } from "../language";
 import { ToolCache, createMetrics, type ToolCall, type ToolPlannerMetrics } from "./toolPlanner";
@@ -29,6 +33,7 @@ import type {
   HarnessEventType,
   HarnessResult,
   HarnessSnapshot,
+  ActiveTaskContext,
 } from "./types";
 import type { AgentRole } from "../../teamwork/types";
 
@@ -45,13 +50,10 @@ export class AgentHarness {
   private activeMode: ExecutionMode = "HEADLESS";
   private agentState = new AgentStateMachine();
   private workspaceCtx: WorkspaceContext;
+  private changeTracker = new ChangeTracker();
+  private taskContextManager = new TaskContextManager();
 
   constructor(config: HarnessConfig = {}) {
-    // Self-heal stale module-global roots. bun test reuses worker processes
-    // across test files (and a /cd at runtime can move cwd), so the module
-    // globals may point at a directory that no longer exists. A deleted root
-    // must never make later harnesses fail security evaluation — fall back to
-    // the stable process cwd, mirroring resolveShellExecCwd.
     const stableRoot =
       workspaceRoot && fs.existsSync(workspaceRoot) ? workspaceRoot : process.cwd();
     const stableCwd =
@@ -102,7 +104,7 @@ export class AgentHarness {
     return () => this.eventListeners.delete(listener);
   }
 
-  private emitEvent(type: HarnessEventType, mode: ExecutionMode, payload?: any) {
+  emitEvent(type: HarnessEventType, mode: ExecutionMode, payload?: any) {
     const event: HarnessEvent = {
       type,
       timestamp: Date.now(),
@@ -127,7 +129,6 @@ export class AgentHarness {
     const cwd = options.cwd || this.config.currentCwd || process.cwd();
     const mode = this.config.sandboxMode || getSandboxMode();
 
-    // Guard: already cancelled — fail fast without executing.
     if (options.signal?.aborted) {
       return {
         result: JSON.stringify({ stdout: "", stderr: "Cancelled", exitCode: 130 }),
@@ -138,8 +139,6 @@ export class AgentHarness {
 
     this.metrics.toolCallsRequested++;
 
-    // Single Tool Execution Chokepoint: ToolGateway evaluates SecurityEngine,
-    // checks permissions fail-closed, gates approval, caches, and audits.
     const { ToolGateway } = await import("../security/toolGateway");
     const gatewayRes = await ToolGateway.execute({ name, args }, {
       cwd,
@@ -180,7 +179,6 @@ export class AgentHarness {
     this.totalToolCalls++;
     this.metrics.toolCallsExecuted++;
 
-    // Track file access for context engine
     const isWriteTool = name === "write_file" || name === "edit_file" || name === "replace_all" || name === "apply_patch";
     if (args?.path) {
       contextEngine.recordFileAccess(
@@ -188,6 +186,13 @@ export class AgentHarness {
         isWriteTool ? "write" : "read",
         this.config.sessionId
       );
+      if (isWriteTool) {
+        if (name === "write_file" && !fs.existsSync(args.path)) {
+          this.changeTracker.trackCreated(args.path);
+        } else {
+          this.changeTracker.trackModified(args.path);
+        }
+      }
     }
 
     const output = gatewayRes.stdout || JSON.stringify({ success: true });
@@ -200,7 +205,15 @@ export class AgentHarness {
     };
   }
 
-  // ── Execution Loop Strategy ───────────────────────────────────────────────
+  getChangeTracker(): ChangeTracker {
+    return this.changeTracker;
+  }
+
+  getTaskContextManager(): TaskContextManager {
+    return this.taskContextManager;
+  }
+
+  // ── Core Execution Loop ──────────────────────────────────────────────────
 
   async executeLoop(
     initialMessages: ContextMessage[],
@@ -238,24 +251,19 @@ export class AgentHarness {
     let turnsUsed = 0;
     let accumulatedTokens = 0;
 
-    // Cross-turn loop detection is scoped per-loop invocation.
     this.toolCallHistory = [];
-
     this.activeMode = mode;
 
-    // Support for cancel(): each loop installs a fresh AbortController so a
-    // concurrent cancel() can stop the provider request. An external signal
-    // (options.signal) is combined so a parent request cancel propagates here.
     const abort = new AbortController() as AbortController & { aborted?: boolean };
     this.loopAbortController = abort;
 
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
-    const signals = [timeoutSignal];
+    const signals: AbortSignal[] = [timeoutSignal];
     if (abort.signal) signals.push(abort.signal);
     if (options.signal) signals.push(options.signal);
     const combinedSignal =
       typeof AbortSignal.any === "function"
-        ? AbortSignal.any(signals as AbortSignal[])
+        ? AbortSignal.any(signals)
         : timeoutSignal;
 
     const extraHeaders: Record<string, string> = {};
@@ -285,7 +293,6 @@ export class AgentHarness {
         };
       }
 
-      // Prepare context via Unified Context Engine
       const prep = contextEngine.prepareMessagesForApi(messages, { model, sessionId });
       accumulatedTokens = prep.budget.currentEstimatedTokens;
       this.totalTokensUsed += accumulatedTokens;
@@ -342,10 +349,6 @@ export class AgentHarness {
       const choice = chatRes.choices?.[0];
       const assistantMsg = choice?.message;
 
-      // Layer 4 — Phase 4: split token accounting. The provider's reported
-      // `usage` is the ground truth; the heuristic estimate stays in
-      // tokenBudgetState.estimatedContextTokens and is NOT added to
-      // cumulativeSessionTokens (which is a separate counter).
       if (chatRes.usage) {
         contextEngine.recordUsage(
           {
@@ -382,7 +385,6 @@ export class AgentHarness {
 
       const toolCalls = assistantMsg.tool_calls;
       if (!toolCalls || toolCalls.length === 0) {
-        // Anti-Refusal Interceptor
         if (bypassEngine.isEnabled() && bypassEngine.getConfig().autoEscalate && turnsUsed < maxTurns) {
           const refusal = bypassEngine.checkRefusal(assistantMsg.content || "");
           if (refusal.isRefusal) {
@@ -403,7 +405,6 @@ export class AgentHarness {
           }
         }
 
-        // Successful final text response
         const finalOutput = assistantMsg.content || "";
         this.emitEvent("agent:complete", mode, { output: finalOutput, turnsUsed, toolCallsCount });
 
@@ -434,8 +435,6 @@ export class AgentHarness {
         };
       }
 
-      // Execute requested tool calls through the unified P1 pipeline:
-      //   dedup → parallel-safe classification → cache/compress (via executeTool in dispatchTool).
       const parsedCalls: ToolCall[] = toolCalls.map((call: any) => {
         let toolArgs: any = {};
         try { toolArgs = JSON.parse(call.function.arguments || "{}"); } catch {}
@@ -455,8 +454,6 @@ export class AgentHarness {
         needsApproval,
         maxRepeat: 2,
         runTool: async (name, args, id) => {
-          // Cross-turn infinite-loop detection using canonical (key-order
-          // insensitive) signatures. Abort after 3 identical invocations.
           const sig = signatureForToolCall(name, args);
           if (this.toolCallHistory.filter((s) => s === sig).length >= 2) {
             loopAborted = true;
@@ -532,32 +529,22 @@ export class AgentHarness {
     };
   }
 
-  /**
-   * Cancels the currently-running loop (if any) by aborting the active
-   * provider request and any subsequent turns.
-   */
-  cancel(): void {
-    const ctrl = this.loopAbortController;
-    if (ctrl) {
-      try { ctrl.abort(); } catch {}
-    }
-  }
+  // ── AgentLoop entry point ─────────────────────────────────────────────────
 
-  // ── High-Level Orchestration Entry Points ─────────────────────────────────
-
-  /**
-   * Sends a user prompt and runs the full ReAct loop until a final answer or
-   * the turn budget is exhausted. This is the single entry point used by the
-   * semantic wrappers (headless, turbo, subagent) and by AgentRuntime.
-   */
-  async run(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
-    const mode = options.mode || "HEADLESS";
+  private buildSystemPrompt(extra?: string, taskSummary?: string): string {
     const memoryPrompt = contextEngine.getMemoryPromptSnippet(this.config.sessionId);
     const toolRules = contextEngine.getToolUsageRulesSnippet();
     const permissionContext = getPermissionContextPrompt(this.config.sandboxMode || getSandboxMode());
-    const baseSystemPrompt =
-      options.systemPrompt ||
-      `You are ToolNet API CLI Agent. Complete the user request using available tools with maximum efficiency.
+    const codingPolicy = getCodingAgentPolicy();
+    const toolGuidance = getCodingAgentToolUseGuidance();
+    const projectCtx = buildProjectContext(this.config.workspaceRoot || process.cwd(), this.config.currentCwd || this.config.workspaceRoot || process.cwd());
+    const projectSummary = this.formatProjectContext(projectCtx);
+    const taskBlock = taskSummary ? `\n${taskSummary}\n` : "";
+    const base = `${codingPolicy}
+
+${toolGuidance}
+
+${projectSummary}${taskBlock}
 
 ${permissionContext}
 
@@ -566,7 +553,69 @@ Your access is strictly limited to the policy described in [RUNTIME PERMISSION C
 ${memoryPrompt}${toolRules}
 
 ${getLanguageDirective(getResponseLanguage())}`;
-    const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
+    return bypassEngine.getBypassSystemPrompt(extra || base);
+  }
+
+  private formatProjectContext(ctx: ReturnType<typeof buildProjectContext>): string {
+    const lines: string[] = ["[PROJECT CONTEXT]"];
+    lines.push(`Workspace: ${ctx.workspaceRoot}`);
+    if (ctx.gitRoot) lines.push(`Git root: ${ctx.gitRoot}`);
+    if (ctx.language.length > 0) lines.push(`Languages: ${ctx.language.join(", ")}`);
+    if (ctx.packageManager) lines.push(`Package manager: ${ctx.packageManager}`);
+    if (ctx.framework.length > 0) lines.push(`Frameworks: ${ctx.framework.join(", ")}`);
+    if (ctx.manifestFiles.length > 0) lines.push(`Manifest files: ${ctx.manifestFiles.join(", ")}`);
+    if (ctx.testCommands.length > 0) lines.push(`Test commands: ${ctx.testCommands.join(", ")}`);
+    if (ctx.buildCommands.length > 0) lines.push(`Build commands: ${ctx.buildCommands.join(", ")}`);
+    if (ctx.lintCommands.length > 0) lines.push(`Lint commands: ${ctx.lintCommands.join(", ")}`);
+    if (ctx.typecheckCommands.length > 0) lines.push(`Typecheck commands: ${ctx.typecheckCommands.join(", ")}`);
+    lines.push("");
+    return lines.join("\n");
+  }
+
+  private formatActiveTaskContext(ctx: ActiveTaskContext, task: import("./types").TaskContext): string {
+    const lines: string[] = ["[ACTIVE TASK CONTEXT]"];
+    if (ctx.currentGoal) lines.push(`Current goal: ${ctx.currentGoal}`);
+    if (ctx.currentFiles.length > 0) lines.push(`Current files: ${ctx.currentFiles.join(", ")}`);
+    if (ctx.currentUrls.length > 0) lines.push(`Current URLs: ${ctx.currentUrls.join(", ")}`);
+    if (ctx.currentPlan.length > 0) lines.push(`Plan: ${ctx.currentPlan.join(" → ")}`);
+    if (ctx.completedSteps.length > 0) lines.push(`Completed: ${ctx.completedSteps.join(", ")}`);
+    if (ctx.pendingSteps.length > 0) lines.push(`Pending: ${ctx.pendingSteps.join(", ")}`);
+    if (ctx.constraints.length > 0) lines.push(`Constraints: ${ctx.constraints.join(", ")}`);
+    if (ctx.requirements.length > 0) {
+      lines.push("Requirements:");
+      for (const r of ctx.requirements) {
+        const icon = r.status === "satisfied" ? "✓" : r.status === "blocked" ? "✗" : "○";
+        lines.push(`  ${icon} ${r.text}`);
+      }
+    }
+    if (task.intent) lines.push(`Detected intent: ${task.intent}`);
+    if (task.ambiguities.length > 0) {
+      lines.push(`Ambiguities: ${task.ambiguities.join("; ")}`);
+    }
+    lines.push("");
+    return lines.join("\n");
+  }
+
+  /**
+   * Single-shot execution entry point used by AgentLoop.
+   * Builds a standard system+user message pair and runs the full ReAct loop.
+   */
+  async execute(options: ExecutionOptions = {}): Promise<HarnessResult> {
+    const mode = options.mode || "HEADLESS";
+    const prompt = options.prompt || "";
+
+    // ── Task Understanding Layer ────────────────────────────────────────────
+    const task = analyzePrompt(prompt);
+    this.taskContextManager.setGoal(task.objectives[0] || prompt);
+    this.taskContextManager.addFiles(task.referencedFiles);
+    this.taskContextManager.addUrls(task.referencedUrls);
+    for (const c of task.constraints) {
+      this.taskContextManager.addConstraint(c);
+    }
+
+    const activeCtx = this.taskContextManager.getContext();
+    const taskSummary = this.formatActiveTaskContext(activeCtx, task);
+    const systemPrompt = this.buildSystemPrompt(options.systemPrompt, taskSummary);
 
     const messages: ContextMessage[] = [
       { role: "system", content: systemPrompt },
@@ -577,33 +626,36 @@ ${getLanguageDirective(getResponseLanguage())}`;
   }
 
   /**
-   * Resumes the ReAct loop from an existing message history (e.g. a persisted
-   * or previously-returned conversation), optionally appending a new user turn.
+   * Cancels the currently-running loop (if any).
    */
+  cancel(): void {
+    const ctrl = this.loopAbortController;
+    if (ctrl) {
+      try { ctrl.abort(); } catch {}
+    }
+  }
+
+  // ── High-Level Orchestration Entry Points ─────────────────────────────────
+
+  async run(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
+    const mode = options.mode || "HEADLESS";
+    const systemPrompt = this.buildSystemPrompt(options.systemPrompt);
+
+    const messages: ContextMessage[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: prompt },
+    ];
+
+    return this.executeLoop(messages, options, mode);
+  }
+
   async resume(messages: ContextMessage[], options: ExecutionOptions = {}): Promise<HarnessResult> {
     const mode = options.mode || "HEADLESS";
     return this.executeLoop([...messages], options, mode);
   }
 
-  /**
-   * Runs headless 1-turn task (equivalent to toolnet -p "...")
-   */
   async runHeadless(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
-    const memoryPrompt = contextEngine.getMemoryPromptSnippet(this.config.sessionId);
-    const toolRules = contextEngine.getToolUsageRulesSnippet();
-    const permissionContext = getPermissionContextPrompt(this.config.sandboxMode || getSandboxMode());
-    const baseSystemPrompt =
-      options.systemPrompt ||
-      `You are ToolNet API CLI Agent. Complete the user request using available tools with maximum efficiency.
-
-${permissionContext}
-
-Your access is strictly limited to the policy described in [RUNTIME PERMISSION CONTEXT] above.
-
-${memoryPrompt}${toolRules}
-
-${getLanguageDirective(getResponseLanguage())}`;
-    const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
+    const systemPrompt = this.buildSystemPrompt(options.systemPrompt);
 
     const messages: ContextMessage[] = [
       { role: "system", content: systemPrompt },
@@ -613,19 +665,13 @@ ${getLanguageDirective(getResponseLanguage())}`;
     return this.executeLoop(messages, options, "HEADLESS");
   }
 
-  /**
-   * Runs hyper-optimized Turbo single-pass execution.
-   */
   async runTurbo(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
-    const permissionContext = getPermissionContextPrompt(this.config.sandboxMode || getSandboxMode());
-    const baseSystemPrompt = `You are ToolNet Turbo Agent. Execute the user request immediately with minimal latency. Use tools directly and summarize outcome.
+    const turboPrompt = `You are ToolNet Turbo Agent. Execute the user request immediately with minimal latency. Use tools directly and summarize outcome.
 
-${permissionContext}
+${getCodingAgentPolicy()}
 
-Your access is strictly limited to the policy described in [RUNTIME PERMISSION CONTEXT] above.
-
-${getLanguageDirective(getResponseLanguage())}`;
-    const systemPrompt = bypassEngine.getBypassSystemPrompt(baseSystemPrompt);
+${getCodingAgentToolUseGuidance()}`;
+    const systemPrompt = this.buildSystemPrompt(options.systemPrompt || turboPrompt);
     const messages: ContextMessage[] = [
       { role: "system", content: systemPrompt },
       { role: "user", content: prompt },
@@ -634,9 +680,6 @@ ${getLanguageDirective(getResponseLanguage())}`;
     return this.executeLoop(messages, { ...options, maxTurns: options.maxTurns || 5 }, "TURBO");
   }
 
-  /**
-   * Spawns an isolated Sub-Agent task.
-   */
   async runSubagent(
     role: AgentRole,
     task: string,
@@ -646,9 +689,6 @@ ${getLanguageDirective(getResponseLanguage())}`;
     const rolePrompt = getSubagentRolePrompt(role, task.slice(0, 50), options.sessionId || this.config.sessionId);
     const tools = options.toolsOverride || getSubagentTools(role);
 
-    // Subagent security inheritance: a child agent can never be granted more
-    // than its parent (childPolicy <= parentPolicy). It inherits the parent harness's
-    // sandbox mode or clamped to it, preventing any self-elevation.
     const parentMode = this.config.sandboxMode || getSandboxMode();
     const effectiveSandboxMode = clampSandboxMode(options.sandboxMode, parentMode);
     const permissionContext = getPermissionContextPrompt(effectiveSandboxMode);
@@ -671,7 +711,6 @@ Your access is strictly limited to the policy described in [RUNTIME PERMISSION C
       { ...options, toolsOverride: tools, maxTurns: options.maxTurns || 8 },
       "SUBAGENT"
     );
-    void 0; // options.agentRole/agentDepth flow into dispatchTool below
 
     if (res.success) {
       this.emitEvent("subagent:complete", "SUBAGENT", { role, task, output: res.output });
@@ -680,9 +719,6 @@ Your access is strictly limited to the policy described in [RUNTIME PERMISSION C
     return res;
   }
 
-  /**
-   * Runs Teamwork DAG multi-agent orchestrator.
-   */
   async runTeamwork(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
     const startTime = Date.now();
     const { generateTaskGraph } = await import("../../teamwork/smartPlanner");
@@ -699,8 +735,6 @@ Your access is strictly limited to the policy described in [RUNTIME PERMISSION C
       model: options.model || this.config.model,
     });
 
-    // External cancel (options.signal / this.cancel()) must stop the DAG:
-    // abort the scheduler's workers and cancel the scheduler itself.
     const cancelTeamwork = () => { try { scheduler.cancel(); } catch {} };
     if (options.signal) {
       if (options.signal.aborted) cancelTeamwork();

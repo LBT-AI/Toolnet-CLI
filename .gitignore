@@ -18,3 +18,4 @@ tmp/
 .clai/
 __pycache__/
 *.pyc
+.aider*

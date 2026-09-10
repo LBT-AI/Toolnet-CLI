@@ -12,15 +12,28 @@ export type ProjectFramework =
 
 export interface ProjectDetectionResult {
   framework: ProjectFramework;
-  /** Ordered list of commands to run for verification */
   verifyCommands: string[];
-  /** Commands to build the project */
   buildCommands: string[];
-  /** Commands to run tests */
   testCommands: string[];
   hasTypecheck: boolean;
-  /** The config file that triggered detection, e.g. "package.json", "Cargo.toml" */
   configFile: string;
+}
+
+export interface ProjectContext {
+  workspaceRoot: string;
+  cwd: string;
+  gitRoot?: string;
+  language: string[];
+  packageManager?: string;
+  framework: string[];
+  manifestFiles: string[];
+  testCommands: string[];
+  buildCommands: string[];
+  lintCommands: string[];
+  typecheckCommands: string[];
+  hasTypecheck: boolean;
+  readmeFiles: string[];
+  agentFiles: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -235,3 +248,127 @@ export function detectProjectFramework(dir: string): ProjectDetectionResult {
     configFile: "",
   };
 }
+
+// ---------------------------------------------------------------------------
+// Lightweight ProjectContext builder
+// ---------------------------------------------------------------------------
+
+const MANIFEST_FILES = [
+  "package.json",
+  "bun.lock",
+  "bun.lockb",
+  "pnpm-lock.yaml",
+  "package-lock.json",
+  "yarn.lock",
+  "pyproject.toml",
+  "requirements.txt",
+  "setup.py",
+  "go.mod",
+  "Cargo.toml",
+  "composer.json",
+  "Gemfile",
+  "tsconfig.json",
+  "README.md",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "CONTRIBUTING.md",
+];
+
+const AGENT_FILES = ["AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md"];
+
+function detectGitRoot(start: string): string | undefined {
+  let dir = path.resolve(start);
+  for (let depth = 0; depth < 12; depth++) {
+    if (fs.existsSync(path.join(dir, ".git"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
+}
+
+function listExisting(dir: string, names: string[]): string[] {
+  const out: string[] = [];
+  for (const name of names) {
+    if (fs.existsSync(path.join(dir, name))) out.push(name);
+  }
+  return out;
+}
+
+export function buildProjectContext(workspaceRoot: string, cwd?: string): ProjectContext {
+  const root = workspaceRoot || process.cwd();
+  const cwdDir = cwd || root;
+  const gitRoot = detectGitRoot(cwdDir);
+  const detection = detectProjectFramework(root);
+
+  const pkgJsonPath = path.join(root, "package.json");
+  let packageManager: string | undefined;
+  let language: string[] = [];
+  let framework: string[] = [detection.framework];
+
+  if (fs.existsSync(pkgJsonPath)) {
+    const pkg = readJson(pkgJsonPath);
+    if (pkg) {
+      language.push("javascript", "typescript");
+      if (exists(path.join(root, "bun.lock")) || exists(path.join(root, "bun.lockb"))) {
+        packageManager = "bun";
+      } else if (exists(path.join(root, "pnpm-lock.yaml"))) {
+        packageManager = "pnpm";
+      } else if (exists(path.join(root, "yarn.lock"))) {
+        packageManager = "yarn";
+      } else {
+        packageManager = "npm";
+      }
+    }
+  }
+
+  if (detection.framework === "python") {
+    language.push("python");
+  } else if (detection.framework === "rust") {
+    language.push("rust");
+  } else if (detection.framework === "go") {
+    language.push("go");
+  } else if (detection.framework === "java") {
+    language.push("java");
+  }
+
+  const manifestFiles = listExisting(root, MANIFEST_FILES);
+  const readmeFiles = listExisting(root, ["README.md", "README", "readme.md"]);
+  const agentFiles = listExisting(root, AGENT_FILES);
+
+  const typecheckCommands: string[] = [];
+  if (detection.framework === "node") {
+    const scripts = (readJson(pkgJsonPath) as Record<string, any>)?.scripts ?? {};
+    if (scripts["typecheck"]) typecheckCommands.push(`${packageManager || "npm"} run typecheck`);
+    else if (scripts["type-check"]) typecheckCommands.push(`${packageManager || "npm"} run type-check`);
+    else if (fs.existsSync(path.join(root, "tsconfig.json"))) typecheckCommands.push("tsc --noEmit");
+  } else if (detection.framework === "python") {
+    if (manifestFiles.includes("pyproject.toml")) {
+      typecheckCommands.push("mypy .");
+    } else {
+      typecheckCommands.push("python -m py_compile **/*.py");
+    }
+  } else if (detection.framework === "rust") {
+    typecheckCommands.push("cargo check");
+  } else if (detection.framework === "go") {
+    typecheckCommands.push("go vet ./...");
+  }
+
+  return {
+    workspaceRoot: root,
+    cwd: cwdDir,
+    gitRoot,
+    language,
+    packageManager,
+    framework,
+    manifestFiles,
+    testCommands: detection.testCommands,
+    buildCommands: detection.buildCommands,
+    lintCommands: detection.framework === "node" ? [`${packageManager || "npm"} run lint`] : [],
+    typecheckCommands,
+    hasTypecheck: detection.hasTypecheck || typecheckCommands.length > 0,
+    readmeFiles,
+    agentFiles,
+  };
+}
+

@@ -29,7 +29,10 @@ export type HarnessEventType =
   | "agent:error"
   | "subagent:spawn"
   | "subagent:complete"
-  | "session:saved";
+  | "session:saved"
+  | "loop:start"
+  | "loop:end"
+  | "loop:error";
 
 export interface HarnessEvent {
   type: HarnessEventType;
@@ -54,6 +57,7 @@ export interface HarnessConfig {
 }
 
 export interface ExecutionOptions {
+  prompt?: string;
   model?: string;
   gatewayUrl?: string;
   baseUrl?: string;
@@ -116,3 +120,58 @@ export interface HarnessSnapshot {
   initializedAt: number;
   metrics?: HarnessMetrics;
 }
+
+// ── Task Understanding Layer ─────────────────────────────────────────────────
+
+export type Intent =
+  | "question"
+  | "inspect"
+  | "research"
+  | "create"
+  | "modify"
+  | "debug"
+  | "test"
+  | "review"
+  | "explain"
+  | "mixed";
+
+export interface TaskContext {
+  rawPrompt: string;
+  intent: Intent;
+  objectives: string[];
+  constraints: string[];
+  referencedFiles: string[];
+  referencedUrls: string[];
+  requiresWorkspace: boolean;
+  requiresNetwork: boolean;
+  requiresMutation: boolean;
+  requiresExecution: boolean;
+  requestedOutput?: string;
+  ambiguities: string[];
+}
+
+export type UrlKind = "github" | "documentation" | "webpage" | "api" | "raw-file" | "unknown";
+
+export interface ExternalContext {
+  source: string;
+  content: string;
+  trusted: false;
+}
+
+export interface Requirement {
+  id: string;
+  text: string;
+  status: "pending" | "satisfied" | "blocked";
+}
+
+export interface ActiveTaskContext {
+  currentGoal?: string;
+  currentFiles: string[];
+  currentUrls: string[];
+  currentPlan: string[];
+  completedSteps: string[];
+  pendingSteps: string[];
+  constraints: string[];
+  requirements: Requirement[];
+}
+
