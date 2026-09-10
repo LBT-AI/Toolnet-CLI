@@ -54,7 +54,7 @@ describe("R1 Core Architecture - TurboExecutor", () => {
             {
               message: {
                 role: "assistant",
-                content: "Renamed variable x to y in index.ts successfully.",
+                content: "The turbo executor routes tiny tasks straight to the agent kernel.",
               },
             },
           ],
@@ -65,10 +65,12 @@ describe("R1 Core Architecture - TurboExecutor", () => {
     }) as any;
 
     try {
-      const result = await executeTurboTask("rename variable x to y in index.ts");
+      // Non-mutating prompt: this test verifies TurboExecutor routing, while
+      // the Phase 73.9 Completion Gate owns mutation-task semantics.
+      const result = await executeTurboTask("explain how the turbo executor routes tiny tasks");
       expect(result.success).toBe(true);
       expect(result.sessionId).toBeDefined();
-      expect(result.output).toContain("Renamed variable x to y in index.ts");
+      expect(result.output).toContain("routes tiny tasks");
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
     } finally {
       globalThis.fetch = originalFetch;

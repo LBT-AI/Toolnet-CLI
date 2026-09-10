@@ -25,6 +25,8 @@ import { toolRegistry } from "./toolRegistry";
 import { createWorkspaceContext, type WorkspaceContext } from "./workspace";
 import { AgentStateMachine } from "./agentState";
 import { normalizeChatResponse } from "./modelAdapter";
+import { parseTaskRequirements, evaluateCompletionGate, recordEvidence, emptyEvidence } from "../../core/agent/completionGate";
+import type { CompletionEvidence, TaskRequirement } from "../../core/contracts";
 import type {
   ExecutionMode,
   ExecutionOptions,
@@ -54,6 +56,8 @@ export class AgentHarness {
   private workspaceCtx: WorkspaceContext;
   private changeTracker = new ChangeTracker();
   private taskContextManager = new TaskContextManager();
+  /** Phase 73.9 — verified side effects from the most recent loop run. */
+  private lastCompletionEvidence: CompletionEvidence = emptyEvidence();
 
   constructor(config: HarnessConfig = {}) {
     const stableRoot =
@@ -97,6 +101,11 @@ export class AgentHarness {
 
   getAgentState(): string {
     return this.agentState.state;
+  }
+
+  /** Verified side effects (mutations/executions/tests) from the last run. */
+  getCompletionEvidence(): CompletionEvidence {
+    return { ...this.lastCompletionEvidence };
   }
 
   // ── Event Bus ─────────────────────────────────────────────────────────────
@@ -252,6 +261,17 @@ export class AgentHarness {
     let toolCallsCount = 0;
     let turnsUsed = 0;
     let accumulatedTokens = 0;
+
+    // Phase 73.9 — Completion Gate: derive task requirements from the user
+    // prompt (or caller-provided requirements) and track verified evidence.
+    const userPrompt =
+      [...initialMessages].reverse().find((m) => m.role === "user")?.content ?? "";
+    const requirements: TaskRequirement =
+      options.taskRequirements ??
+      (userPrompt ? parseTaskRequirements(String(userPrompt)) : { mutationRequired: false, executionRequired: false, verificationRequired: false, testRequired: false });
+    const evidence: CompletionEvidence =
+      options.completionEvidence ?? emptyEvidence();
+    this.lastCompletionEvidence = evidence;
 
     this.lastToolSig = null;
     this.consecutiveToolRepeat = 0;
@@ -429,6 +449,29 @@ export class AgentHarness {
         }
 
         const finalOutput = assistantMsg.content || "";
+
+        // ── Completion Gate (§19/§73.9) ────────────────────────────────────
+        // A text-only answer is NOT final when the task required a mutation,
+        // execution, verification, or test run that never succeeded. Feed the
+        // corrective instruction back and continue the loop instead.
+        const gate = evaluateCompletionGate({
+          requirements,
+          evidence,
+          proposedAnswer: finalOutput,
+          turnsRemaining: maxTurns - turnsUsed,
+          toolCallsExecuted: toolCallsCount,
+        });
+
+        if (gate.decision === "continue") {
+          this.agentState.transition("thinking", "completion-gate");
+          messages.push({
+            role: "user",
+            content: gate.correctiveInstruction || "The task is not complete yet. Use tools to finish it.",
+          });
+          this.emitEvent("agent:thinking", mode, { turnsUsed, toolCallsCount, gateReason: gate.reason });
+          continue;
+        }
+
         this.agentState.transition("responding");
         this.emitEvent("agent:complete", mode, { output: finalOutput, turnsUsed, toolCallsCount });
 
@@ -456,6 +499,7 @@ export class AgentHarness {
           mode,
           sessionId,
           budget: prep.budget,
+          evidence: { ...evidence },
         };
       }
 
@@ -514,7 +558,21 @@ export class AgentHarness {
             signal: combinedSignal,
           });
 
+          // ── Completion evidence (§19) — only VERIFIED outcomes count.
+          // A write/edit/patch tool that returned ok is a mutation; a shell
+          // command with exitCode 0 is an execution (and a test run when the
+          // command looks like a test invocation).
           if (res.allowed) {
+            const parsed = parseResultJson(res.result);
+            const exitCode = parsed?.exitCode ?? (parsed?.success === false ? 1 : 0);
+            if (exitCode === 0) {
+              if (isMutationTool(name)) recordEvidence(evidence, "mutation", true);
+              if (isShellTool(name)) {
+                recordEvidence(evidence, "execution", true);
+                if (looksLikeTestCommand(name, args)) recordEvidence(evidence, "test", true);
+                if (looksLikeVerificationCommand(name, args)) recordEvidence(evidence, "verification", true);
+              }
+            }
             this.emitEvent("tool:complete", mode, { toolName: name, toolArgs: args, result: res.result, id });
           } else {
             this.emitEvent("tool:error", mode, {
@@ -838,6 +896,52 @@ Your access is strictly limited to the policy described in [RUNTIME PERMISSION C
   getMetrics(): ToolPlannerMetrics {
     return { ...this.metrics, ...this.toolCache.getStats() } as any;
   }
+}
+
+// ── Completion-evidence helpers (Phase 73.9) ────────────────────────────────
+
+const MUTATION_TOOLS = new Set([
+  "write_file",
+  "edit_file",
+  "replace_all",
+  "apply_patch",
+  "create_artifact",
+  "update_artifact",
+]);
+
+const SHELL_TOOLS = new Set(["shell", "bash", "run_command"]);
+
+function isMutationTool(name: string): boolean {
+  return MUTATION_TOOLS.has(name);
+}
+
+function isShellTool(name: string): boolean {
+  return SHELL_TOOLS.has(name);
+}
+
+function parseResultJson(result: string): Record<string, unknown> | null {
+  if (!result || typeof result !== "string") return null;
+  try {
+    const parsed = JSON.parse(result);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function commandFromArgs(name: string, args: any): string {
+  if (!isShellTool(name)) return "";
+  return String(args?.command ?? args?.cmd ?? "");
+}
+
+function looksLikeTestCommand(name: string, args: any): boolean {
+  const cmd = commandFromArgs(name, args);
+  return /\b(bun test|npm test|yarn test|pnpm test|pytest|jest|vitest|go test|cargo test|mvn test|dotnet test|gradlew test|rspec|phpunit)\b/i.test(cmd);
+}
+
+function looksLikeVerificationCommand(name: string, args: any): boolean {
+  const cmd = commandFromArgs(name, args);
+  return /\b(typecheck|tsc --noEmit|tsc -b|lint|build|go vet|ruff check|mypy|shellcheck)\b/i.test(cmd);
 }
 
 // ── Singleton Instance ──────────────────────────────────────────────────────

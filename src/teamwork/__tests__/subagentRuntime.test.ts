@@ -207,7 +207,10 @@ describe("Subagent Runtime & Real Execution Engine", () => {
             id: "node_2",
             title: "Task 2",
             role: "CODER",
-            prompt: "Write implementation",
+            // Non-mutating prompt: this test covers DynamicScheduler dispatch and
+            // token metrics. The Phase 73.9 Completion Gate owns mutation-task
+            // semantics, where a text-only answer is intentionally rejected.
+            prompt: "Summarize the implementation approach",
             status: "PENDING",
             dependencies: ["node_1"],
           },

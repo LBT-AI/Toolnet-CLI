@@ -214,7 +214,7 @@ describe.serial("Agent Runtime Critical Scenarios (C/E/G)", () => {
     expect(fs.readFileSync(path.join(tmpDir, "g.py"), "utf8")).toBe("print('structured')\n");
   });
 
-  test("G: prose without structured block never executes", async () => {
+  test("G: prose without structured block never executes and never completes", async () => {
     setModelCapabilities([{
       id: "test-model",
       capabilities: { tools: true, nativeToolCalls: false, reasoning: false, vision: false, streaming: true },
@@ -223,21 +223,26 @@ describe.serial("Agent Runtime Critical Scenarios (C/E/G)", () => {
     const harness = makeHarness();
 
     // Model claims it created a file, but there is no structured tool call.
+    // Phase 73.9 Golden E2E #4: a text-only answer for a mutation task must
+    // NOT be accepted as success — the Completion Gate keeps the loop going
+    // and, with no tool ever running, the run fails instead of faking it.
     globalThis.fetch = createMockProvider([
       {
         content: "I created fake.py for you!\n```py\nprint('hello')\n```",
       },
+      { content: "Done" },
     ]);
 
     const result = await harness.runHeadless("Create fake.py", {
       model: "test-model",
-      maxTurns: 2,
+      maxTurns: 3,
     });
 
-    expect(result.success).toBe(true);
-    expect(result.toolCallsCount).toBe(0);
     // No filesystem mutation happened — the claim was pure prose.
     expect(fs.existsSync(path.join(tmpDir, "fake.py"))).toBe(false);
+    // Task required a mutation that never succeeded → not a success.
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("turn");
   });
 
   // ── G2. model with tools:false never receives tool schemas ──────────────
@@ -359,7 +364,8 @@ describe.serial("Agent Runtime Critical Scenarios (C/E/G)", () => {
     });
 
     expect(sawTools).toBe(false);
-    expect(result.success).toBe(true);
     expect(result.toolCallsCount).toBe(0);
+    // tools:false model cannot mutate → the mutation task must not complete.
+    expect(result.success).toBe(false);
   });
 });

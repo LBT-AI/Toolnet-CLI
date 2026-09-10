@@ -6,6 +6,7 @@
 import type { ContextMessage, ContextBudget } from "../context/types";
 import type { SandboxMode, RiskLevel } from "../security/types";
 import type { AgentRole, TaskGraph, SchedulerState } from "../../teamwork/types";
+import type { CompletionEvidence, TaskRequirement } from "../../core/contracts";
 
 export type ExecutionMode =
   | "INTERACTIVE"
@@ -78,6 +79,11 @@ export interface ExecutionOptions {
   signal?: AbortSignal;
   onChunk?: (chunk: string) => void;
   onEvent?: (event: string, data: any) => void;
+  /** Phase 73.9 — task requirements parsed from the user prompt. When set, the
+   *  loop runs the Completion Gate before accepting a text-only final answer. */
+  taskRequirements?: TaskRequirement;
+  /** Live evidence fed by verified tool results (Completion Gate). */
+  completionEvidence?: CompletionEvidence;
 }
 
 export interface HarnessResult {
@@ -94,6 +100,8 @@ export interface HarnessResult {
   error?: string;
   artifacts?: string[];
   teamworkState?: SchedulerState;
+  /** Phase 73.9 — verified side effects accumulated by the Completion Gate. */
+  evidence?: CompletionEvidence;
 }
 
 export interface HarnessMetrics {

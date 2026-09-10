@@ -1,4 +1,4 @@
-import { getHarness } from "./harness";
+import { agentEngine } from "../core/agent/agentEngine";
 import {
   type OutputFormat,
   type StructuredResponse,
@@ -65,11 +65,11 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
       }
     }
 
-    const harness = getHarness({ model });
-
-    // Wire streaming callbacks for JSONL
+    // Phase 73.5 — headless runs through the SHARED agent engine, the same
+    // single execution path the TUI and Simple REPL use.
     let accumulatedOutput = "";
     let toolCallIndex = 0;
+    const toolNames = new Map<string, string>();
 
     // Compose prompt with image metadata if any (or pass multimodal if harness supports)
     let finalPrompt = prompt;
@@ -78,35 +78,39 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
       finalPrompt = `${prompt}\n\n[Attached Images: ${meta.map((m) => `${m.filename} (${m.mime}, ${m.size}B)`).join(", ")}]`;
     }
 
-    const result = await harness.runHeadless(finalPrompt, {
+    const result = await agentEngine.run({
+      prompt: finalPrompt,
       model,
       sessionId,
-      onChunk: (chunk: string) => {
+      mode: "headless",
+      onTextDelta: (chunk: string) => {
         accumulatedOutput += chunk;
         if (writer) {
           writer.write({ type: "assistant_delta", text: chunk, index: toolCallIndex++ });
         }
       },
-      onEvent: (event: string, data: any) => {
+      onEvent: (event) => {
         if (!writer) return;
-        if (event === "tool:start" || event === "agent:tool_start") {
+        if (event.type === "tool-call") {
+          toolNames.set(event.callId, event.name);
           writer.write({
             type: "tool_start",
-            toolCallId: data.id ?? `tc_${Date.now()}`,
-            tool: data.toolName ?? "unknown",
-            args: redactSecretArgs(data.toolArgs ?? {}),
+            toolCallId: event.callId,
+            tool: event.name,
+            args: redactSecretArgs((event.input ?? {}) as Record<string, unknown>),
           });
-        } else if (event === "tool:complete" || event === "tool:error" || event === "agent:tool_end") {
-          writer.write({
-            type: "tool_result",
-            toolCallId: data.id ?? `tc_${Date.now()}`,
-            tool: data.toolName ?? "unknown",
-            exitCode: data.result?.exitCode ?? (event === "tool:error" ? 1 : 0),
-            cached: data.result?.cached ?? false,
-            truncated: data.result?.truncated ?? false,
-            durationMs: data.result?.durationMs ?? 0,
-          });
+          return;
         }
+        if (event.type !== "tool-result" && event.type !== "tool-error") return;
+        writer.write({
+          type: "tool_result",
+          toolCallId: event.callId,
+          tool: toolNames.get(event.callId) ?? "unknown",
+          exitCode: event.type === "tool-error" ? 1 : event.result.exitCode ?? (event.result.ok ? 0 : 1),
+          cached: false,
+          truncated: event.type === "tool-result" ? event.result.truncated ?? false : false,
+          durationMs: 0,
+        });
       },
     });
 
