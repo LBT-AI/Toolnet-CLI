@@ -21,6 +21,8 @@ import { A } from "../../term";
 import { updateCrashToolResult, markCleanExit } from "../../lib/crashRecovery";
 import { restoreTerminal } from "../../lib/terminalLifecycle";
 import { pinToTail } from "../viewport";
+import { scanForUnbackedClaim, buildClaimGuardNudge } from "../../lib/claimGuard";
+import { getModelCapabilities } from "../../lib/reasoning";
 import { getGlobalTracker } from "../../lib/usage";
 import { pluginManager } from "../../lib/plugins/pluginManager";
 import { getActiveProvider, getActiveApiKey, getActiveDefaultModel } from "../../providers";
@@ -110,6 +112,11 @@ export async function sendMessage(text: string): Promise<void> {
 
   pluginManager.triggerAgentStart({ sessionId: tuiState.currentSessionId, prompt: text });
 
+  // One corrective nudge per user turn — no loops. Held outside the transcript
+  // (infra instruction, not conversation) and injected into apiMessages only.
+  let claimGuardUsed = false;
+  let claimNudge: string | null = null;
+
   try {
     let continueAgentLoop = true;
     while (continueAgentLoop) {
@@ -154,6 +161,11 @@ export async function sendMessage(text: string): Promise<void> {
       });
 
       apiMessages.unshift({ role: "system", content: tuiState.agentMode === "Plan" ? PLANNER_SYSTEM_PROMPT : getAgentSystemPrompt(tuiState.currentSessionId) });
+      // Claim-guard nudge: appended after the system prompt so the model must
+      // answer it (user-role) — it is NOT part of the visible transcript.
+      if (claimNudge) {
+        apiMessages.push({ role: "user", content: claimNudge });
+      }
       // Guard clause: provider payloads never contain status/system notices
       // after the primary instruction.
       assertPrimarySystemMessageInvariant(apiMessages as any);
@@ -168,6 +180,15 @@ export async function sendMessage(text: string): Promise<void> {
       if (tuiState.agentMode === "Build") {
         toolsForRequest = allTools;
         toolChoiceForRequest = "auto";
+        // Capability guard: a model that has declared itself tool-incapable
+        // must not be handed tool definitions it will silently ignore (and
+        // then narrate fake success). It still answers, just without tools.
+        const activeModel = tuiState.currentModel || getActiveDefaultModel() || "default";
+        const caps = getModelCapabilities(activeModel);
+        if (caps && caps.tools === false) {
+          toolsForRequest = undefined;
+          toolChoiceForRequest = undefined;
+        }
       } else if (tuiState.agentMode === "Plan") {
         const planTools = allTools.filter((t: any) =>
           ["read_file", "grep", "grep_search", "glob", "glob_search", "find_path", "list_dir", "tree", "file_exists", "get_cwd", "web_fetch"].includes(t.function.name)
@@ -399,6 +420,19 @@ export async function sendMessage(text: string): Promise<void> {
         tuiState.saveCurrentSession();
         continueAgentLoop = true;
       } else {
+        // ── Final answer path — unbacked-claim guard ──────────────────────
+        // The model answered WITHOUT tool calls. If it narrated a filesystem
+        // mutation anyway ("Tôi đã tạo file…") while presenting code, that
+        // claim is false: no tool ran, nothing was verified on disk. Give the
+        // model ONE corrective nudge to convert the claim into real tool calls
+        // (or reword truthfully) before the answer ships to the user.
+        const claimScan = scanForUnbackedClaim(fullText);
+        if (claimScan.suspected && !claimGuardUsed && !tuiState.bypassMode) {
+          claimGuardUsed = true;
+          claimNudge = buildClaimGuardNudge(claimScan.matchedPhrase || "file created", getCwdInfo().workspaceRoot);
+          continueAgentLoop = true;
+          continue; // re-ask; the corrected answer overwrites messages[assistantIdx]
+        }
         const finalContent = fullText || "(empty response)";
         tuiState.messages[assistantIdx] = { role: "assistant", content: finalContent };
         tuiState.saveCurrentSession();

@@ -17,6 +17,10 @@ export interface ModelCapabilities {
   reasoningEffort?: boolean;
   /** API reports reasoning token usage. */
   reasoningTokens?: boolean;
+  /** Model supports native function/tool calling. When explicitly false, the
+   *  agent loop must not hand it tool definitions (it would ignore them and
+   *  narrate fake success). Undefined = unknown → assume capable. */
+  tools?: boolean;
 }
 
 export interface ModelInfo {

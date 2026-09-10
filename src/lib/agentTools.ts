@@ -18,6 +18,12 @@ import {
   toolApplyPatch,
 } from "./codingAgent";
 import { resolve } from "node:path";
+import {
+  verifyFileWritten,
+  verifyFileEdited,
+  snapshotFileHash,
+  verifyArtifactWritten,
+} from "./toolVerification";
 import { getMcpAgentTools as getMcpRunnerAgentTools, executeMcpTool } from "./mcpRunner";
 import { executeBrowserTool } from "./browserTool";
 import { ToolCache } from "./harness/toolPlanner";
@@ -460,20 +466,56 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "write_file") {
       const res = toolWrite(args.path, args.content);
+      if (res.success) {
+        // Postcondition: the file must REALLY exist and be readable after the
+        // write. A tool success payload alone is not proof of mutation.
+        const post = verifyFileWritten(args.path);
+        if (!post.ok) {
+          return JSON.stringify({ stdout: "", stderr: post.error, exitCode: 1 });
+        }
+      }
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "edit_file") {
       const oldStr = args.old_string || args.oldString || "";
       const newStr = args.new_string || args.newString || "";
+      const beforeHash = snapshotFileHash(args.path);
       const res = toolEdit(args.path, oldStr, newStr);
+      if (res.success) {
+        const post = verifyFileEdited(args.path, beforeHash);
+        if (!post.ok) {
+          return JSON.stringify({ stdout: "", stderr: post.error, exitCode: 1 });
+        }
+      }
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "replace_all") {
       const oldStr = args.old_string || args.oldString || "";
       const newStr = args.new_string || args.newString || "";
+      const beforeHash = snapshotFileHash(args.path);
       const res = toolReplaceAll(args.path, oldStr, newStr);
+      if (res.success) {
+        const post = verifyFileEdited(args.path, beforeHash);
+        if (!post.ok) {
+          return JSON.stringify({ stdout: "", stderr: post.error, exitCode: 1 });
+        }
+      }
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "apply_patch" || name === "patch") {
       const patchText = args.patch || args.diff || "";
       const res = await toolApplyPatch(patchText);
+      if (res.success) {
+        // Patches may create or modify multiple files; re-verify every target
+        // path the patch declared (a/b/ headers). At least one must exist.
+        const targets = extractPatchTargets(patchText);
+        if (targets.length > 0) {
+          const missing = targets.filter((t) => {
+            const v = verifyFileWritten(t);
+            return !v.ok;
+          });
+          if (missing.length === targets.length) {
+            return JSON.stringify({ stdout: "", stderr: `patch reported success but none of its target files exist: ${targets.join(", ")}`, exitCode: 1 });
+          }
+        }
+      }
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "git_status") {
       const res = await toolGitStatus(args.path);
@@ -508,6 +550,12 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
       }
       const targetPath = `.artifacts/${artifactName}`;
       const res = toolWrite(targetPath, content);
+      if (res.success) {
+        const post = verifyArtifactWritten(artifactName);
+        if (!post.ok) {
+          return JSON.stringify({ stdout: "", stderr: post.error, exitCode: 1 });
+        }
+      }
       return JSON.stringify({ stdout: res.success ? `Artifact ${name === "create_artifact" ? "created" : "updated"}: ${artifactName}` : "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "spawn_subagent" || name === "delegate_task") {
       const { executeSubagentTask } = await import("../teamwork/subagentRuntime");
@@ -571,4 +619,18 @@ export async function executeTool(name: string, args: any, options?: ExecuteTool
   } catch (e: any) {
     return JSON.stringify({ stdout: "", stderr: `Error executing tool: ${e.message}`, exitCode: 1 });
   }
+}
+
+/**
+ * Extract target file paths from a unified-diff patch (a/ b/ headers), used to
+ * verify patch postconditions. Best-effort: skips /dev/null targets.
+ */
+export function extractPatchTargets(patchText: string): string[] {
+  const targets = new Set<string>();
+  for (const m of patchText.matchAll(/^\+\+\+ \S+/gm)) {
+    const raw = m[0].replace(/^\+\+\+ /, "").trim();
+    if (!raw || raw === "/dev/null") continue;
+    targets.add(raw.replace(/^b\//, "").replace(/\t.*$/, ""));
+  }
+  return [...targets];
 }
