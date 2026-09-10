@@ -2,7 +2,11 @@ import { test, expect, describe, afterAll } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { detectProjectFramework } from "../../lib/projectDetector";
+import {
+  detectProjectFramework,
+  detectAllFrameworks,
+  buildProjectContext,
+} from "../../lib/projectDetector";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -247,6 +251,219 @@ describe("detectProjectFramework – Make", () => {
 
     expect(result.framework).toBe("make");
     expect(result.testCommands).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C# / .NET detection
+// ---------------------------------------------------------------------------
+
+describe("detectProjectFramework – C# / .NET", () => {
+  test("detects dotnet from .csproj", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+
+    const result = detectProjectFramework(dir);
+
+    expect(result.framework).toBe("dotnet");
+    expect(result.configFile).toBe("App.csproj");
+    expect(result.verifyCommands).toContain("dotnet build --no-restore");
+    expect(result.testCommands).toContain("dotnet test");
+  });
+
+  test("detects dotnet from .sln", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "Solution.sln"), "Microsoft Visual Studio Solution File\n");
+
+    const result = detectProjectFramework(dir);
+    expect(result.framework).toBe("dotnet");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C / C++ detection
+// ---------------------------------------------------------------------------
+
+describe("detectProjectFramework – C / C++", () => {
+  test("detects cpp from CMakeLists.txt", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\n");
+
+    const result = detectProjectFramework(dir);
+
+    expect(result.framework).toBe("cpp");
+    expect(result.configFile).toBe("CMakeLists.txt");
+    expect(result.verifyCommands).toContain("cmake --build .");
+    expect(result.testCommands).toContain("ctest");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PHP detection
+// ---------------------------------------------------------------------------
+
+describe("detectProjectFramework – PHP", () => {
+  test("detects php from composer.json", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "composer.json"), JSON.stringify({ name: "app", require: { php: ">=8.1" } }));
+
+    const result = detectProjectFramework(dir);
+
+    expect(result.framework).toBe("php");
+    expect(result.configFile).toBe("composer.json");
+    expect(result.testCommands).toContain("vendor/bin/phpunit");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Kotlin detection
+// ---------------------------------------------------------------------------
+
+describe("detectProjectFramework – Kotlin", () => {
+  test("detects kotlin from build.gradle.kts", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "build.gradle.kts"), "plugins { kotlin(\"jvm\") version \"1.9.0\" }\n");
+
+    const result = detectProjectFramework(dir);
+
+    expect(result.framework).toBe("kotlin");
+    expect(result.configFile).toBe("build.gradle.kts");
+    expect(result.verifyCommands).toContain("./gradlew compileKotlin");
+    expect(result.testCommands).toContain("./gradlew test");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Swift detection
+// ---------------------------------------------------------------------------
+
+describe("detectProjectFramework – Swift", () => {
+  test("detects swift from Package.swift", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "Package.swift"), "// swift-tools-version:5.9\n");
+
+    const result = detectProjectFramework(dir);
+
+    expect(result.framework).toBe("swift");
+    expect(result.configFile).toBe("Package.swift");
+    expect(result.verifyCommands).toContain("swift build");
+    expect(result.testCommands).toContain("swift test");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ruby detection
+// ---------------------------------------------------------------------------
+
+describe("detectProjectFramework – Ruby", () => {
+  test("detects ruby from Gemfile", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "Gemfile"), "source 'https://rubygems.org'\n");
+
+    const result = detectProjectFramework(dir);
+
+    expect(result.framework).toBe("ruby");
+    expect(result.configFile).toBe("Gemfile");
+    expect(result.testCommands).toContain("bundle exec rspec");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dart detection
+// ---------------------------------------------------------------------------
+
+describe("detectProjectFramework – Dart", () => {
+  test("detects dart from pubspec.yaml", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "pubspec.yaml"), "name: my_app\nenvironment:\n  sdk: '>=3.0.0'\n");
+
+    const result = detectProjectFramework(dir);
+
+    expect(result.framework).toBe("dart");
+    expect(result.configFile).toBe("pubspec.yaml");
+    expect(result.verifyCommands).toContain("dart analyze");
+    expect(result.testCommands).toContain("dart test");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scala detection
+// ---------------------------------------------------------------------------
+
+describe("detectProjectFramework – Scala", () => {
+  test("detects scala from build.sbt", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "build.sbt"), "name := \"my-app\"\n");
+
+    const result = detectProjectFramework(dir);
+
+    expect(result.framework).toBe("scala");
+    expect(result.configFile).toBe("build.sbt");
+    expect(result.testCommands).toContain("sbt test");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-language monorepo (§7/§8/§36)
+// ---------------------------------------------------------------------------
+
+describe("Multi-language monorepo detection", () => {
+  test("detectAllFrameworks finds every language in a monorepo", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "web", scripts: { test: "vitest" } }));
+    fs.writeFileSync(path.join(dir, "pyproject.toml"), "[build-system]\n");
+    fs.writeFileSync(path.join(dir, "Cargo.toml"), "[package]\n");
+    fs.writeFileSync(path.join(dir, "go.mod"), "module x\n");
+    fs.writeFileSync(path.join(dir, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\n");
+
+    const results = detectAllFrameworks(dir);
+    const frameworks = results.map((r) => r.framework);
+
+    expect(frameworks).toContain("node");
+    expect(frameworks).toContain("python");
+    expect(frameworks).toContain("rust");
+    expect(frameworks).toContain("go");
+    expect(frameworks).toContain("cpp");
+    // Sorted by confidence descending
+    expect(results[0].confidence).toBeGreaterThanOrEqual(results[results.length - 1].confidence);
+  });
+
+  test("buildProjectContext exposes languages, primaryLanguage, frameworks, confidence", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "fullstack", scripts: { test: "vitest" } }));
+    fs.writeFileSync(path.join(dir, "pyproject.toml"), "[build-system]\n[tool.pytest.ini_options]\n");
+
+    const ctx = buildProjectContext(dir, dir);
+
+    expect(ctx.language).toContain("python");
+    expect(ctx.language).toContain("typescript");
+    expect(ctx.primaryLanguage).toBe("typescript"); // node detected first (highest confidence)
+    expect(ctx.framework).toContain("node");
+    expect(ctx.framework).toContain("python");
+    expect(ctx.confidence).toBeGreaterThan(0.5);
+    expect(ctx.testCommands).toContain("pytest");
+  });
+
+  test("single-language project gets primaryLanguage and confidence", () => {
+    const dir = createTempDir();
+    fs.writeFileSync(path.join(dir, "Cargo.toml"), "[package]\nname = \"x\"\n");
+
+    const ctx = buildProjectContext(dir, dir);
+
+    expect(ctx.primaryLanguage).toBe("rust");
+    expect(ctx.framework).toEqual(["rust"]);
+    expect(ctx.confidence).toBeGreaterThan(0.5);
+    expect(ctx.typecheckCommands).toContain("cargo check");
+    expect(ctx.testCommands).toContain("cargo test");
+  });
+
+  test("empty project has zero confidence and no primary language", () => {
+    const dir = createTempDir();
+    const ctx = buildProjectContext(dir, dir);
+
+    expect(ctx.primaryLanguage).toBeUndefined();
+    expect(ctx.confidence).toBe(0);
+    expect(ctx.language).toHaveLength(0);
   });
 });
 

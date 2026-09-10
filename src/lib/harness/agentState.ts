@@ -1,9 +1,12 @@
 export type AgentState =
   | "idle"
+  | "understanding"
+  | "gathering-context"
   | "thinking"
   | "awaiting-permission"
   | "executing-tool"
   | "verifying"
+  | "testing"
   | "responding"
   | "cancelled"
   | "error";
@@ -16,12 +19,15 @@ export interface AgentStateTransition {
 }
 
 const ALLOWED: Record<AgentState, AgentState[]> = {
-  idle: ["thinking"],
+  idle: ["understanding", "thinking"],
+  understanding: ["gathering-context", "thinking", "responding", "cancelled", "error"],
+  "gathering-context": ["thinking", "executing-tool", "responding", "cancelled", "error"],
   thinking: ["executing-tool", "awaiting-permission", "responding", "cancelled", "error"],
   "awaiting-permission": ["executing-tool", "thinking", "cancelled", "error"],
   "executing-tool": ["verifying", "awaiting-permission", "thinking", "cancelled", "error"],
-  verifying: ["thinking", "responding", "cancelled", "error"],
-  responding: ["idle", "thinking", "cancelled", "error"],
+  verifying: ["thinking", "testing", "responding", "cancelled", "error"],
+  testing: ["thinking", "responding", "cancelled", "error"],
+  responding: ["idle", "thinking", "understanding", "cancelled", "error"],
   cancelled: ["idle"],
   error: ["idle", "thinking"],
 };

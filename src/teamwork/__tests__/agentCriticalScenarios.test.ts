@@ -242,6 +242,87 @@ describe.serial("Agent Runtime Critical Scenarios (C/E/G)", () => {
 
   // ── G2. model with tools:false never receives tool schemas ──────────────
 
+  test("loop detector: interleaved retries (edit → test → edit → test) are NOT flagged", async () => {
+    // Regression: a coding agent legitimately re-runs the same test command
+    // between edits. The old cumulative signature history mis-flagged this as
+    // an infinite loop after the 3rd identical bash call.
+    const harness = makeHarness();
+    const target = path.join(tmpDir, "calc.ts");
+    fs.writeFileSync(target, "export const add = (a: number, b: number) => a + b;\n", "utf8");
+
+    globalThis.fetch = createMockProvider([
+      // turn 1: edit
+      { tool_calls: [{ id: "e1", type: "function", function: { name: "edit_file", arguments: JSON.stringify({ path: target, old_string: "a + b", new_string: "a - b" }) } }] },
+      // turn 2: run test (same command)
+      { tool_calls: [{ id: "t1", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "bun test" }) } }] },
+      // turn 3: edit again
+      { tool_calls: [{ id: "e2", type: "function", function: { name: "edit_file", arguments: JSON.stringify({ path: target, old_string: "a - b", new_string: "a * b" }) } }] },
+      // turn 4: run test again (SAME command as turn 2 — must NOT trip loop guard)
+      { tool_calls: [{ id: "t2", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "bun test" }) } }] },
+      { content: "Fixed and verified." },
+    ]);
+
+    const result = await harness.runHeadless("Fix the add function", {
+      model: "test-model",
+      maxTurns: 6,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.toolCallsCount).toBe(4);
+    // Both edits applied — the second identical bash call was allowed through.
+    const content = fs.readFileSync(target, "utf8");
+    expect(content).toContain("a * b");
+  });
+
+  test("loop detector: 3 CONSECUTIVE identical calls still abort", async () => {
+    const harness = makeHarness();
+    globalThis.fetch = createMockProvider([
+      { tool_calls: [{ id: "l1", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "bun test" }) } }] },
+      { tool_calls: [{ id: "l2", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "bun test" }) } }] },
+      { tool_calls: [{ id: "l3", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "bun test" }) } }] },
+    ]);
+
+    const result = await harness.runHeadless("Run tests", {
+      model: "test-model",
+      maxTurns: 6,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Infinite loop detected");
+  });
+
+  test("§30: execute() flows through understanding → gathering-context states", async () => {
+    setModelCapabilities([{
+      id: "test-model",
+      capabilities: { tools: true, nativeToolCalls: true, reasoning: false, vision: false, streaming: true },
+    }]);
+
+    const harness = makeHarness();
+    globalThis.fetch = createMockProvider([
+      { content: "This is a Node.js project." },
+    ]);
+
+    const states: string[] = [];
+    harness.on((e) => {
+      if (e.type === "agent:start" || e.type === "agent:complete" || e.type === "agent:error") {
+        states.push(harness.getAgentState());
+      }
+    });
+
+    const result = await harness.execute({
+      prompt: "Project này dùng gì?",
+      model: "test-model",
+      maxTurns: 2,
+    });
+
+    expect(result.success).toBe(true);
+    // State observed at agent:start — the execute() preamble already moved
+    // through understanding → gathering-context before the loop began.
+    expect(states[0]).toBe("gathering-context");
+    // State at agent:complete — the loop finished in responding.
+    expect(states[states.length - 1]).toBe("responding");
+  });
+
   test("G2: tools:false model gets no tool definitions and cannot execute", async () => {
     setModelCapabilities([{
       id: "test-model",

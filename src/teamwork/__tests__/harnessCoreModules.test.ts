@@ -268,6 +268,49 @@ describe("AgentStateMachine", () => {
     expect(h[0].to).toBe("thinking");
     expect(h[1].to).toBe("error");
   });
+
+  // §30 — full P0 lifecycle: understanding → gathering-context → thinking →
+  // executing-tool → verifying → testing → responding
+  test("full P0 lifecycle transitions are valid", () => {
+    const sm = new AgentStateMachine();
+    expect(sm.state).toBe("idle");
+
+    sm.transition("understanding");
+    sm.transition("gathering-context");
+    sm.transition("thinking");
+    sm.transition("executing-tool");
+    sm.transition("verifying");
+    sm.transition("testing");
+    sm.transition("responding");
+    sm.transition("idle");
+
+    expect(sm.state).toBe("idle");
+    expect(sm.getHistory().map((h) => h.to)).toEqual([
+      "understanding",
+      "gathering-context",
+      "thinking",
+      "executing-tool",
+      "verifying",
+      "testing",
+      "responding",
+      "idle",
+    ]);
+  });
+
+  test("understanding can short-circuit to responding (pure question)", () => {
+    const sm = new AgentStateMachine();
+    sm.transition("understanding");
+    sm.transition("responding");
+    expect(sm.state).toBe("responding");
+  });
+
+  test("gathering-context can go straight to executing-tool", () => {
+    const sm = new AgentStateMachine();
+    sm.transition("understanding");
+    sm.transition("gathering-context");
+    sm.transition("executing-tool");
+    expect(sm.state).toBe("executing-tool");
+  });
 });
 
 // ── Tool Registry (§4) ──────────────────────────────────────────────────────

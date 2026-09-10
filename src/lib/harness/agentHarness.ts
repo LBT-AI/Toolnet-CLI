@@ -46,7 +46,8 @@ export class AgentHarness {
   private initializedAt = Date.now();
   private toolCache = new ToolCache();
   private metrics = createMetrics();
-  private toolCallHistory: string[] = [];
+  private lastToolSig: string | null = null;
+  private consecutiveToolRepeat = 0;
   private loopAbortController: (AbortController & { aborted?: boolean }) | null = null;
   private activeMode: ExecutionMode = "HEADLESS";
   private agentState = new AgentStateMachine();
@@ -252,7 +253,8 @@ export class AgentHarness {
     let turnsUsed = 0;
     let accumulatedTokens = 0;
 
-    this.toolCallHistory = [];
+    this.lastToolSig = null;
+    this.consecutiveToolRepeat = 0;
     this.activeMode = mode;
 
     const abort = new AbortController() as AbortController & { aborted?: boolean };
@@ -477,20 +479,31 @@ export class AgentHarness {
         needsApproval,
         maxRepeat: 2,
         runTool: async (name, args, id) => {
+          // Loop detection is CONSECUTIVE-only: the same (tool, args) repeated
+          // three times in a row with no other tool call in between signals a
+          // stuck model. A coding agent legitimately re-runs the same command
+          // (e.g. `bun test`) between edits — that interleaving resets the
+          // counter so valid repair loops are never flagged as infinite loops.
           const sig = signatureForToolCall(name, args);
-          if (this.toolCallHistory.filter((s) => s === sig).length >= 2) {
+          if (this.lastToolSig === sig) {
+            this.consecutiveToolRepeat++;
+          } else {
+            this.lastToolSig = sig;
+            this.consecutiveToolRepeat = 1;
+          }
+          if (this.consecutiveToolRepeat >= 3) {
             loopAborted = true;
             return {
               result: JSON.stringify({
                 stdout: "",
-                stderr: `Infinite loop detected: tool '${name}' was called 3 times with identical arguments. Aborting loop.`,
+                stderr: `Infinite loop detected: tool '${name}' was called ${this.consecutiveToolRepeat} times consecutively with identical arguments. Aborting loop.`,
                 exitCode: 1,
               }),
               allowed: false,
               reason: "loop",
             };
           }
-          this.toolCallHistory.push(sig);
+
 
           this.emitEvent("tool:queued", mode, { toolName: name, toolArgs: args, id });
           this.emitEvent("tool:start", mode, { toolName: name, toolArgs: args, id });
@@ -631,7 +644,8 @@ ${getLanguageDirective(getResponseLanguage())}`;
     const mode = options.mode || "HEADLESS";
     const prompt = options.prompt || "";
 
-    // ── Task Understanding Layer ────────────────────────────────────────────
+    // ── Task Understanding Layer (§2/§30) ───────────────────────────────────
+    this.agentState.transition("understanding");
     const task = analyzePrompt(prompt);
     this.taskContextManager.setGoal(task.objectives[0] || prompt);
     this.taskContextManager.addFiles(task.referencedFiles);
@@ -640,6 +654,7 @@ ${getLanguageDirective(getResponseLanguage())}`;
       this.taskContextManager.addConstraint(c);
     }
 
+    this.agentState.transition("gathering-context");
     const activeCtx = this.taskContextManager.getContext();
     const taskSummary = this.formatActiveTaskContext(activeCtx, task);
     const systemPrompt = this.buildSystemPrompt(options.systemPrompt, taskSummary);
