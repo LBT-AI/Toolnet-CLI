@@ -57,7 +57,7 @@ export function redactOutputSecrets(text: string | null | undefined): string {
   });
 
   // 3. OpenAI-style API keys (sk-..., sk-proj-...)
-  sanitized = sanitized.replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g, (match) => {
+  sanitized = sanitized.replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{8,}\b/g, (match) => {
     if (isPlaceholder(match)) return match;
     if (match.startsWith("sk-ant-")) return match;
     const prefix = match.startsWith("sk-proj-") ? "sk-proj-" : "sk-";

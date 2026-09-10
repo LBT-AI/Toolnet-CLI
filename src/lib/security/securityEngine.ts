@@ -137,13 +137,20 @@ export class SecurityEngine {
         auditLogger.logEvent({
           timestamp: Date.now(),
           toolName,
+          action: toolName,
           args,
           riskLevel: "CRITICAL_DENY",
           category,
           capability,
           mode,
           decision: "BLOCKED_BY_POLICY",
+          allowed: false,
+          cwd: baseCwd,
           reason: analysis.reason || "Catastrophic command blocked by invariant security policy.",
+          userSessionId: context?.sessionId,
+          agentRole: context?.agentRole,
+          source: context?.source,
+          metadata: { agentDepth: context?.agentDepth },
         });
         return {
           decision: "DENY",

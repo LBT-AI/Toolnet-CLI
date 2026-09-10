@@ -56,6 +56,7 @@ export interface ToolExecutionContext {
   agentRole?: string;
   agentDepth?: number;
   sessionId?: string;
+  userId?: string;
   /** Layer 4 Phase 1: origin of the call — for audit + role propagation. */
   source?: "tui" | "headless" | "subagent" | "teamwork" | "plugin" | "vision" | "mcp";
   /** Abort signal — propagated to the executor so running processes can be killed. */
@@ -102,6 +103,14 @@ export interface SecurityPolicyConfig {
   blockedDomains?: string[];
   protectSecrets?: boolean;
   auditLogging?: boolean;
+  rateLimit?: {
+    maxPerMinute?: number;
+    maxPerTurn?: number;
+    maxConcurrent?: number;
+    maxPerSession?: number;
+    windowMs?: number;
+    sessionWindowMs?: number;
+  };
 }
 
 export type SecurityAuditDecision =
@@ -117,8 +126,12 @@ export type SecurityAuditDecision =
   | "DENIED_BY_USER"
   | "BLOCKED_BY_POLICY"
   | "POLICY_EVALUATED"
+  | "TOOL_REQUEST"
+  | "SECURITY_EVALUATION"
+  | "APPROVAL"
   | "EXECUTION_START"
-  | "EXECUTION_COMPLETE";
+  | "EXECUTION_COMPLETE"
+  | "RATE_LIMITED";
 
 export interface SecurityAuditEvent {
   timestamp?: number | string;
@@ -136,6 +149,15 @@ export interface SecurityAuditEvent {
   target?: string;
   userSessionId?: string;
   correlationId?: string;
+  toolCallId?: string;
+  userId?: string;
+  workspaceId?: string;
+  agentRole?: string;
+  source?: string;
+  durationMs?: number;
+  requestSize?: number;
+  responseSize?: number;
+  result?: string;
   metadata?: Record<string, unknown>;
 }
 

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { CapabilityConfig, PermissionCapability, SecurityPolicyConfig } from "./types";
+import { toolRateLimiter, type ToolRateLimiterConfig } from "./toolRateLimiter";
 
 const DEFAULT_CAPABILITIES: Required<CapabilityConfig> = {
   read: true,      // Auto-allow reading files, grep, git status
@@ -59,6 +60,15 @@ export class PolicyEngine {
     const root = customRoot || process.cwd();
     this.workspacePolicy = this.loadPolicyFile(root);
     this.loaded = true;
+
+    if (this.workspacePolicy?.rateLimit) {
+      toolRateLimiter.configure(this.workspacePolicy.rateLimit);
+    }
+  }
+
+  getRateLimitConfig(): ToolRateLimiterConfig | null {
+    if (!this.loaded) this.reload();
+    return this.workspacePolicy?.rateLimit ?? null;
   }
 
   private loadPolicyFile(dir: string): SecurityPolicyConfig | null {

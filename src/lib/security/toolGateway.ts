@@ -4,8 +4,9 @@ import { redactSecrets } from "./secretGuard";
 import { getSandboxMode } from "../permissions";
 import { _executeToolRaw, getToolCache } from "../agentTools";
 import { compressToolResult } from "../harness/toolOutputCompressor";
-import type { ToolExecutionContext, ToolGatewayResult, SandboxMode } from "./types";
+import type { ToolExecutionContext, ToolGatewayResult, SandboxMode, SecurityAuditDecision } from "./types";
 import { randomUUID } from "node:crypto";
+import { toolRateLimiter, type ToolRateLimitContext, type ToolRateLimitResult } from "./toolRateLimiter";
 
 export class ToolGateway {
   /**
@@ -27,30 +28,125 @@ export class ToolGateway {
     const wsRoot = context.workspaceRoot || process.cwd();
     const mode: SandboxMode = context.sandboxMode || getSandboxMode();
     const correlationId = call.id || randomUUID();
+    const toolCallId = call.id || correlationId;
+    const sessionId = context.sessionId;
+    const now = Date.now();
 
-    // 0. POLICY_EVALUATED
+    const workspaceId = wsRoot ? wsRoot : undefined;
+    const userId = context.userId;
+
+    const auditMeta = {
+      sessionId,
+      userId,
+      workspaceId,
+      agentRole: context.agentRole,
+      source: context.source,
+      agentDepth: context.agentDepth,
+    };
+
+    // 0. TOOL_REQUEST
     auditLogger.logEvent({
-      timestamp: Date.now(),
+      timestamp: now,
       toolName: name,
+      action: name,
       args,
-      riskLevel: "SAFE_READ",
-      category: "MCP_TOOL",
-      capability: "READ",
       mode,
-      decision: "POLICY_EVALUATED",
+      decision: "TOOL_REQUEST",
       allowed: true,
       cwd,
       correlationId,
-      metadata: {
-        sessionId: context.sessionId,
-        agentRole: context.agentRole,
-        agentDepth: context.agentDepth,
-        source: context.source,
-      },
+      toolCallId,
+      userSessionId: sessionId,
+      userId,
+      workspaceId,
+      agentRole: context.agentRole,
+      source: context.source,
+      metadata: auditMeta,
     });
 
-    // 1. Mandatory Security Pre-Evaluation (8-Step Order) — the single decision.
+    // 0.5 RATE LIMIT CHECK
+    if (sessionId) {
+      const rateLimitContext: ToolRateLimitContext = {
+        sessionId,
+        toolName: name,
+        now,
+        source: context.source,
+      };
+
+      const rateLimitResult = toolRateLimiter.check(rateLimitContext);
+
+      if (!rateLimitResult.allowed) {
+        const rateLimitDuration = Date.now() - startTime;
+
+        auditLogger.logEvent({
+          timestamp: Date.now(),
+          toolName: name,
+          action: name,
+          args,
+          mode,
+          decision: "RATE_LIMITED",
+          allowed: false,
+          cwd,
+          reason: rateLimitResult.reason,
+          correlationId,
+          toolCallId,
+          userSessionId: sessionId,
+          userId,
+          workspaceId,
+          agentRole: context.agentRole,
+          source: context.source,
+          durationMs: rateLimitDuration,
+          metadata: {
+            ...auditMeta,
+            retryAfterMs: rateLimitResult.retryAfterMs,
+          },
+        });
+
+        return {
+          stdout: "",
+          stderr: `Rate Limited: ${rateLimitResult.reason}`,
+          exitCode: 1,
+          allowed: false,
+          decision: "DENY",
+          reason: rateLimitResult.reason,
+          riskLevel: "MODERATE_WRITE",
+          capability: "READ",
+          durationMs: rateLimitDuration,
+        };
+      }
+    }
+
+    // 1. SECURITY_EVALUATION
     const decision = securityEngine.evaluate(name, args, mode, cwd, wsRoot, context);
+
+    auditLogger.logEvent({
+      timestamp: Date.now(),
+      toolName: name,
+      action: name,
+      args,
+      riskLevel: decision.riskLevel || "SAFE_READ",
+      category: decision.category,
+      capability: decision.capability,
+      mode,
+      decision: "SECURITY_EVALUATION",
+      allowed: decision.allowed,
+      cwd,
+      reason: decision.reason,
+      target: args?.path || args?.url || args?.name,
+      correlationId,
+      toolCallId,
+      userSessionId: sessionId,
+      userId,
+      workspaceId,
+      agentRole: context.agentRole,
+      source: context.source,
+      durationMs: Date.now() - startTime,
+      metadata: {
+        ...auditMeta,
+        needsApproval: decision.needsApproval,
+        matchedRule: decision.matchedRule,
+      },
+    });
 
     // Guard 1: CRITICAL_DENY or hard DENY — never executable, userApproved cannot override.
     if (
@@ -59,9 +155,12 @@ export class ToolGateway {
       (!decision.allowed && !decision.needsApproval)
     ) {
       const reason = decision.reason || "Blocked by security sandbox policy.";
+      const durationMs = Date.now() - startTime;
+
       auditLogger.logEvent({
         timestamp: Date.now(),
         toolName: name,
+        action: name,
         args,
         riskLevel: decision.riskLevel || "CRITICAL_DENY",
         category: decision.category,
@@ -72,6 +171,14 @@ export class ToolGateway {
         cwd,
         reason,
         correlationId,
+        toolCallId,
+        userSessionId: sessionId,
+        userId,
+        workspaceId,
+        agentRole: context.agentRole,
+        source: context.source,
+        durationMs,
+        metadata: auditMeta,
       });
 
       return {
@@ -83,16 +190,19 @@ export class ToolGateway {
         reason,
         riskLevel: decision.riskLevel,
         capability: decision.capability,
-        durationMs: Date.now() - startTime,
+        durationMs,
       };
     }
 
     // Guard 2: ASK without prior user approval — return needsApproval (fail-closed).
     if ((decision.decision === "ASK" || decision.needsApproval) && !context.userApproved) {
       const reason = decision.reason || `Tool ${name} requires interactive approval.`;
+      const durationMs = Date.now() - startTime;
+
       auditLogger.logEvent({
         timestamp: Date.now(),
         toolName: name,
+        action: name,
         args,
         riskLevel: decision.riskLevel || "DANGEROUS",
         category: decision.category,
@@ -103,6 +213,14 @@ export class ToolGateway {
         cwd,
         reason,
         correlationId,
+        toolCallId,
+        userSessionId: sessionId,
+        userId,
+        workspaceId,
+        agentRole: context.agentRole,
+        source: context.source,
+        durationMs,
+        metadata: auditMeta,
       });
 
       return {
@@ -116,7 +234,7 @@ export class ToolGateway {
         reason,
         riskLevel: decision.riskLevel,
         capability: decision.capability,
-        durationMs: Date.now() - startTime,
+        durationMs,
       };
     }
 
@@ -126,9 +244,12 @@ export class ToolGateway {
       // session, honor the denial even when userApproved=true.
       const targetKey = securityEngine.getSessionTrustTargetKey(name, args);
       if (targetKey && securityEngine.isSessionDenied(name, targetKey, context.sessionId)) {
+        const durationMs = Date.now() - startTime;
+
         auditLogger.logEvent({
           timestamp: Date.now(),
           toolName: name,
+          action: name,
           args,
           riskLevel: decision.riskLevel || "DANGEROUS",
           category: decision.category,
@@ -139,7 +260,16 @@ export class ToolGateway {
           cwd,
           reason: "Action was previously denied for this session.",
           correlationId,
+          toolCallId,
+          userSessionId: sessionId,
+          userId,
+          workspaceId,
+          agentRole: context.agentRole,
+          source: context.source,
+          durationMs,
+          metadata: auditMeta,
         });
+
         return {
           stdout: "",
           stderr: "Permission Denied: Action was previously denied for this session.",
@@ -149,13 +279,16 @@ export class ToolGateway {
           reason: "Action was previously denied for this session.",
           riskLevel: decision.riskLevel,
           capability: decision.capability,
-          durationMs: Date.now() - startTime,
+          durationMs,
         };
       }
+
+      const durationMs = Date.now() - startTime;
 
       auditLogger.logEvent({
         timestamp: Date.now(),
         toolName: name,
+        action: name,
         args,
         riskLevel: decision.riskLevel || "DANGEROUS",
         category: decision.category,
@@ -166,6 +299,24 @@ export class ToolGateway {
         cwd,
         reason: "Approved by user for this execution.",
         correlationId,
+        toolCallId,
+        userSessionId: sessionId,
+        userId,
+        workspaceId,
+        agentRole: context.agentRole,
+        source: context.source,
+        durationMs,
+        metadata: auditMeta,
+      });
+    }
+
+    // Record rate limit before execution
+    if (sessionId) {
+      toolRateLimiter.record({
+        sessionId,
+        toolName: name,
+        now: Date.now(),
+        source: context.source,
       });
     }
 
@@ -173,6 +324,12 @@ export class ToolGateway {
     const toolCache = getToolCache();
     const cached = toolCache.get(name, args);
     if (cached !== null) {
+      const durationMs = Date.now() - startTime;
+
+      if (sessionId) {
+        toolRateLimiter.release({ sessionId, toolName: name, now: Date.now() });
+      }
+
       return {
         stdout: cached,
         stderr: "",
@@ -182,7 +339,7 @@ export class ToolGateway {
         decision: "ALLOW",
         riskLevel: decision.riskLevel,
         capability: decision.capability,
-        durationMs: Date.now() - startTime,
+        durationMs,
       };
     }
 
@@ -190,6 +347,7 @@ export class ToolGateway {
     auditLogger.logEvent({
       timestamp: Date.now(),
       toolName: name,
+      action: name,
       args,
       riskLevel: decision.riskLevel || "SAFE_READ",
       category: decision.category,
@@ -199,6 +357,13 @@ export class ToolGateway {
       allowed: true,
       cwd,
       correlationId,
+      toolCallId,
+      userSessionId: sessionId,
+      userId,
+      workspaceId,
+      agentRole: context.agentRole,
+      source: context.source,
+      metadata: auditMeta,
     });
 
     // 4. Execution via internal raw executor (no re-gating inside).
@@ -214,12 +379,16 @@ export class ToolGateway {
         agentDepth: context.agentDepth,
         source: context.source,
       });
+
       const sanitizedJson = compressToolResult(redactSecrets(rawJson), name);
       let exitCode = 0;
       try {
         const parsed = JSON.parse(rawJson);
         exitCode = parsed.exitCode !== undefined ? parsed.exitCode : (parsed.success === false ? 1 : 0);
       } catch {}
+
+      const requestSize = JSON.stringify(args).length;
+      const responseSize = rawJson.length;
 
       // Invalidate cache on mutating tools or store in cache on read-only tools
       const isWriteTool = name === "write_file" || name === "edit_file" || name === "replace_all" || name === "apply_patch" || name === "create_artifact" || name === "update_artifact";
@@ -233,10 +402,13 @@ export class ToolGateway {
         toolCache.set(name, args, sanitizedJson);
       }
 
+      const durationMs = Date.now() - startTime;
+
       // EXECUTION_COMPLETE
       auditLogger.logEvent({
         timestamp: Date.now(),
         toolName: name,
+        action: name,
         args,
         riskLevel: decision.riskLevel || "SAFE_READ",
         category: decision.category,
@@ -246,7 +418,22 @@ export class ToolGateway {
         allowed: true,
         cwd,
         correlationId,
+        toolCallId,
+        userSessionId: sessionId,
+        userId,
+        workspaceId,
+        agentRole: context.agentRole,
+        source: context.source,
+        durationMs,
+        requestSize,
+        responseSize,
+        result: exitCode === 0 ? "success" : "failure",
+        metadata: auditMeta,
       });
+
+      if (sessionId) {
+        toolRateLimiter.release({ sessionId, toolName: name, now: Date.now() });
+      }
 
       return {
         stdout: sanitizedJson,
@@ -256,15 +443,17 @@ export class ToolGateway {
         decision: "ALLOW",
         riskLevel: decision.riskLevel,
         capability: decision.capability,
-        durationMs: Date.now() - startTime,
+        durationMs,
       };
     } catch (err: any) {
       const errMsg = err?.message || String(err);
+      const durationMs = Date.now() - startTime;
 
       // EXECUTION_ERROR
       auditLogger.logEvent({
         timestamp: Date.now(),
         toolName: name,
+        action: name,
         args,
         riskLevel: decision.riskLevel || "DANGEROUS",
         category: decision.category,
@@ -275,7 +464,19 @@ export class ToolGateway {
         cwd,
         reason: errMsg,
         correlationId,
+        toolCallId,
+        userSessionId: sessionId,
+        userId,
+        workspaceId,
+        agentRole: context.agentRole,
+        source: context.source,
+        durationMs,
+        metadata: auditMeta,
       });
+
+      if (sessionId) {
+        toolRateLimiter.release({ sessionId, toolName: name, now: Date.now() });
+      }
 
       return {
         stdout: "",
@@ -286,7 +487,7 @@ export class ToolGateway {
         reason: errMsg,
         riskLevel: decision.riskLevel,
         capability: decision.capability,
-        durationMs: Date.now() - startTime,
+        durationMs,
       };
     }
   }

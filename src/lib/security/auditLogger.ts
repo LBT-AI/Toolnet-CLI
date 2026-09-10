@@ -142,6 +142,39 @@ export class SecurityAuditLogger {
       if (event.correlationId) {
         data.correlationId = event.correlationId;
       }
+      if (event.toolCallId) {
+        data.toolCallId = event.toolCallId;
+      }
+      if (event.userSessionId) {
+        data.userSessionId = event.userSessionId;
+      }
+      if (event.userId) {
+        data.userId = event.userId;
+      }
+      if (event.workspaceId) {
+        data.workspaceId = event.workspaceId;
+      }
+      if (event.agentRole) {
+        data.agentRole = event.agentRole;
+      }
+      if (event.source) {
+        data.source = event.source;
+      }
+      if (event.durationMs !== undefined) {
+        data.durationMs = event.durationMs;
+      }
+      if (event.requestSize !== undefined) {
+        data.requestSize = event.requestSize;
+      }
+      if (event.responseSize !== undefined) {
+        data.responseSize = event.responseSize;
+      }
+      if (event.result !== undefined) {
+        data.result = event.result;
+      }
+      if (event.target) {
+        data.target = event.target;
+      }
 
       if (event.metadata) {
         data.metadata = JSON.parse(redactOutputSecrets(JSON.stringify(event.metadata)));
