@@ -34,8 +34,18 @@ fi
 # Update version
 sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" "$MANIFEST"
 # Update URL
-sed -i "s|/v[0-9][0-9.]*toolnet-windows|/v${VERSION}/toolnet-windows|" "$MANIFEST"
-# Update hash placeholder
-sed -i "s/SHA256PLACEHOLDER_WINDOWS_X64/${HASH}/" "$MANIFEST"
+sed -i "s|/v[0-9][0-9.]*/toolnet-windows|/v${VERSION}/toolnet-windows|" "$MANIFEST"
+# Update hash (replace whatever hash is currently set)
+sed -i "s|\"hash\": \"[a-fA-F0-9]*\"|\"hash\": \"${HASH}\"|" "$MANIFEST"
 
-echo "Updated $MANIFEST for v${VERSION} (hash: ${HASH:0:16}…)"
+# Verify the manifest now points at this release with the right hash
+if ! grep -q "/v${VERSION}/toolnet-windows-x64.zip" "$MANIFEST"; then
+  echo "ERROR: URL for v${VERSION} was not applied to $MANIFEST" >&2
+  exit 1
+fi
+if ! grep -q "$HASH" "$MANIFEST"; then
+  echo "ERROR: hash was not applied to $MANIFEST" >&2
+  exit 1
+fi
+
+echo "Updated $MANIFEST for v${VERSION} (hash: ${HASH:0:16}…, verified)"

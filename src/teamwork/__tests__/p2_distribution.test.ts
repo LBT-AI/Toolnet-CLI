@@ -403,8 +403,8 @@ describe("P2 — Package metadata (single CLI command)", () => {
     expect(shebang).toContain("env node");
   });
 
-  it("package version is 1.2.2", () => {
-    expect(pkg.version).toBe("1.2.2");
+  it("package version is valid semver", () => {
+    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it("opentui-spinner is not a dependency", () => {

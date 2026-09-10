@@ -18,22 +18,22 @@ class Toolnet < Formula
   on_macos do
     on_intel do
       url "https://github.com/LBT-AI/Toolnet-CLI/releases/download/v#{version}/toolnet-darwin-x64.tar.gz"
-      sha256 "a971f62771e8b6574b17db5422214d7f31b9427efc7f9180e61eb3350a0bbd59"
+      sha256 "ecb9aa33f171460560946971f0a2b6c02a916978b3b5aad907b410c55f2ae044"
     end
     on_arm do
       url "https://github.com/LBT-AI/Toolnet-CLI/releases/download/v#{version}/toolnet-darwin-arm64.tar.gz"
-      sha256 "5c4f32e3a091722d431347d443bad2d763aeb8274bdb9a20fb30e660e15ae27c"
+      sha256 "8c7ce07db81f26555ef55e071e1fbeccc45766ec07f5665e8bd94adc7661c812"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/LBT-AI/Toolnet-CLI/releases/download/v#{version}/toolnet-linux-x64.tar.gz"
-      sha256 "fa53f8b422e5e4aea62a3724af257b50a1cad5a460048b4f51fd7b03e3a919f5"
+      sha256 "c85a94635b03d638bc70696d304e0a9bb988bd2256d7ac315fcb2b17887065bb"
     end
     on_arm do
       url "https://github.com/LBT-AI/Toolnet-CLI/releases/download/v#{version}/toolnet-linux-arm64.tar.gz"
-      sha256 "ddc93e8af016660efdf08bb3ce5cbbe2c8dc6337627af5c2b6e894bb742577cd"
+      sha256 "f2302eaa32eff35495022a051bbc18b1c9e590c7bd55b6681e521d5bae824523"
     end
   end
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# update-formula-checksums.sh — Replace placeholder checksums in Formula/toolnet.rb
+# update-formula-checksums.sh — Replace checksums in Formula/toolnet.rb
 # with real SHA256 values downloaded from a GitHub release.
 #
 # Usage:
@@ -34,21 +34,12 @@ update_sha() {
   local hash
   hash=$(echo "$CHECKSUMS" | grep "$artifact" | head -1 | awk '{print $1}')
   if [ -z "$hash" ]; then
-    echo "  WARNING: No checksum found for $artifact — skipping" >&2
-    return
+    echo "  ERROR: No checksum found for $artifact" >&2
+    exit 1
   fi
-  # Replace the placeholder line for this platform
-  local placeholder
-  placeholder=$(echo "$artifact" | sed 's/toolnet-//; s/-//; s/\.tar\.gz//' | tr '[:lower:]' '[:upper:]' | sed 's/^/PLACEHOLDER_/' | sed 's/_X64$/_X64/' | sed 's/_ARM64$/_ARM64/')
-  # Simpler: map artifact name → placeholder name
-  case "$artifact" in
-    *darwin-x64*)   placeholder="PLACEHOLDER_DARWIN_X64" ;;
-    *darwin-arm64*) placeholder="PLACEHOLDER_DARWIN_ARM64" ;;
-    *linux-x64*)    placeholder="PLACEHOLDER_LINUX_X64" ;;
-    *linux-arm64*)  placeholder="PLACEHOLDER_LINUX_ARM64" ;;
-    *) echo "  Unknown artifact: $artifact" >&2; return ;;
-  esac
-  sed -i "s|\"${placeholder}\"|\"${hash}\"|" "$FORMULA"
+  # The formula lists each artifact URL followed immediately by its sha256 line.
+  # Replace the sha256 on the line after the matching URL.
+  sed -i "/${artifact}/{n; s|sha256 \".*\"|sha256 \"${hash}\"|;}" "$FORMULA"
   echo "  $artifact → ${hash:0:16}…"
 }
 
@@ -60,4 +51,17 @@ update_sha "toolnet-linux-arm64.tar.gz"
 # Update version in formula
 sed -i "s/version \".*\"/version \"${VERSION}\"/" "$FORMULA"
 
-echo "Updated $FORMULA for v${VERSION}"
+# Verify every expected hash is present in the formula
+MISSING=0
+for artifact in toolnet-darwin-x64.tar.gz toolnet-darwin-arm64.tar.gz toolnet-linux-x64.tar.gz toolnet-linux-arm64.tar.gz; do
+  expected=$(echo "$CHECKSUMS" | grep "$artifact" | head -1 | awk '{print $1}')
+  if ! grep -q "$expected" "$FORMULA"; then
+    echo "  ERROR: hash for $artifact was not applied to $FORMULA" >&2
+    MISSING=1
+  fi
+done
+if [ "$MISSING" -ne 0 ]; then
+  exit 1
+fi
+
+echo "Updated $FORMULA for v${VERSION} (verified)"
