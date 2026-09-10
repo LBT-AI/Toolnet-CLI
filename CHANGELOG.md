@@ -2,6 +2,15 @@
 All notable changes to ToolNet CLI will be documented here.
 The project follows Semantic Versioning.
 
+## [1.2.3] - 2026-09-10
+### Added
+- **Reasoning controls**: `/reasoning` command (`auto|low|medium|high|off`) to configure reasoning/thinking effort, with a collapsible Thinking panel showing effort, elapsed time and token usage. Models without configurable reasoning ignore the setting.
+- **Conversation language handling**: automatic detection of Vietnamese / Chinese / English with support for explicit language requests, so replies match the user's language throughout a session.
+### Changed
+- **Slash command palette redesign**: full-width sheet layout, realtime filtering by name and description, complete keyboard navigation (arrows, Ctrl+P/N, PgUp/PgDn, Home/End, wrap-around) and correct rendering on narrow terminals.
+### Removed
+- Legacy banner, boot-animation and mascot modules superseded by the consolidated banner implementation.
+
 ## [1.2.2] - 2026-09-06
 ### Packaging
 - Clean npm installation dependency graph: no ERESOLVE, conflicting peer, or deprecated dependency warnings on fresh production install.
