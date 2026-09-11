@@ -14,6 +14,7 @@ import {
 } from "../../lib/harness/modelAdapter";
 import { AgentStateMachine, isValidTransition } from "../../lib/harness/agentState";
 import { toolRegistry } from "../../lib/harness/toolRegistry";
+import { agentTools } from "../../lib/agentTools";
 import { setModelCapabilities } from "../../lib/reasoning";
 import type { ChatResponse } from "../../providers/types";
 
@@ -438,5 +439,73 @@ describe("ARCHITECTURE — one primary execution path", () => {
     expect(src).not.toMatch(/provider\.(chat|stream)\(/);
     expect(src).not.toMatch(/delta\.tool_calls/);
     expect(src).not.toMatch(/executeToolBatch\(/);
+  });
+});
+
+// ── Phase 73.11 — single definition source & interface parity ────────────────
+
+describe("ARCHITECTURE — single definition source and interface parity", () => {
+  const srcDir = path.join(__dirname, "../..");
+  const read = (rel: string): string => fs.readFileSync(path.join(srcDir, rel), "utf8");
+
+  test("the model-facing schema array is derived from the canonical registry", () => {
+    const src = read("lib/agentTools.ts");
+    expect(src).toMatch(/export const agentTools = toolRegistry\.schemas\(\)/);
+    // A hand-maintained array literal is the duplicate source we removed.
+    expect(src).not.toMatch(/export const agentTools = \[\s*\n\s*\{/);
+  });
+
+  test("agentTools exposes canonical names only (aliases stay dispatch-only)", () => {
+    const names = agentTools.map((t: any) => t.function.name);
+    expect(names).toContain("shell");
+    expect(names).toContain("grep");
+    expect(names).toContain("glob");
+    expect(names).not.toContain("bash");
+    expect(names).not.toContain("run_command");
+    expect(names).not.toContain("grep_search");
+    expect(names).not.toContain("glob_search");
+  });
+
+  test("UI tool/harness catalogs read from the canonical registry, not a second source", () => {
+    const toolsCatalog = read("lib/toolsCatalog.ts");
+    expect(toolsCatalog).toMatch(/toolRegistry\.list\(\)/);
+    expect(toolsCatalog).not.toMatch(/getMergedAgentTools/);
+
+    const harnessCatalog = read("lib/harnessCatalog.ts");
+    expect(harnessCatalog).toMatch(/toolRegistry\.canonicalNames\(\)/);
+    expect(harnessCatalog).not.toMatch(/getMergedAgentTools/);
+  });
+
+  test("src/tui.ts is a pure UI surface — no tool execution re-export", () => {
+    const src = read("tui.ts");
+    expect(src).not.toMatch(/from\s+"\.\/lib\/harness\/toolExecutor"/);
+    expect(src).not.toMatch(/export\s*\{[^}]*executeToolBatch/);
+    expect(src).toMatch(/requestApprovalModal/);
+  });
+
+  test("simple-repl owns no agent loop — it delegates to the shared kernel", () => {
+    const src = read("simple-repl.ts");
+    expect(src).not.toMatch(/provider\.(chat|stream)\(/);
+    expect(src).not.toMatch(/delta\.tool_calls/);
+    expect(src).not.toMatch(/executeToolBatch\(/);
+    expect(src).toMatch(/new AgentRuntime\(/);
+  });
+
+  test("AgentRuntime is a thin facade — no provider call and no tool loop of its own", () => {
+    const src = read("lib/agentRuntime.ts");
+    expect(src).not.toMatch(/provider\.(chat|stream)\(/);
+    expect(src).not.toMatch(/executeToolBatch\(/);
+    expect(src).not.toMatch(/for await/);
+    expect(src).toMatch(/this\.harness\.(run|resume)\(/);
+  });
+
+  test("interface parity: TUI, headless and REPL all reach the shared AgentHarness kernel", () => {
+    expect(read("tui/events/agentWiring.ts")).toMatch(/agentEngine\.run\(/);
+    expect(read("lib/nonInteractive.ts")).toMatch(/agentEngine\.run\(/);
+    expect(read("simple-repl.ts")).toMatch(/runLoop\(/);
+    // The engine is a facade: the loop lives in AgentHarness alone.
+    const engine = read("core/agent/agentEngine.ts");
+    expect(engine).toMatch(/harness\.(execute|resume|runSubagent)\(/);
+    expect(engine).not.toMatch(/provider\.(chat|stream)\(/);
   });
 });

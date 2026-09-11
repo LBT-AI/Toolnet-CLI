@@ -1,7 +1,7 @@
 import { getHarness } from "./harness";
 import { contextEngine } from "./context";
 import { sessionTrust } from "./security/sessionTrust";
-import { getMergedAgentTools } from "./agentTools";
+import { toolRegistry } from "./harness/toolRegistry";
 import type { HarnessMetrics } from "./harness/types";
 import type { ListItem } from "../tui/renderers/listPanelRenderer";
 
@@ -118,7 +118,7 @@ export function getHarnessSectionDetail(input: string): HarnessSectionDetail | n
         id,
         title: "Harness / Tools",
         rows: [
-          { label: "Registered Tools", value: String(getMergedAgentTools().length), status: "active" },
+          { label: "Registered Tools", value: String(toolRegistry.canonicalNames().length), status: "active" },
           { label: "Cache Hits", value: String(metrics.toolCacheHits || 0) },
           { label: "Deduplicated", value: String(metrics.toolCallsDeduplicated || 0) },
           { label: "Batched", value: String(metrics.toolCallsBatched || 0) },

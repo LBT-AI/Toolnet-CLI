@@ -400,11 +400,14 @@ describe("P1 — Routing: real paths dispatch through executeToolBatch", () => {
 });
 
 describe("P1 — TUI routing (terminal app; static verification)", () => {
-  it("tui.ts imports and dispatches tool calls through executeToolBatch", () => {
+  it("tui.ts is a pure UI surface and never re-exports a tool execution path", () => {
     const src = fs.readFileSync(path.join(__dirname, "../../tui.ts"), "utf8");
-    expect(src).toContain('from "./lib/harness/toolExecutor"');
-    expect(src).toContain("executeToolBatch(");
-    // Approval is preserved: the interactive modal is still invoked from the pipeline runTool.
+    // Phase 73.11: the historical executeToolBatch re-export was removed so the
+    // UI cannot be mistaken for an execution path. Tool routing happens only in
+    // the shared Agent Engine / AgentHarness kernel.
+    expect(src).not.toMatch(/from\s+"\.\/lib\/harness\/toolExecutor"/);
+    expect(src).not.toMatch(/export\s*\{[^}]*executeToolBatch/);
+    // Approval is preserved: the interactive modal is still invoked from the TUI.
     expect(src).toContain("requestApprovalModal");
   });
 });

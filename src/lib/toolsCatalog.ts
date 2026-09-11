@@ -1,4 +1,4 @@
-import { getMergedAgentTools } from "./agentTools";
+import { toolRegistry, type ToolDefinition as RegistryTool } from "./harness/toolRegistry";
 import { pluginManager } from "./plugins/pluginManager";
 import type { ListItem } from "../tui/renderers/listPanelRenderer";
 
@@ -35,18 +35,41 @@ export function classifyTool(name: string): string {
   return "MCP";
 }
 
-function normalizeTool(raw: any, source: string): ToolInfo | null {
-  const name = raw?.function?.name;
-  if (!name) return null;
-  const params = raw?.function?.parameters || {};
-  const properties: Record<string, ToolParameter> = params?.properties || {};
+/**
+ * Project a canonical registry entry into the UI view model.
+ *
+ * The registry is the single definition source, so the catalog never grows a
+ * schema of its own — it only re-shapes metadata the model already sees.
+ */
+function fromRegistry(def: RegistryTool): ToolInfo {
+  const params = (def.parameters ?? {}) as {
+    properties?: Record<string, ToolParameter>;
+    required?: unknown;
+  };
   return {
-    id: name,
-    name,
-    category: classifyTool(name),
-    description: raw?.function?.description || "",
-    parameters: properties,
-    required: Array.isArray(params?.required) ? params.required : [],
+    id: def.name,
+    name: def.name,
+    category: def.category || classifyTool(def.name),
+    description: def.description || "",
+    parameters: params.properties || {},
+    required: Array.isArray(params.required) ? (params.required as string[]) : [],
+    source: "local",
+    status: "enabled",
+  };
+}
+
+/** Plugin tools still arrive as OpenAI-style function schemas. */
+function fromProviderSchema(raw: unknown, source: string): ToolInfo | null {
+  const fn = (raw as { function?: { name?: string; description?: string; parameters?: { properties?: Record<string, ToolParameter>; required?: unknown } } })?.function;
+  if (!fn?.name) return null;
+  const params = fn.parameters || {};
+  return {
+    id: fn.name,
+    name: fn.name,
+    category: classifyTool(fn.name),
+    description: fn.description || "",
+    parameters: params.properties || {},
+    required: Array.isArray(params.required) ? (params.required as string[]) : [],
     source,
     status: "enabled",
   };
@@ -56,16 +79,16 @@ export function getAllTools(): ToolInfo[] {
   const seen = new Set<string>();
   const tools: ToolInfo[] = [];
 
-  for (const raw of getMergedAgentTools()) {
-    const info = normalizeTool(raw, "local");
-    if (info && !seen.has(info.name)) {
-      seen.add(info.name);
-      tools.push(info);
-    }
+  // Canonical local tools only: aliases (bash/run_command/grep_search/glob_search)
+  // stay dispatchable but are never surfaced as a separate tool definition.
+  for (const def of toolRegistry.list()) {
+    if (def.aliasOf || seen.has(def.name)) continue;
+    seen.add(def.name);
+    tools.push(fromRegistry(def));
   }
 
   for (const raw of pluginManager.getRegisteredTools()) {
-    const info = normalizeTool(raw, "plugin");
+    const info = fromProviderSchema(raw, "plugin");
     if (info && !seen.has(info.name)) {
       seen.add(info.name);
       tools.push(info);
