@@ -21,6 +21,7 @@
 
 import { AgentHarness } from "../../lib/harness";
 import type { ExecutionMode, HarnessEvent, HarnessResult } from "../../lib/harness/types";
+import type { ContextMessage } from "../../lib/context/types";
 import type { SandboxMode } from "../../lib/security/types";
 import type { AgentEvent, AgentResult, ToolResult } from "../contracts";
 
@@ -33,6 +34,13 @@ export type AgentEngineMode =
 
 export interface AgentEngineRunOptions {
   prompt: string;
+
+  /**
+   * Resume from an existing transcript instead of a fresh [system, user] pair.
+   * The TUI passes its current chat history here so the shared engine owns the
+   * loop without losing conversation context.
+   */
+  messages?: ContextMessage[];
 
   sessionId?: string;
   model?: string;
@@ -53,8 +61,22 @@ export interface AgentEngineRunOptions {
   /** Restrict the tool set (subagents, scoped tasks). */
   toolsOverride?: unknown[];
 
+  /** Ask the model to stream (provider must support it). */
+  stream?: boolean;
   /** Streaming assistant text deltas, for terminal renderers. */
   onTextDelta?: (text: string) => void;
+  /** Streaming reasoning/thinking deltas, when the model exposes them. */
+  onReasoningDelta?: (text: string) => void;
+  /** Interactive approval hook (TUI modal). Denial never runs the tool. */
+  requestApproval?: (input: { name: string; args: unknown; reason?: string }) => Promise<boolean>;
+  /** Front-end specific tools (e.g. the TUI's save_plan); null falls through. */
+  onCustomTool?: (
+    name: string,
+    args: unknown,
+    id: string
+  ) => Promise<{ result: string; allowed: boolean } | null>;
+  /** Reasoning effort settings — forwarded only when the model supports it. */
+  reasoningSettings?: { enabled: boolean; effort: "auto" | "low" | "medium" | "high" };
   /** Normalized event stream — the contract every UI consumes. */
   onEvent?: (event: AgentEvent) => void;
 }
@@ -86,6 +108,12 @@ export function toAgentEvents(ev: HarnessEvent): AgentEvent[] {
       const text = typeof payload.text === "string" ? payload.text : "";
       if (!text) return [];
       return [{ type: "text-delta", text }];
+    }
+
+    case "agent:reasoning_chunk": {
+      const text = typeof payload.text === "string" ? payload.text : "";
+      if (!text) return [];
+      return [{ type: "reasoning-delta", text }];
     }
 
     case "tool:queued": {
@@ -171,17 +199,21 @@ export class AgentEngine {
 
     const emit = (event: AgentEvent) => options.onEvent?.(event);
 
-    if (options.onTextDelta) {
+    // One subscription fans out to the text/reasoning renderers AND the
+    // normalized event stream — the UI never touches provider deltas directly.
+    if (options.onEvent || options.onTextDelta || options.onReasoningDelta) {
       harness.on((ev) => {
-        if (ev.type !== "agent:stream_chunk") return;
-        const text = typeof ev.payload?.text === "string" ? ev.payload.text : "";
-        if (text) options.onTextDelta!(text);
-      });
-    }
-
-    if (options.onEvent) {
-      harness.on((ev) => {
-        for (const event of toAgentEvents(ev)) emit(event);
+        if (options.onTextDelta && ev.type === "agent:stream_chunk") {
+          const text = typeof ev.payload?.text === "string" ? ev.payload.text : "";
+          if (text) options.onTextDelta(text);
+        }
+        if (options.onReasoningDelta && ev.type === "agent:reasoning_chunk") {
+          const text = typeof ev.payload?.text === "string" ? ev.payload.text : "";
+          if (text) options.onReasoningDelta(text);
+        }
+        if (options.onEvent) {
+          for (const event of toAgentEvents(ev)) options.onEvent(event);
+        }
       });
     }
 
@@ -204,6 +236,7 @@ export class AgentEngine {
       turnsUsed: result.turnsUsed,
       tokensUsed: result.tokensUsed,
       durationMs: result.durationMs,
+      messages: result.messages as unknown as AgentResult["messages"],
       error: result.error,
     };
   }
@@ -225,6 +258,10 @@ export class AgentEngine {
       signal: options.signal,
       mode,
       agentRole: options.agentRole,
+      stream: options.stream,
+      requestApproval: options.requestApproval,
+      onCustomTool: options.onCustomTool,
+      reasoningSettings: options.reasoningSettings,
     };
 
     if (mode === "SUBAGENT" && options.agentRole) {
@@ -233,6 +270,11 @@ export class AgentEngine {
         options.prompt,
         { ...base, toolsOverride: options.toolsOverride }
       );
+    }
+
+    // Resume from a caller-owned transcript (TUI) or start a fresh turn.
+    if (options.messages && options.messages.length > 0) {
+      return harness.resume(options.messages, { ...base, toolsOverride: options.toolsOverride });
     }
 
     return harness.execute({ ...base, prompt: options.prompt, toolsOverride: options.toolsOverride });

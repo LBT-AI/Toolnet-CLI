@@ -245,7 +245,10 @@ export async function generateTaskGraph(
   }
 
   try {
-    const response = await provider.chat({
+    // Phase 73.3 — the planner is a model caller too: it goes through the SAME
+    // ModelAdapter normalization path as the agent loop, never raw provider.chat.
+    const { ModelAdapter } = await import("../lib/harness/modelAdapter");
+    const response = await new ModelAdapter(provider).complete({
       model: options.model || getActiveDefaultModel() || "default",
       messages: [
         { role: "system", content: SMART_PLANNER_SYSTEM_PROMPT },
@@ -258,7 +261,7 @@ export async function generateTaskGraph(
       signal: AbortSignal.timeout(10000),
     });
 
-    const rawContent = response.choices?.[0]?.message?.content || "";
+    const rawContent = response.content || "";
 
     const cleanedJson = rawContent
       .replace(/^```json\s*/i, "")

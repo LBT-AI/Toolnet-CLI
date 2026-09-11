@@ -132,9 +132,24 @@ export interface ModelCapabilities {
    *  - none:       model cannot use tools at all — never hand it tool schemas
    */
   toolCalling: ToolCallingMode;
-}
+}// ── Result envelope ─────────────────────────────────────────────────────────
 
-// ── Result envelope ─────────────────────────────────────────────────────────
+/**
+ * Minimal transcript message shape the core guarantees. Structurally
+ * compatible with the harness ContextMessage, so front-ends can persist the
+ * returned transcript without depending on harness internals.
+ */
+export interface AgentMessage {
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  name?: string;
+  tool_call_id?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: string;
+    function: { name: string; arguments: string };
+  }>;
+}
 
 export interface AgentResult {
   success: boolean;
@@ -145,6 +160,8 @@ export interface AgentResult {
   turnsUsed?: number;
   tokensUsed?: number;
   durationMs?: number;
+  /** Full post-run transcript (assistant turns + tool results). */
+  messages?: AgentMessage[];
   error?: string;
 }
 

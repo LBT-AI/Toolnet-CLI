@@ -2,18 +2,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { tuiState } from "../state";
 import { getCwdInfo } from "../../lib/codingAgent";
-import { getCliKey, loadCliKeys } from "../../lib/keys";
 import { getVersion } from "../../lib/version";
-import { contextEngine } from "../../lib/context";
+import { contextEngine, type ContextMessage } from "../../lib/context";
 import { parseAndProcessInput } from "../../lib/attachments";
-import { getMergedAgentTools } from "../../lib/agentTools";
 import { getAgentSystemPrompt } from "../../lib/agentRuntime";
 import { extractLanguageRequest, setResponseLanguage } from "../../lib/language";
-import { applyReasoningOptions, supportsReasoning } from "../../lib/reasoning";
-import { getSandboxMode } from "../../lib/permissions";
-import { ToolGateway } from "../../lib/security/toolGateway";
+import { supportsReasoning } from "../../lib/reasoning";
 import { securityEngine } from "../../lib/security/securityEngine";
-import { executeToolBatch, type ToolCall, type BatchRunResult } from "../../lib/harness/toolExecutor";
+import { toolRegistry } from "../../lib/harness/toolRegistry";
+import { agentEngine } from "../../core/agent/agentEngine";
 import { requestApprovalModal } from "../permissions/permissionModal";
 import { dispatchCommand } from "../../commands";
 import { loadSession, formatExitMessage } from "../../lib/sessionPersistence";
@@ -21,11 +18,8 @@ import { A } from "../../term";
 import { updateCrashToolResult, markCleanExit } from "../../lib/crashRecovery";
 import { restoreTerminal } from "../../lib/terminalLifecycle";
 import { pinToTail } from "../viewport";
-import { scanForUnbackedClaim, buildClaimGuardNudge } from "../../lib/claimGuard";
-import { getModelCapabilities } from "../../lib/reasoning";
-import { getGlobalTracker } from "../../lib/usage";
 import { pluginManager } from "../../lib/plugins/pluginManager";
-import { getActiveProvider, getActiveApiKey, getActiveDefaultModel } from "../../providers";
+import { getActiveProvider, getActiveDefaultModel } from "../../providers";
 import { statusManager } from "../statusService";
 import { messageQueue } from "../../lib/messageQueue";
 import { providerPicker } from "../../components/ProviderPicker";
@@ -61,14 +55,47 @@ async function handleSavePlan(parsedArgs: any): Promise<string> {
   return JSON.stringify({ error: "User denied the plan." });
 }
 
-/** Context-engine bookkeeping for executed tool calls (path-bearing tools). */
-function recordFileAccessIfAny(name: string, args: any): void {
-  if (!args?.path) return;
-  contextEngine.recordFileAccess(
-    args.path,
-    name.includes("write") || name.includes("edit") || name.includes("patch") ? "write" : "read",
-    tuiState.currentSessionId
-  );
+/**
+ * Build the tool schema list for the current agent mode from the ONE canonical
+ * registry. Plan mode is restricted to read-only tools plus save_plan; Build
+ * mode exposes the full registry plus any plugin-registered tools.
+ *
+ * The engine passes this straight to the harness — the TUI never assembles a
+ * second, divergent schema set.
+ */
+function buildToolsForMode(mode: "Build" | "Plan", pluginTools: any[]): any[] | undefined {
+  const base = [...toolRegistry.schemas(), ...pluginTools];
+
+  if (mode !== "Plan") return base;
+
+  const readOnly = new Set([
+    "read_file",
+    "grep",
+    "grep_search",
+    "glob",
+    "glob_search",
+    "find_path",
+    "list_dir",
+    "tree",
+    "file_exists",
+    "get_cwd",
+    "web_fetch",
+  ]);
+
+  const planTools = base.filter((t: any) => readOnly.has(t?.function?.name));
+  planTools.push({
+    type: "function",
+    function: {
+      name: "save_plan",
+      description: "Save the generated plan and request user approval to switch to Build mode.",
+      parameters: {
+        type: "object",
+        properties: { content: { type: "string", description: "The plan content" } },
+        required: ["content"],
+      },
+    },
+  });
+  return planTools;
 }
 
 export async function sendMessage(text: string): Promise<void> {
@@ -93,11 +120,10 @@ export async function sendMessage(text: string): Promise<void> {
     setResponseLanguage(langRequest);
   }
   tuiState.saveCurrentSession();
-  let assistantIdx = tuiState.messages.length - 1;
+  const assistantIdx = tuiState.messages.length - 1;
 
   pinToTail(tuiState.chatViewport);
   statusManager.start("Thinking…");
-  let isReceivingStream = false;
 
   tuiState.abortController = new AbortController();
 
@@ -112,40 +138,31 @@ export async function sendMessage(text: string): Promise<void> {
 
   pluginManager.triggerAgentStart({ sessionId: tuiState.currentSessionId, prompt: text });
 
-  // One corrective nudge per user turn — no loops. Held outside the transcript
-  // (infra instruction, not conversation) and injected into apiMessages only.
-  let claimGuardUsed = false;
-  let claimNudge: string | null = null;
-
   try {
-    let continueAgentLoop = true;
-    while (continueAgentLoop) {
-      continueAgentLoop = false;
-      tuiState.setStatus("Calling API…");
+    // ── Phase 73.6 — Shared Agent Engine ──────────────────────────────────
+    // The TUI no longer holds an agent loop. It builds the transcript, calls
+    // the ONE engine, and renders the normalized AgentEvent stream: no
+    // tool_calls parsing, no direct tool execution, no provider-specific code.
+    const provider = getActiveProvider();
+    if (!provider) {
+      stopSpinner();
+      tuiState.messages.push({ role: "assistant", content: "✖ Error: No provider configured. Use /provider add to set one up." });
+      tuiState.setStatus("✖ No provider configured");
+      tuiState.requestRender();
+      return;
+    }
 
-      // Resolve provider for this request
-      const provider = getActiveProvider();
-      if (!provider) {
-        stopSpinner();
-        tuiState.messages.push({ role: "assistant", content: "✖ Error: No provider configured. Use /provider add to set one up." });
-        tuiState.setStatus("✖ No provider configured");
-        tuiState.requestRender();
-        return;
-      }
+    tuiState.setStatus("Calling API…");
 
-      const extraHeaders: Record<string, string> = {};
-      if (tuiState.bypassMode) {
-        extraHeaders["x-bypass-toolnet"] = "true";
-        extraHeaders["x-bypass-level"] = tuiState.bypassLevel;
-      }
+    const autoPrep = contextEngine.prepareMessagesForApi(tuiState.messages as any, { model: tuiState.currentModel, sessionId: tuiState.currentSessionId });
+    if (autoPrep.compacted) {
+      tuiState.messages = autoPrep.messages;
+      tuiState.saveCurrentSession();
+    }
 
-      const autoPrep = contextEngine.prepareMessagesForApi(tuiState.messages as any, { model: tuiState.currentModel, sessionId: tuiState.currentSessionId });
-      if (autoPrep.compacted) {
-        tuiState.messages = autoPrep.messages;
-        tuiState.saveCurrentSession();
-      }
-
-      const apiMessages = tuiState.messages.filter((m, i) => i !== assistantIdx && m.role !== "system").map((m) => {
+    const apiMessages: ContextMessage[] = tuiState.messages
+      .filter((m, i) => i !== assistantIdx && m.role !== "system")
+      .map((m) => {
         let contentPayload: any = m.content;
         if (m.role === "user" && typeof m.content === "string" && (m.content.includes("@") || m.content.includes("/attach"))) {
           const processed = parseAndProcessInput(m.content, getCwdInfo().currentCwd);
@@ -160,285 +177,106 @@ export async function sendMessage(text: string): Promise<void> {
         return out;
       });
 
-      apiMessages.unshift({ role: "system", content: tuiState.agentMode === "Plan" ? PLANNER_SYSTEM_PROMPT : getAgentSystemPrompt(tuiState.currentSessionId) });
-      // Claim-guard nudge: appended after the system prompt so the model must
-      // answer it (user-role) — it is NOT part of the visible transcript.
-      if (claimNudge) {
-        apiMessages.push({ role: "user", content: claimNudge });
-      }
-      // Guard clause: provider payloads never contain status/system notices
-      // after the primary instruction.
-      assertPrimarySystemMessageInvariant(apiMessages as any);
+    // The engine resumes this transcript as-is, so the system prompt must be
+    // first — assertPrimarySystemMessageInvariant enforces that invariant.
+    apiMessages.unshift({ role: "system", content: tuiState.agentMode === "Plan" ? PLANNER_SYSTEM_PROMPT : getAgentSystemPrompt(tuiState.currentSessionId) });
+    assertPrimarySystemMessageInvariant(apiMessages as any);
 
-      // Merge plugin tools
-      const pluginTools = pluginManager.getRegisteredTools();
-      const allTools = [...getMergedAgentTools(), ...pluginTools];
+    const pluginTools = pluginManager.getRegisteredTools();
+    const toolsOverride = buildToolsForMode(tuiState.agentMode, pluginTools);
 
-      let toolsForRequest: any[] | undefined = undefined;
-      let toolChoiceForRequest: any = undefined;
+    tuiState.setStatus("Streaming response…");
 
-      if (tuiState.agentMode === "Build") {
-        toolsForRequest = allTools;
-        toolChoiceForRequest = "auto";
-        // Capability guard: a model that has declared itself tool-incapable
-        // must not be handed tool definitions it will silently ignore (and
-        // then narrate fake success). It still answers, just without tools.
-        const activeModel = tuiState.currentModel || getActiveDefaultModel() || "default";
-        const caps = getModelCapabilities(activeModel);
-        if (caps && caps.tools === false) {
-          toolsForRequest = undefined;
-          toolChoiceForRequest = undefined;
-        }
-      } else if (tuiState.agentMode === "Plan") {
-        const planTools = allTools.filter((t: any) =>
-          ["read_file", "grep", "grep_search", "glob", "glob_search", "find_path", "list_dir", "tree", "file_exists", "get_cwd", "web_fetch"].includes(t.function.name)
-        );
-        planTools.push({
-          type: "function",
-          function: {
-            name: "save_plan",
-            description: "Save the generated plan and request user approval to switch to Build mode.",
-            parameters: {
-              type: "object",
-              properties: { content: { type: "string", description: "The plan content" } },
-              required: ["content"],
-            },
-          },
-        });
-        toolsForRequest = planTools;
-        toolChoiceForRequest = "auto";
-      }
+    let fullText = "";
+    const toolNames = new Map<string, string>();
 
-      tuiState.setStatus("Streaming response…");
-      isReceivingStream = true;
-
-      let fullText = "";
-      const toolCallsMap: Record<number, any> = {};
-
-      if (typeof provider.stream === "function") {
-        const streamIter = provider.stream(
-          applyReasoningOptions(
-            {
-              model: tuiState.currentModel || getActiveDefaultModel() || "default",
-              messages: apiMessages,
-              tools: toolsForRequest,
-              tool_choice: toolChoiceForRequest,
-              headers: extraHeaders,
-              signal: tuiState.abortController?.signal,
-            },
-            tuiState.currentModel || getActiveDefaultModel() || "default",
-            tuiState.reasoningSettings
-          )
-        );
-
-        for await (const chunk of streamIter) {
-          const delta = chunk.choices?.[0]?.delta;
-          // Reasoning delta — only ever from what the API actually streams.
-          const reasoningDelta =
-            (delta as any)?.reasoning_content ?? (delta as any)?.reasoning ?? (delta as any)?.thinking;
-          if (reasoningDelta) {
+    const result = await agentEngine.run({
+      prompt: text,
+      messages: apiMessages,
+      model: tuiState.currentModel || getActiveDefaultModel() || "default",
+      sessionId: tuiState.currentSessionId,
+      stream: true,
+      signal: tuiState.abortController.signal,
+      toolsOverride,
+      reasoningSettings: tuiState.reasoningSettings,
+      onTextDelta: (delta) => {
+        if (tuiState.agentPhase === "thinking") tuiState.agentPhase = "streaming";
+        fullText += delta;
+        tuiState.messages[assistantIdx] = { role: "assistant", content: fullText + "▊" };
+        tuiState.requestStreamRender();
+      },
+      onReasoningDelta: (delta) => {
+        if (tuiState.agentPhase !== "thinking") tuiState.agentPhase = "thinking";
+        tuiState.reasoningText += delta;
+        if (!tuiState.reasoningElapsed) tuiState.reasoningElapsed = tuiState.elapsedDisplay || "";
+        statusManager.update("Thinking");
+        tuiState.requestStreamRender();
+      },
+      onEvent: (event) => {
+        switch (event.type) {
+          case "reasoning-delta":
             if (tuiState.agentPhase !== "thinking") tuiState.agentPhase = "thinking";
-            tuiState.reasoningText += reasoningDelta;
-            if (!tuiState.reasoningElapsed) tuiState.reasoningElapsed = tuiState.elapsedDisplay || "";
-            statusManager.update("Thinking");
-            // Coalesced repaint: never one full frame per reasoning token.
             tuiState.requestStreamRender();
-          }
-          if (delta?.content) {
-            if (tuiState.agentPhase === "thinking") tuiState.agentPhase = "streaming";
-            fullText += delta.content;
-            tuiState.messages[assistantIdx] = { role: "assistant", content: fullText + "▊" };
-            // Follow-tail lives in chatViewport (resolved once per frame in
-            // buildFrame) — do NOT reset scrollOffset here; that fought the
-            // user's scroll position and re-laid-out the frame every token.
-            tuiState.requestStreamRender();
-          }
-          if (Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0) {
-            if (tuiState.agentPhase === "thinking" || tuiState.agentPhase === "streaming") {
-              tuiState.agentPhase = "working";
-            }
-            for (const _tc of delta.tool_calls) {
-              const tc = _tc as unknown as { index?: number; id?: string; function?: { name?: string; arguments?: string } };
-              const idx = (tc.index ?? 0) as number;
-              if (!toolCallsMap[idx]) {
-                toolCallsMap[idx] = { id: tc.id || `call_${idx}`, type: "function", function: { name: tc.function?.name || "", arguments: "" } };
-              }
-              if (tc.function?.arguments) {
-                toolCallsMap[idx].function.arguments += tc.function.arguments;
-              }
-            }
-          }
-          if (chunk.usage) {
-            const u = chunk.usage;
-            const reasoningTokens =
-              (u as any).reasoning_tokens ||
-              u.completion_tokens_details?.reasoning_tokens ||
-              0;
-            if (reasoningTokens) tuiState.reasoningTokens = reasoningTokens;
-            tuiState.lastTokens = `${u.prompt_tokens || 0} \u2192 ${u.completion_tokens || 0} (${u.total_tokens || 0})`;
-            const tracker = getGlobalTracker();
-            tracker.recordUsage({
-              inputTokens: u.prompt_tokens || u.input_tokens || 0,
-              outputTokens: u.completion_tokens || u.output_tokens || 0,
-              cachedInputTokens: u.prompt_tokens_details?.cached_tokens || u.cache_read_input_tokens || 0,
-              model: tuiState.currentModel,
-            });
-          }
+            break;
+          case "tool-call":
+            tuiState.agentPhase = "working";
+            toolNames.set(event.callId, event.name);
+            statusManager.updateTool(event.name, event.input as any);
+            tuiState.requestRender();
+            break;
+          case "tool-result":
+            updateCrashToolResult(event.callId, event.result.exitCode ?? (event.result.ok ? 0 : 1), "Executed tool");
+            tuiState.requestRender();
+            break;
+          case "tool-error":
+            tuiState.requestRender();
+            break;
+          case "agent-complete":
+            tuiState.agentPhase = "done";
+            break;
+          case "cancelled":
+            tuiState.agentPhase = "cancelled";
+            break;
+          case "error":
+            tuiState.agentPhase = "error";
+            break;
+          default:
+            break;
         }
-      } else {
-        const chatRes = await provider.chat({
-          model: tuiState.currentModel || getActiveDefaultModel() || "default",
-          messages: apiMessages,
-          tools: toolsForRequest,
-          tool_choice: toolChoiceForRequest,
-          headers: extraHeaders,
-          signal: tuiState.abortController?.signal,
+      },
+      requestApproval: async ({ name, args, reason }) => {
+        const decision = await requestApprovalModal({
+          toolName: name,
+          args,
+          targetKey: securityEngine.getSessionTrustTargetKey(name, args),
+          reason: reason || `Tool ${name} requires permission`,
         });
-        const msg = chatRes.choices?.[0]?.message;
-        if (msg?.content) fullText = msg.content;
-        if (msg?.tool_calls) {
-          msg.tool_calls.forEach((tc, idx) => {
-            toolCallsMap[idx] = tc;
-          });
-        }
-        if (chatRes.usage) {
-          const u = chatRes.usage;
-          tuiState.lastTokens = `${u.prompt_tokens || 0} \u2192 ${u.completion_tokens || 0} (${u.total_tokens || 0})`;
-        }
-      }
+        return decision;
+      },
+      onCustomTool: async (name, args) => {
+        // TUI-only tool: save_plan is handled here, not in the core registry.
+        if (name !== "save_plan") return null;
+        const toolResult = await handleSavePlan(args);
+        return { result: toolResult, allowed: true };
+      },
+    });
 
-      const toolCallsArr = Object.values(toolCallsMap);
-
-      if (toolCallsArr.length > 0) {
-        tuiState.messages[assistantIdx] = {
-          role: "assistant",
-          content: "",
-          tool_calls: toolCallsArr,
-        };
-        tuiState.requestRender();
-
-        const cwd = getCwdInfo().currentCwd;
-        const parsedCalls: ToolCall[] = toolCallsArr.map((tc: any) => {
-          let a: any = {};
-          try { a = JSON.parse(tc.function.arguments || "{}"); } catch {}
-          return { id: tc.id, name: tc.function.name, args: a };
-        });
-
-        const runTool = async (name: string, args: any, id: string): Promise<BatchRunResult> => {
-          statusManager.updateTool(name, args);
-          if (name === "save_plan") {
-            const r = await handleSavePlan(args);
-            return { result: r, allowed: true };
-          }
-
-          // Propagate the request-level AbortSignal so Ctrl+C kills running
-          // processes (shell trees, fetches) — not just the HTTP stream.
-          const requestSignal = tuiState.abortController?.signal;
-
-          // ── Layer 4 Phase 1: SINGLE GATEWAY FLOW ──────────────────────────
-          // Step 1: unapproved gateway call → SecurityEngine decision (only eval).
-          const gateway = async (userApproved: boolean) =>
-            ToolGateway.execute(
-              { name, args, id },
-              {
-                cwd,
-                workspaceRoot: getCwdInfo().workspaceRoot,
-                sandboxMode: getSandboxMode(),
-                userApproved,
-                sessionId: tuiState.currentSessionId,
-                source: "tui",
-                signal: requestSignal,
-              }
-            );
-
-          const first = await gateway(false);
-
-          // Step 2: DENY → never executed (CRITICAL_DENY included — no modal).
-          if (!first.allowed && !first.needsApproval) {
-            return {
-              result: JSON.stringify({ error: first.stderr || `Permission Denied: ${first.reason || "Blocked by sandbox policy."}` }),
-              allowed: false,
-            };
-          }
-
-          // Step 3: ASK → interactive modal (Y once / A session / N / Esc).
-          if (first.needsApproval) {
-            const ok = await requestApprovalModal({
-              toolName: name,
-              args,
-              targetKey: securityEngine.getSessionTrustTargetKey(name, args),
-              reason: first.reason || `Tool ${name} requires permission`,
-            });
-            if (!ok) {
-              return { result: JSON.stringify({ error: "User denied permission." }), allowed: false };
-            }
-            // Step 4: approved (Y or A) → gateway re-entry with userApproved=true.
-            // The gateway evaluates the SAME args once more but skips the modal
-            // path; Y/A/N/Esc each evaluate exactly once — no double execution.
-            const approvedRes = await gateway(true);
-            if (!approvedRes.allowed) {
-              return {
-                result: JSON.stringify({ error: approvedRes.stderr || `Permission Denied: ${approvedRes.reason || "Blocked by sandbox policy."}` }),
-                allowed: false,
-              };
-            }
-            updateCrashToolResult(name, 0, `Executed ${name}`);
-            recordFileAccessIfAny(name, args);
-            return { result: approvedRes.stdout, allowed: true };
-          }
-
-          // Step 5: ALLOW straight through.
-          updateCrashToolResult(name, 0, `Executed ${name}`);
-          recordFileAccessIfAny(name, args);
-          return { result: first.stdout, allowed: true };
-        };
-
-        const outcome = await executeToolBatch(parsedCalls, {
-          cwd,
-          signal: tuiState.abortController?.signal,
-          needsApproval: (name, args) => {
-            // Classification-only check (no execution): routes approval-needing
-            // calls to the sequential path so batching can't skip confirmation.
-            const p = securityEngine.evaluate(name, args, getSandboxMode(), cwd, getCwdInfo().workspaceRoot);
-            return p.needsApproval || !p.allowed;
-          },
-          runTool,
-          onMessage: (m) => {
-            tuiState.messages.push({ role: "tool", tool_call_id: m.id, name: m.name, content: m.content });
-            tuiState.saveCurrentSession();
-          },
-        });
-
-        if (outcome.executedCount > 0) {
-          tuiState.setStatus(
-            `Executed ${toolCallsArr.length} tool call(s) — ${outcome.deduplicatedCount} deduplicated, ${outcome.parallelBatches} parallel batch(es)`
-          );
-        }
-
-        tuiState.messages.push({ role: "assistant", content: "" });
-        assistantIdx = tuiState.messages.length - 1;
-        tuiState.saveCurrentSession();
-        continueAgentLoop = true;
-      } else {
-        // ── Final answer path — unbacked-claim guard ──────────────────────
-        // The model answered WITHOUT tool calls. If it narrated a filesystem
-        // mutation anyway ("Tôi đã tạo file…") while presenting code, that
-        // claim is false: no tool ran, nothing was verified on disk. Give the
-        // model ONE corrective nudge to convert the claim into real tool calls
-        // (or reword truthfully) before the answer ships to the user.
-        const claimScan = scanForUnbackedClaim(fullText);
-        if (claimScan.suspected && !claimGuardUsed && !tuiState.bypassMode) {
-          claimGuardUsed = true;
-          claimNudge = buildClaimGuardNudge(claimScan.matchedPhrase || "file created", getCwdInfo().workspaceRoot);
-          continueAgentLoop = true;
-          continue; // re-ask; the corrected answer overwrites messages[assistantIdx]
-        }
-        const finalContent = fullText || "(empty response)";
-        tuiState.messages[assistantIdx] = { role: "assistant", content: finalContent };
-        tuiState.saveCurrentSession();
-        tuiState.requestRender();
-      }
+    // Adopt the engine-owned transcript (minus the system prompt, which the
+    // TUI rebuilds per turn) so tool results persist across turns.
+    const transcript = (result.messages ?? []).filter((m) => m.role !== "system");
+    if (transcript.length > 0) {
+      tuiState.messages = transcript as any;
+    } else if (!result.success) {
+      tuiState.messages[assistantIdx] = { role: "assistant", content: result.error ? `✖ Error: ${result.error}` : "(no response)" };
+    } else {
+      tuiState.messages[assistantIdx] = { role: "assistant", content: result.output || fullText || "(empty response)" };
     }
+
+    if (!result.success) {
+      statusManager.failed(result.error || "Execution failed");
+    }
+    tuiState.saveCurrentSession();
+    tuiState.requestRender();
 
     pinToTail(tuiState.chatViewport);
     tuiState.agentPhase = "done";

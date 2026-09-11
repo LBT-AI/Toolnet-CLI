@@ -13,17 +13,19 @@
  */
 
 import * as fs from "node:fs";
-import { resolvePath } from "./codingAgent";
+import { resolvePath, type PathExecContext } from "./codingAgent";
 
 export interface PostconditionResult {
   ok: boolean;
   error?: string;
 }
 
-function resolveWorkspacePath(p: unknown): string | null {
+function resolveWorkspacePath(p: unknown, ctx?: PathExecContext): string | null {
   if (!p || typeof p !== "string") return null;
   try {
-    const abs = resolvePath(p);
+    // Resolve against the EXECUTION context when provided — verification must
+    // check the same path the mutation targeted, not module-global cwd state.
+    const abs = resolvePath(p, ctx);
     // resolvePath resolves against the active workspace cwd; a resolved path
     // that is not under the workspace is out of scope for verification.
     return abs || null;
@@ -33,8 +35,8 @@ function resolveWorkspacePath(p: unknown): string | null {
 }
 
 /** write_file: file must exist, be a regular file, and be readable. */
-export function verifyFileWritten(pathArg: unknown): PostconditionResult {
-  const abs = resolveWorkspacePath(pathArg);
+export function verifyFileWritten(pathArg: unknown, ctx?: PathExecContext): PostconditionResult {
+  const abs = resolveWorkspacePath(pathArg, ctx);
   if (!abs) return { ok: false, error: "write_file verification failed: missing or invalid path argument" };
   try {
     const st = fs.lstatSync(abs);
@@ -51,8 +53,8 @@ export function verifyFileWritten(pathArg: unknown): PostconditionResult {
 }
 
 /** edit_file / replace_all / apply_patch: file must still exist and have changed. */
-export function verifyFileEdited(pathArg: unknown, beforeHash: string | undefined): PostconditionResult {
-  const abs = resolveWorkspacePath(pathArg);
+export function verifyFileEdited(pathArg: unknown, beforeHash: string | undefined, ctx?: PathExecContext): PostconditionResult {
+  const abs = resolveWorkspacePath(pathArg, ctx);
   if (!abs) return { ok: false, error: "edit verification failed: missing or invalid path argument" };
   if (!fs.existsSync(abs)) {
     return { ok: false, error: `edit reported success but the file does not exist: ${pathArg}` };
@@ -72,8 +74,8 @@ export function verifyFileEdited(pathArg: unknown, beforeHash: string | undefine
  * Snapshot the (sha256) content of a file before an edit — used to prove the
  * content actually changed. Returns undefined when the file doesn't exist yet.
  */
-export function snapshotFileHash(pathArg: unknown): string | undefined {
-  const abs = resolveWorkspacePath(pathArg);
+export function snapshotFileHash(pathArg: unknown, ctx?: PathExecContext): string | undefined {
+  const abs = resolveWorkspacePath(pathArg, ctx);
   if (!abs || !fs.existsSync(abs)) return undefined;
   try {
     return hashFile(abs);
@@ -83,11 +85,11 @@ export function snapshotFileHash(pathArg: unknown): string | undefined {
 }
 
 /** create_artifact/update_artifact: .artifacts/<name> must exist. */
-export function verifyArtifactWritten(name: unknown): PostconditionResult {
+export function verifyArtifactWritten(name: unknown, ctx?: PathExecContext): PostconditionResult {
   if (!name || typeof name !== "string") {
     return { ok: false, error: "artifact verification failed: missing artifact name" };
   }
-  const abs = resolveWorkspacePath(`.artifacts/${name}`);
+  const abs = resolveWorkspacePath(`.artifacts/${name}`, ctx);
   if (!abs || !fs.existsSync(abs)) {
     return { ok: false, error: `artifact reported success but .artifacts/${name} does not exist` };
   }
@@ -95,8 +97,8 @@ export function verifyArtifactWritten(name: unknown): PostconditionResult {
 }
 
 /** mkdir(-like) mutations (e.g. shell mkdir, future mkdir tool): dir must exist. */
-export function verifyDirectoryExists(pathArg: unknown): PostconditionResult {
-  const abs = resolveWorkspacePath(pathArg);
+export function verifyDirectoryExists(pathArg: unknown, ctx?: PathExecContext): PostconditionResult {
+  const abs = resolveWorkspacePath(pathArg, ctx);
   if (!abs || !fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
     return { ok: false, error: `directory was not created: ${pathArg}` };
   }

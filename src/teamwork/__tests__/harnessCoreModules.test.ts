@@ -5,6 +5,8 @@
  */
 
 import { test, expect, describe } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
 import {
   parseStructuredToolCalls,
   normalizeChatResponse,
@@ -361,5 +363,80 @@ describe("toolRegistry", () => {
     expect(names).toContain("read_file");
     expect(names).not.toContain("write_file");
     expect(names).not.toContain("bash");
+  });
+});
+
+// ── Phase 73.10 — canonical names + one primary execution path ───────────────
+
+describe("toolRegistry — canonical names (no aliases exposed to the model)", () => {
+  test("schemas() exposes exactly one name per capability", () => {
+    const names = toolRegistry.schemas().map((s) => (s as any).function.name);
+    expect(names).toContain("shell");
+    expect(names).not.toContain("bash");
+    expect(names).not.toContain("run_command");
+    expect(names).toContain("grep");
+    expect(names).not.toContain("grep_search");
+    expect(names).toContain("glob");
+    expect(names).not.toContain("glob_search");
+  });
+
+  test("aliases still resolve for dispatch and back-compat", () => {
+    expect(toolRegistry.get("bash")?.aliasOf).toBe("shell");
+    expect(toolRegistry.get("run_command")?.aliasOf).toBe("shell");
+    expect(toolRegistry.get("grep_search")?.aliasOf).toBe("grep");
+    expect(toolRegistry.get("glob_search")?.aliasOf).toBe("glob");
+    expect(toolRegistry.riskOf("run_command")).toBe("execute");
+  });
+
+  test("canonicalNames() lists the model-visible set", () => {
+    const names = toolRegistry.canonicalNames();
+    expect(names).toContain("write_file");
+    expect(names).not.toContain("bash");
+  });
+});
+
+describe("ARCHITECTURE — one primary execution path", () => {
+  const libDir = path.join(__dirname, "../../lib");
+
+  function collectTs(dir: string, out: string[] = []): string[] {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        collectTs(full, out);
+        continue;
+      }
+      if (!entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) continue;
+      out.push(full);
+    }
+    return out;
+  }
+
+  test("only modelAdapter.ts calls provider.chat/stream in src/lib", () => {
+    const offenders = collectTs(libDir).filter((file) => {
+      if (file.endsWith(path.join("harness", "modelAdapter.ts"))) return false;
+      const src = fs.readFileSync(file, "utf8");
+      return /provider\.(chat|stream)\(/.test(src);
+    });
+    expect(offenders.map((f) => path.relative(libDir, f))).toEqual([]);
+  });
+
+  test("agentHarness routes LLM calls through ModelAdapter, not provider.chat", () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, "../../lib/harness/agentHarness.ts"),
+      "utf8"
+    );
+    expect(src).toMatch(/new ModelAdapter\(/);
+    expect(src).not.toMatch(/provider\.chat\(/);
+  });
+
+  test("agentWiring delegates tool routing to the shared engine", () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, "../../tui/events/agentWiring.ts"),
+      "utf8"
+    );
+    expect(src).toMatch(/agentEngine\.run\(/);
+    expect(src).not.toMatch(/provider\.(chat|stream)\(/);
+    expect(src).not.toMatch(/delta\.tool_calls/);
+    expect(src).not.toMatch(/executeToolBatch\(/);
   });
 });

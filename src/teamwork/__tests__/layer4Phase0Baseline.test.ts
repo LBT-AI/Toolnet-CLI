@@ -456,16 +456,24 @@ describe("CONTEXT BASELINE", () => {
 // ── 8. TOOLGATEWAY BYPASS PATHS (observation) ─────────────────────────────
 
 describe("TOOLGATEWAY BYPASS PATHS (observation)", () => {
-  // ── Phase 1 update: bypass REMOVED (was: TUI runTool bypassed ToolGateway) ──
+  // ── Phase 73.6 update: the TUI holds no loop of its own. ──
   // Phase 0 observed: TUI runTool called executeTool directly.
-  // Phase 1: TUI runTool routes through ToolGateway.execute with the
-  // Y/A/N/Esc approval flow — the gateway is the single security chokepoint.
-  test("TUI runTool routes through ToolGateway.execute (Phase 1: converged)", () => {
+  // Phase 1: TUI routed through ToolGateway.execute.
+  // Phase 73.6: the TUI delegates the whole turn to the shared agent engine;
+  // ToolGateway is now reached ONLY through AgentHarness.dispatchTool.
+  test("TUI delegates tool routing to the shared agent engine (Phase 73.6)", () => {
     const wiringSrc = fs.readFileSync(
       path.join(__dirname, "../../tui/events/agentWiring.ts"),
       "utf8",
     );
-    expect(wiringSrc).toMatch(/ToolGateway\.execute/);
+    expect(wiringSrc).toMatch(/agentEngine\.run\(/);
+    // The TUI no longer executes tools, batches them, or parses model deltas.
+    expect(wiringSrc).not.toMatch(/ToolGateway\.execute/);
+    expect(wiringSrc).not.toMatch(/executeToolBatch\(/);
+    expect(wiringSrc).not.toMatch(/provider\.(chat|stream)\(/);
+    expect(wiringSrc).not.toMatch(/delta\.tool_calls/);
+    // Approval is delegated to the engine via the requestApproval hook.
+    expect(wiringSrc).toMatch(/requestApproval:/);
     // Legacy direct call is gone: no executeTool(name, args, { cwd }) bypass left.
     expect(wiringSrc).not.toMatch(/executeTool\(name,\s*args,\s*\{[^}]*cwd/);
   });

@@ -5,7 +5,6 @@
 
 import fs from "node:fs";
 import { getActiveProvider, getActiveBaseUrl, getActiveDefaultModel, OpenAICompatibleProvider, type Provider } from "../../providers";
-import { getMergedAgentTools } from "../agentTools";
 import { workspaceRoot, currentCwd } from "../codingAgent";
 import { contextEngine, type ContextMessage } from "../context";
 import { securityEngine, type SandboxMode, getPermissionContextPrompt, clampSandboxMode } from "../security";
@@ -24,7 +23,7 @@ import { executeToolBatch, signatureForToolCall } from "./toolExecutor";
 import { toolRegistry } from "./toolRegistry";
 import { createWorkspaceContext, type WorkspaceContext } from "./workspace";
 import { AgentStateMachine } from "./agentState";
-import { normalizeChatResponse } from "./modelAdapter";
+import { ModelAdapter, type AgentModelResponse, type AgentToolCall } from "./modelAdapter";
 import { parseTaskRequirements, evaluateCompletionGate, recordEvidence, emptyEvidence } from "../../core/agent/completionGate";
 import type { CompletionEvidence, TaskRequirement } from "../../core/contracts";
 import type {
@@ -130,13 +129,122 @@ export class AgentHarness {
     }
   }
 
+  // ── LLM Runtime (Phase 73.3) ──────────────────────────────────────────────
+
+  /**
+   * The ONLY place the agent loop talks to a model. Every provider response is
+   * normalized by ModelAdapter, so no raw provider schema (OpenAI deltas,
+   * Anthropic blocks, gateway payloads) ever reaches the loop.
+   *
+   * When `wantStream` is set and the provider supports streaming, deltas are
+   * emitted as contract events (`agent:stream_chunk` / `agent:reasoning_chunk`)
+   * and the final response is reassembled from them. Otherwise a single
+   * non-streaming completion is used.
+   */
+  private async completeModel(
+    provider: Provider,
+    req: {
+      model: string;
+      messages: any[];
+      tools?: any[];
+      toolChoice?: "auto" | "required" | "none";
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+      onContentDelta?: (text: string) => void;
+      reasoningEffort?: "low" | "medium" | "high";
+    },
+    mode: ExecutionMode,
+    wantStream: boolean
+  ): Promise<{ response: AgentModelResponse; hadMessage: boolean }> {
+    const adapter = new ModelAdapter(provider);
+    const canStream = typeof provider.stream === "function";
+
+    if (!wantStream || !canStream) {
+      const response = await adapter.complete({
+        model: req.model,
+        messages: req.messages,
+        tools: req.tools,
+        toolChoice: req.toolChoice,
+        headers: req.headers,
+        signal: req.signal,
+        reasoningEffort: req.reasoningEffort,
+      });
+      return {
+        response,
+        hadMessage: response.content.length > 0 || response.toolCalls.length > 0 || response.finishReason != null,
+      };
+    }
+
+    let content = "";
+    let reasoning = "";
+    let usage: AgentModelResponse["usage"] | undefined;
+    let finishReason: string | null = null;
+    let sawChunk = false;
+    const toolAcc = new Map<number, { id: string; name: string; args: string }>();
+
+    for await (const chunk of adapter.stream({
+      model: req.model,
+      messages: req.messages,
+      tools: req.tools,
+      toolChoice: req.toolChoice,
+      headers: req.headers,
+      signal: req.signal,
+      reasoningEffort: req.reasoningEffort,
+    })) {
+      sawChunk = true;
+
+      if (chunk.reasoningDelta) {
+        reasoning += chunk.reasoningDelta;
+        this.emitEvent("agent:reasoning_chunk", mode, { text: chunk.reasoningDelta });
+      }
+
+      if (chunk.contentDelta) {
+        content += chunk.contentDelta;
+        this.emitEvent("agent:stream_chunk", mode, { text: chunk.contentDelta });
+        req.onContentDelta?.(chunk.contentDelta);
+      }
+
+      if (chunk.toolCallDelta) {
+        const d = chunk.toolCallDelta;
+        const idx = d.index ?? 0;
+        const cur = toolAcc.get(idx) ?? { id: "", name: "", args: "" };
+        if (d.id) cur.id = d.id;
+        if (d.name) cur.name = d.name;
+        if (d.argumentsDelta) cur.args += d.argumentsDelta;
+        toolAcc.set(idx, cur);
+      }
+
+      if (chunk.usage) usage = chunk.usage;
+      if (chunk.finishReason) finishReason = chunk.finishReason;
+    }
+
+    const toolCalls: AgentToolCall[] = [...toolAcc.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([idx, t]) => ({
+        id: t.id || `call_${idx}`,
+        name: t.name,
+        arguments: safeParseJson(t.args),
+      }));
+
+    return {
+      response: {
+        content,
+        reasoningSummary: reasoning || undefined,
+        toolCalls,
+        usage,
+        finishReason,
+      },
+      hadMessage: sawChunk,
+    };
+  }
+
   // ── Tool Execution Middleware ─────────────────────────────────────────────
 
   async dispatchTool(
     name: string,
     args: any,
     options: { cwd?: string; userApproved?: boolean; agentRole?: string; agentDepth?: number; signal?: AbortSignal } = {}
-  ): Promise<{ result: string; allowed: boolean; reason?: string }> {
+  ): Promise<{ result: string; allowed: boolean; reason?: string; needsApproval?: boolean }> {
     const cwd = options.cwd || this.config.currentCwd || process.cwd();
     const mode = this.config.sandboxMode || getSandboxMode();
 
@@ -174,6 +282,7 @@ export class AgentHarness {
           approvalRequired: true,
         }),
         allowed: false,
+        needsApproval: true,
         reason: gatewayRes.reason,
       };
     }
@@ -339,16 +448,23 @@ export class AgentHarness {
           ? undefined
           : options.toolsOverride || toolRegistry.schemas();
 
-      let chatRes;
+      let modelRes: { response: AgentModelResponse; hadMessage: boolean };
       try {
-        chatRes = await provider.chat({
-          model,
-          messages: prep.messages as any,
-          tools: toolsForRequest,
-          tool_choice: toolsForRequest ? options.toolChoice || "auto" : undefined,
-          headers: extraHeaders,
-          signal: combinedSignal,
-        });
+        modelRes = await this.completeModel(
+          provider,
+          {
+            model,
+            messages: prep.messages,
+            tools: toolsForRequest,
+            toolChoice: toolsForRequest ? options.toolChoice || "auto" : undefined,
+            headers: extraHeaders,
+            signal: combinedSignal,
+            onContentDelta: options.onChunk,
+            reasoningEffort: resolveReasoningEffort(model, options.reasoningSettings),
+          },
+          mode,
+          options.stream === true
+        );
       } catch (netErr: any) {
         if (abort.signal?.aborted) {
           this.agentState.transition("cancelled");
@@ -383,28 +499,22 @@ export class AgentHarness {
         };
       }
 
-      const choice = chatRes.choices?.[0];
-      const assistantMsg = choice?.message;
+      const agentRes = modelRes.response;
+      const assistantContent = agentRes.content || "";
 
-      // §2 — normalize through the ModelAdapter contract. For models with
-      // nativeToolCalls=false, a structured JSON tool block inside the text
-      // content is parsed into toolCalls here — never by the TUI or the loop.
-      const normalized = normalizeChatResponse(chatRes, model);
-
-      if (chatRes.usage) {
+      if (agentRes.usage) {
         contextEngine.recordUsage(
           {
-            promptTokens: chatRes.usage.prompt_tokens || chatRes.usage.input_tokens,
-            completionTokens: chatRes.usage.completion_tokens || chatRes.usage.output_tokens,
-            totalTokens: chatRes.usage.total_tokens,
-            cachedTokens: chatRes.usage.prompt_tokens_details?.cached_tokens || chatRes.usage.cache_read_input_tokens,
-            reasoningTokens: chatRes.usage.completion_tokens_details?.reasoning_tokens || chatRes.usage.reasoning_tokens,
+            promptTokens: agentRes.usage.inputTokens,
+            completionTokens: agentRes.usage.outputTokens,
+            totalTokens: agentRes.usage.totalTokens,
+            reasoningTokens: agentRes.usage.reasoningTokens,
           },
           sessionId
         );
       }
 
-      if (!assistantMsg) {
+      if (!modelRes.hadMessage) {
         this.agentState.transition("error", "empty-response");
         return {
           success: false,
@@ -420,16 +530,27 @@ export class AgentHarness {
         };
       }
 
+      // Re-serialize normalized tool calls into the provider wire shape so the
+      // transcript stays replayable by any adapter on the next turn.
+      const nativeToolCalls = agentRes.toolCalls.map((tc) => ({
+        id: tc.id,
+        type: "function" as const,
+        function: {
+          name: tc.name,
+          arguments: typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments ?? {}),
+        },
+      }));
+
       messages.push({
-        role: assistantMsg.role || "assistant",
-        content: assistantMsg.content || "",
-        ...(assistantMsg.tool_calls ? { tool_calls: assistantMsg.tool_calls } : {}),
+        role: "assistant",
+        content: assistantContent,
+        ...(nativeToolCalls.length ? { tool_calls: nativeToolCalls as any } : {}),
       });
 
-      const toolCalls = normalized.toolCalls;
+      const toolCalls = agentRes.toolCalls;
       if (!toolCalls || toolCalls.length === 0) {
         if (bypassEngine.isEnabled() && bypassEngine.getConfig().autoEscalate && turnsUsed < maxTurns) {
-          const refusal = bypassEngine.checkRefusal(assistantMsg.content || "");
+          const refusal = bypassEngine.checkRefusal(assistantContent);
           if (refusal.isRefusal) {
             const lastUserMsg = [...messages].reverse().find((m) => m.role === "user")?.content || "";
             const escalation = bypassEngine.escalate(lastUserMsg);
@@ -448,7 +569,7 @@ export class AgentHarness {
           }
         }
 
-        const finalOutput = assistantMsg.content || "";
+        const finalOutput = assistantContent;
 
         // ── Completion Gate (§19/§73.9) ────────────────────────────────────
         // A text-only answer is NOT final when the task required a mutation,
@@ -523,6 +644,19 @@ export class AgentHarness {
         needsApproval,
         maxRepeat: 2,
         runTool: async (name, args, id) => {
+          // Front-end specific tools (e.g. the TUI's save_plan) run before the
+          // core gateway. Returning null falls through to the normal path.
+          if (options.onCustomTool) {
+            const custom = await options.onCustomTool(name, args, id);
+            if (custom) {
+              this.emitEvent("tool:queued", mode, { toolName: name, toolArgs: args, id });
+              this.emitEvent(custom.allowed ? "tool:complete" : "tool:error", mode, {
+                toolName: name, toolArgs: args, result: custom.result, id,
+              });
+              return custom;
+            }
+          }
+
           // Loop detection is CONSECUTIVE-only: the same (tool, args) repeated
           // three times in a row with no other tool call in between signals a
           // stuck model. A coding agent legitimately re-runs the same command
@@ -548,15 +682,34 @@ export class AgentHarness {
             };
           }
 
-
           this.emitEvent("tool:queued", mode, { toolName: name, toolArgs: args, id });
           this.emitEvent("tool:start", mode, { toolName: name, toolArgs: args, id });
 
-          const res = await this.dispatchTool(name, args, {
+          const ctx = {
             agentRole: options.agentRole,
             agentDepth: options.agentDepth ?? (this.activeMode === "SUBAGENT" ? 1 : 0),
             signal: combinedSignal,
-          });
+          };
+
+          let res = await this.dispatchTool(name, args, ctx);
+
+          // ── Interactive approval (§16/§21): when the gateway needs a
+          // decision and the front-end supplied a hook, ask exactly once and
+          // re-dispatch with userApproved. A denial is a typed result the
+          // model must respect — the tool never runs.
+          if (!res.allowed && res.needsApproval && options.requestApproval) {
+            const approved = await options.requestApproval({ name, args, reason: res.reason });
+            if (!approved) {
+              res = {
+                result: JSON.stringify({ error: "User denied permission." }),
+                allowed: false,
+                reason: "denied",
+              };
+            } else {
+              this.emitEvent("tool:start", mode, { toolName: name, toolArgs: args, id });
+              res = await this.dispatchTool(name, args, { ...ctx, userApproved: true });
+            }
+          }
 
           // ── Completion evidence (§19) — only VERIFIED outcomes count.
           // A write/edit/patch tool that returned ok is a mutation; a shell
@@ -926,6 +1079,35 @@ function parseResultJson(result: string): Record<string, unknown> | null {
     return parsed && typeof parsed === "object" ? parsed : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Parse a tool-call argument fragment. A model may stream a partial JSON
+ * string (or none at all); an unparseable fragment degrades to `{}` rather
+ * than crashing the loop — the tool's own schema validation reports the error.
+ */
+/**
+ * Reasoning effort is only forwarded when the model declares both reasoning
+ * support and a configurable effort — never guessed from the model id.
+ */
+function resolveReasoningEffort(
+  model: string,
+  settings?: { enabled: boolean; effort: "auto" | "low" | "medium" | "high" }
+): "low" | "medium" | "high" | undefined {
+  if (!settings?.enabled) return undefined;
+  if (settings.effort === "auto") return undefined;
+  const caps = getModelCapabilities(model);
+  if (!caps?.reasoning || !caps.reasoningEffort) return undefined;
+  return settings.effort;
+}
+
+function safeParseJson(value: string | undefined): unknown {
+  if (!value || !value.trim()) return {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
   }
 }
 

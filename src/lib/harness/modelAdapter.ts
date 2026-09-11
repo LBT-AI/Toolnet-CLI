@@ -55,6 +55,8 @@ export interface AgentModelRequest {
   signal?: AbortSignal;
   headers?: Record<string, string>;
   reasoningEffort?: "low" | "medium" | "high";
+  /** Sampling temperature — planner-style callers rely on low values. */
+  temperature?: number;
 }
 
 // ── Capability resolution ────────────────────────────────────────────────────
@@ -226,6 +228,7 @@ export class ModelAdapter {
       headers: req.headers,
       signal: req.signal,
       reasoningEffort: req.reasoningEffort,
+      temperature: req.temperature,
     };
 
     const res: ChatResponse = await this.provider.chat(chatReq);
@@ -297,6 +300,7 @@ export class ModelAdapter {
       headers: req.headers,
       signal: req.signal,
       reasoningEffort: req.reasoningEffort,
+      temperature: req.temperature,
       stream: true,
     };
 

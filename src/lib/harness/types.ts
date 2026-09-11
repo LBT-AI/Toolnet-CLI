@@ -20,6 +20,7 @@ export type HarnessEventType =
   | "agent:start"
   | "agent:thinking"
   | "agent:stream_chunk"
+  | "agent:reasoning_chunk"
   | "tool:queued"
   | "tool:approval_required"
   | "tool:start"
@@ -84,6 +85,23 @@ export interface ExecutionOptions {
   taskRequirements?: TaskRequirement;
   /** Live evidence fed by verified tool results (Completion Gate). */
   completionEvidence?: CompletionEvidence;
+  /**
+   * Interactive approval hook. When a tool requires permission and this is
+   * provided, the loop asks the caller (TUI modal) instead of failing the call.
+   * Denial returns a typed denied result to the model — never a fake success.
+   */
+  requestApproval?: (input: { name: string; args: any; reason?: string }) => Promise<boolean>;
+  /**
+   * Front-end specific tools (e.g. the TUI's save_plan) that are not part of
+   * the core registry. Returning null falls through to the normal gateway.
+   */
+  onCustomTool?: (
+    name: string,
+    args: any,
+    id: string
+  ) => Promise<{ result: string; allowed: boolean } | null>;
+  /** Reasoning effort settings — applied only when the model declares support. */
+  reasoningSettings?: { enabled: boolean; effort: "auto" | "low" | "medium" | "high" };
 }
 
 export interface HarnessResult {

@@ -149,19 +149,36 @@ export function setCwd(newPath: string) {
   return false;
 }
 
-export function resolvePath(filePath: string): string {
+/**
+ * Explicit execution context for path-resolving tools. When the tool gateway
+ * supplies a cwd/workspaceRoot, path tools MUST resolve against it instead of
+ * the module-global workspace state — otherwise a harness configured with a
+ * different workspace (tests, subagents, TUI after /cd) silently writes into
+ * process.cwd(), breaking workspace isolation.
+ */
+export interface PathExecContext {
+  cwd?: string;
+  workspaceRoot?: string;
+}
+
+export function resolvePath(filePath: string, ctx?: PathExecContext): string {
   if (path.isAbsolute(filePath)) {
     return path.normalize(filePath);
   }
-  return path.resolve(currentCwd, filePath);
+  return path.resolve(ctx?.cwd || currentCwd, filePath);
 }
 
-function checkPathTraversal(filePath: string, absPath: string, isReadAction = false): { allowed: boolean; error?: string } {
+function checkPathTraversal(
+  filePath: string,
+  absPath: string,
+  isReadAction = false,
+  ctx?: PathExecContext
+): { allowed: boolean; error?: string } {
   if (bypassPolicy && getSandboxMode() === "full-access") return { allowed: true };
   const mode = getSandboxMode();
   if (mode === "full-access") return { allowed: true };
 
-  const pathCheck = isPathInsideWorkspace(filePath, workspaceRoot, currentCwd);
+  const pathCheck = isPathInsideWorkspace(filePath, ctx?.workspaceRoot || workspaceRoot, ctx?.cwd || currentCwd);
   if (!pathCheck.isInside) {
     if (mode === "workspace") {
       return {
@@ -181,10 +198,10 @@ function truncateOutput(text: string): { data: string; truncated: boolean } {
   return { data: text.slice(0, MAX_OUTPUT_CHARS) + `\n... (truncated, ${text.length - MAX_OUTPUT_CHARS} more chars)`, truncated: true };
 }
 
-export function toolRead(filePath: string, offset = 0, limit = MAX_OUTPUT_LINES): ToolResult {
+export function toolRead(filePath: string, offset = 0, limit = MAX_OUTPUT_LINES, ctx?: PathExecContext): ToolResult {
   try {
-    const absPath = resolvePath(filePath);
-    const access = checkPathTraversal(filePath, absPath, true);
+    const absPath = resolvePath(filePath, ctx);
+    const access = checkPathTraversal(filePath, absPath, true, ctx);
     if (!access.allowed) return { success: false, error: access.error };
     if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${absPath}` };
     const stat = fs.statSync(absPath);
@@ -209,10 +226,10 @@ export function toolRead(filePath: string, offset = 0, limit = MAX_OUTPUT_LINES)
   }
 }
 
-export function toolGlob(pattern: string, searchPath = "."): ToolResult {
+export function toolGlob(pattern: string, searchPath = ".", ctx?: PathExecContext): ToolResult {
   try {
-    const absPath = resolvePath(searchPath);
-    const access = checkPathTraversal(searchPath, absPath, true);
+    const absPath = resolvePath(searchPath, ctx);
+    const access = checkPathTraversal(searchPath, absPath, true, ctx);
     if (!access.allowed) return { success: false, error: access.error };
     if (!fs.existsSync(absPath)) return { success: false, error: `Path not found: ${absPath}` };
 
@@ -320,10 +337,10 @@ export function toolGlob(pattern: string, searchPath = "."): ToolResult {
   }
 }
 
-export function toolFindPath(query: string, root?: string, maxDepth: number = 6, type?: string): ToolResult {
+export function toolFindPath(query: string, root?: string, maxDepth: number = 6, type?: string, ctx?: PathExecContext): ToolResult {
   try {
-    const searchRoot = root ? resolvePath(root) : workspaceRoot;
-    const access = checkPathTraversal(root || ".", searchRoot, true);
+    const searchRoot = root ? resolvePath(root, ctx) : (ctx?.workspaceRoot || workspaceRoot);
+    const access = checkPathTraversal(root || ".", searchRoot, true, ctx);
     if (!access.allowed) return { success: false, error: access.error };
     
     if (!fs.existsSync(searchRoot)) return { success: false, error: `Directory not found: ${searchRoot}` };
@@ -354,10 +371,10 @@ export function toolFindPath(query: string, root?: string, maxDepth: number = 6,
   }
 }
 
-export function toolGrep(pattern: string, searchPath = ".", include?: string): ToolResult {
+export function toolGrep(pattern: string, searchPath = ".", include?: string, ctx?: PathExecContext): ToolResult {
   try {
-    const absPath = resolvePath(searchPath);
-    const access = checkPathTraversal(searchPath, absPath, true);
+    const absPath = resolvePath(searchPath, ctx);
+    const access = checkPathTraversal(searchPath, absPath, true, ctx);
     if (!access.allowed) return { success: false, error: access.error };
     if (!fs.existsSync(absPath)) return { success: false, error: `Path not found: ${absPath}` };
     const stat = fs.statSync(absPath);
@@ -394,10 +411,10 @@ export function toolGrep(pattern: string, searchPath = ".", include?: string): T
     return { success: false, error: `Grep error: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
-export function toolEdit(filePath: string, oldString: string, newString: string): ToolResult {
+export function toolEdit(filePath: string, oldString: string, newString: string, ctx?: PathExecContext): ToolResult {
   try {
-    const absPath = resolvePath(filePath);
-    const access = checkPathTraversal(filePath, absPath);
+    const absPath = resolvePath(filePath, ctx);
+    const access = checkPathTraversal(filePath, absPath, false, ctx);
     if (!access.allowed) return { success: false, error: access.error };
     if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${absPath}` };
     const stat = fs.statSync(absPath);
@@ -421,10 +438,10 @@ export function toolEdit(filePath: string, oldString: string, newString: string)
   }
 }
 
-export function toolReplaceAll(filePath: string, oldString: string, newString: string): ToolResult {
+export function toolReplaceAll(filePath: string, oldString: string, newString: string, ctx?: PathExecContext): ToolResult {
   try {
-    const absPath = resolvePath(filePath);
-    const access = checkPathTraversal(filePath, absPath);
+    const absPath = resolvePath(filePath, ctx);
+    const access = checkPathTraversal(filePath, absPath, false, ctx);
     if (!access.allowed) return { success: false, error: access.error };
     if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${absPath}` };
     const stat = fs.statSync(absPath);
@@ -446,10 +463,10 @@ export function toolReplaceAll(filePath: string, oldString: string, newString: s
   }
 }
 
-export function toolWrite(filePath: string, content: string): ToolResult {
+export function toolWrite(filePath: string, content: string, ctx?: PathExecContext): ToolResult {
   try {
-    const absPath = resolvePath(filePath);
-    const access = checkPathTraversal(filePath, absPath);
+    const absPath = resolvePath(filePath, ctx);
+    const access = checkPathTraversal(filePath, absPath, false, ctx);
     if (!access.allowed) return { success: false, error: access.error };
     const dir = path.dirname(absPath);
     if (!fs.existsSync(dir)) {
@@ -842,10 +859,10 @@ export function toolGetCwd(): ToolResult {
   };
 }
 
-export function toolListDir(dirPath = "."): ToolResult {
+export function toolListDir(dirPath = ".", ctx?: PathExecContext): ToolResult {
   try {
-    const absPath = resolvePath(dirPath);
-    const access = checkPathTraversal(dirPath, absPath, true);
+    const absPath = resolvePath(dirPath, ctx);
+    const access = checkPathTraversal(dirPath, absPath, true, ctx);
     if (!access.allowed) return { success: false, error: access.error };
     if (!fs.existsSync(absPath)) return { success: false, error: `Directory not found: ${absPath}` };
     const stat = fs.statSync(absPath);
@@ -862,10 +879,10 @@ export function toolListDir(dirPath = "."): ToolResult {
   }
 }
 
-export function toolTree(dirPath = ".", maxDepth = 3): ToolResult {
+export function toolTree(dirPath = ".", maxDepth = 3, ctx?: PathExecContext): ToolResult {
   try {
-    const absPath = resolvePath(dirPath);
-    const access = checkPathTraversal(dirPath, absPath, true);
+    const absPath = resolvePath(dirPath, ctx);
+    const access = checkPathTraversal(dirPath, absPath, true, ctx);
     if (!access.allowed) return { success: false, error: access.error };
     if (!fs.existsSync(absPath)) return { success: false, error: `Directory not found: ${absPath}` };
     const stat = fs.statSync(absPath);
@@ -916,9 +933,9 @@ export function toolTree(dirPath = ".", maxDepth = 3): ToolResult {
   }
 }
 
-export function toolFileExists(filePath: string): ToolResult {
+export function toolFileExists(filePath: string, ctx?: PathExecContext): ToolResult {
   try {
-    const absPath = resolvePath(filePath);
+    const absPath = resolvePath(filePath, ctx);
     const exists = fs.existsSync(absPath);
     if (!exists) {
       return { success: true, data: JSON.stringify({ exists: false, path: absPath }) };

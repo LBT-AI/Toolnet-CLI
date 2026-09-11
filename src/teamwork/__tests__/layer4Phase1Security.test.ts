@@ -23,6 +23,14 @@ import path from "node:path";
 const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "layer4-phase1-"));
 const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "layer4-phase1-outside-"));
 
+// Path tools now resolve against the execution context cwd, so the fixture the
+// ALLOW matrix test reads must actually live in tmpBase (not the repo root).
+fs.writeFileSync(
+  path.join(tmpBase, "package.json"),
+  JSON.stringify({ name: "layer4-phase1-fixture" }, null, 2),
+  "utf8"
+);
+
 afterAll(() => {
   try { fs.rmSync(tmpBase, { recursive: true, force: true }); } catch {}
   try { fs.rmSync(outsideDir, { recursive: true, force: true }); } catch {}
@@ -475,11 +483,14 @@ describe("PHASE1 call graph assertions", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("TUI agentWiring routes model-callable tools through ToolGateway (no direct executeTool)", () => {
+  test("TUI agentWiring delegates the turn to agentEngine (no direct tool routing)", () => {
     const src = read("../../tui/events/agentWiring.ts");
-    expect(src).toMatch(/ToolGateway\.execute/);
+    // Phase 73.6: tool routing + permission live in the agent engine/harness.
+    expect(src).toMatch(/agentEngine\.run\(/);
+    expect(src).not.toMatch(/ToolGateway\.execute/);
     expect(src).not.toMatch(/executeTool\(name,\s*args,\s*\{/);
-    expect(src).toMatch(/userApproved,\s*$/m); // approved re-entry exists
+    // The TUI's only permission surface is the approval hook.
+    expect(src).toMatch(/requestApproval:/);
   });
 
   test("pluginManager goes through ToolGateway, no independent evaluatePermission", () => {

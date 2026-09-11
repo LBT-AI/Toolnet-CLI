@@ -433,20 +433,26 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
   if (options?.signal?.aborted) {
     return JSON.stringify({ stdout: "", stderr: "Cancelled", exitCode: 130 });
   }
+
+  // Path-resolving tools MUST receive the explicit execution context. Falling
+  // back to module-global cwd would write/read outside the configured
+  // workspace (e.g. a harness workspace that differs from process.cwd()).
+  const pathCtx = { cwd: options?.cwd, workspaceRoot: options?.workspaceRoot };
+
   try {
     if (name === "get_cwd") {
       const res = toolGetCwd();
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "list_dir") {
       const dirPath = args.path || ".";
-      const res = toolListDir(dirPath);
+      const res = toolListDir(dirPath, pathCtx);
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "file_exists") {
       const filePath = args.path || ".";
-      const res = toolFileExists(filePath);
+      const res = toolFileExists(filePath, pathCtx);
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "find_path") {
-      const res = toolFindPath(args.query, args.root, args.maxDepth, args.type);
+      const res = toolFindPath(args.query, args.root, args.maxDepth, args.type, pathCtx);
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "run_command" || name === "shell") {
       const cmd = args.command || args.cmd || "";
@@ -461,17 +467,17 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
       });
       return JSON.stringify({ stdout: res.stdout || "", stderr: res.stderr || res.error || "", exitCode: res.exitCode });
     } else if (name === "tree") {
-      const res = toolTree(args.path, args.depth);
+      const res = toolTree(args.path, args.depth, pathCtx);
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "read_file") {
-      const res = toolRead(args.path, args.offset || 0, args.limit || 500);
+      const res = toolRead(args.path, args.offset || 0, args.limit || 500, pathCtx);
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "write_file") {
-      const res = toolWrite(args.path, args.content);
+      const res = toolWrite(args.path, args.content, pathCtx);
       if (res.success) {
         // Postcondition: the file must REALLY exist and be readable after the
         // write. A tool success payload alone is not proof of mutation.
-        const post = verifyFileWritten(args.path);
+        const post = verifyFileWritten(args.path, pathCtx);
         if (!post.ok) {
           return JSON.stringify({ stdout: "", stderr: post.error, exitCode: 1 });
         }
@@ -480,10 +486,10 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
     } else if (name === "edit_file") {
       const oldStr = args.old_string || args.oldString || "";
       const newStr = args.new_string || args.newString || "";
-      const beforeHash = snapshotFileHash(args.path);
-      const res = toolEdit(args.path, oldStr, newStr);
+      const beforeHash = snapshotFileHash(args.path, pathCtx);
+      const res = toolEdit(args.path, oldStr, newStr, pathCtx);
       if (res.success) {
-        const post = verifyFileEdited(args.path, beforeHash);
+        const post = verifyFileEdited(args.path, beforeHash, pathCtx);
         if (!post.ok) {
           return JSON.stringify({ stdout: "", stderr: post.error, exitCode: 1 });
         }
@@ -492,10 +498,10 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
     } else if (name === "replace_all") {
       const oldStr = args.old_string || args.oldString || "";
       const newStr = args.new_string || args.newString || "";
-      const beforeHash = snapshotFileHash(args.path);
-      const res = toolReplaceAll(args.path, oldStr, newStr);
+      const beforeHash = snapshotFileHash(args.path, pathCtx);
+      const res = toolReplaceAll(args.path, oldStr, newStr, pathCtx);
       if (res.success) {
-        const post = verifyFileEdited(args.path, beforeHash);
+        const post = verifyFileEdited(args.path, beforeHash, pathCtx);
         if (!post.ok) {
           return JSON.stringify({ stdout: "", stderr: post.error, exitCode: 1 });
         }
@@ -510,7 +516,7 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
         const targets = extractPatchTargets(patchText);
         if (targets.length > 0) {
           const missing = targets.filter((t) => {
-            const v = verifyFileWritten(t);
+            const v = verifyFileWritten(t, pathCtx);
             return !v.ok;
           });
           if (missing.length === targets.length) {
@@ -527,11 +533,11 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
       return JSON.stringify({ stdout: res.stdout || res.data || "", stderr: res.stderr || res.error || "", exitCode: res.exitCode ?? (res.success ? 0 : 1) });
     } else if (name === "grep" || name === "grep_search") {
       const searchPath = args.path || ".";
-      const res = toolGrep(args.pattern, searchPath, args.include);
+      const res = toolGrep(args.pattern, searchPath, args.include, pathCtx);
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "glob" || name === "glob_search") {
       const searchPath = args.path || ".";
-      const res = toolGlob(args.pattern, searchPath);
+      const res = toolGlob(args.pattern, searchPath, pathCtx);
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     } else if (name === "web_fetch" || name === "web_crawl" || name === "fetch") {
       const url = args.url || args.link || "";

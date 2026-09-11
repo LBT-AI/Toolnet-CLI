@@ -32,6 +32,12 @@ export interface ToolDefinition<Input = unknown, Output = unknown> {
   verify?(input: Input, output: string, ctx: ToolExecutionContext): Promise<PostconditionResult>;
   /** Optional category for TUI grouping. */
   category?: string;
+  /**
+   * Canonical tool this entry aliases. Aliases keep working at dispatch time
+   * (old sessions, structured protocol) but are NEVER exposed as schemas — the
+   * model sees exactly one name per capability.
+   */
+  aliasOf?: string;
 }
 
 // ── Helpers to build the registry without circular imports ───────────────────
@@ -40,6 +46,27 @@ function tool<Input>(
   def: ToolDefinition<Input, string>
 ): ToolDefinition<Input, string> {
   return def;
+}
+
+/**
+ * Narrow the full execution context to the fields path-resolving tools need.
+ * Passing these explicitly keeps the workspace contract at the tool boundary
+ * instead of relying on module-global cwd state.
+ */
+function execCtx(ctx: ToolExecutionContext): { cwd?: string; workspaceRoot?: string } {
+  return { cwd: ctx?.cwd, workspaceRoot: ctx?.workspaceRoot };
+}
+
+/** Project registry entries into provider-compatible function schemas. */
+function toSchemas(defs: ToolDefinition[]): ProviderToolDefinition[] {
+  return defs.map((t) => ({
+    type: "function",
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    },
+  }));
 }
 
 // Lazy wrappers so the registry file itself does not eagerly import codingAgent
@@ -72,9 +99,9 @@ const REGISTRY: ToolDefinition[] = [
     parameters: { type: "object", properties: { path: { type: "string", description: "Directory path to list (default: workspace root)" } } },
     risk: "read",
     category: "Workspace",
-    async execute(input: { path?: string }) {
+    async execute(input: { path?: string }, ctx) {
       const { toolListDir } = await import("../codingAgent");
-      const res = toolListDir(input.path || ".");
+      const res = toolListDir(input.path || ".", execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
   }),
@@ -84,9 +111,9 @@ const REGISTRY: ToolDefinition[] = [
     parameters: { type: "object", properties: { path: { type: "string" }, depth: { type: "number" } } },
     risk: "read",
     category: "Workspace",
-    async execute(input: { path?: string; depth?: number }) {
+    async execute(input: { path?: string; depth?: number }, ctx) {
       const { toolTree } = await import("../codingAgent");
-      const res = toolTree(input.path, input.depth);
+      const res = toolTree(input.path, input.depth, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
   }),
@@ -106,9 +133,9 @@ Prefer targeted reads with offset/limit over reading the entire repository.`,
     },
     risk: "read",
     category: "Workspace",
-    async execute(input: { path: string; offset?: number; limit?: number }) {
+    async execute(input: { path: string; offset?: number; limit?: number }, ctx) {
       const { toolRead } = await import("../codingAgent");
-      const res = toolRead(input.path, input.offset || 0, input.limit || 500);
+      const res = toolRead(input.path, input.offset || 0, input.limit || 500, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
   }),
@@ -128,9 +155,9 @@ Do not say a file was created until this tool succeeds.`,
     },
     risk: "write",
     category: "Workspace",
-    async execute(input: { path: string; content: string }) {
+    async execute(input: { path: string; content: string }, ctx) {
       const { toolWrite } = await import("../codingAgent");
-      const res = toolWrite(input.path, input.content);
+      const res = toolWrite(input.path, input.content, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
     async verify(input: { path: string }) {
@@ -154,11 +181,11 @@ Provide the exact old_string as it appears in the file.`,
     },
     risk: "write",
     category: "Workspace",
-    async execute(input: { path: string; old_string?: string; oldString?: string; new_string?: string; newString?: string }) {
+    async execute(input: { path: string; old_string?: string; oldString?: string; new_string?: string; newString?: string }, ctx) {
       const oldStr = input.old_string || input.oldString || "";
       const newStr = input.new_string || input.newString || "";
       const { toolEdit: edit } = await import("../codingAgent");
-      const res = edit(input.path, oldStr, newStr);
+      const res = edit(input.path, oldStr, newStr, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
     async verify(input: { path: string }) {
@@ -191,11 +218,11 @@ Use when the same change must be applied everywhere in a file.`,
     },
     risk: "write",
     category: "Workspace",
-    async execute(input: { path: string; old_string?: string; oldString?: string; new_string?: string; newString?: string }) {
+    async execute(input: { path: string; old_string?: string; oldString?: string; new_string?: string; newString?: string }, ctx) {
       const oldStr = input.old_string || input.oldString || "";
       const newStr = input.new_string || input.newString || "";
       const { toolReplaceAll } = await import("../codingAgent");
-      const res = toolReplaceAll(input.path, oldStr, newStr);
+      const res = toolReplaceAll(input.path, oldStr, newStr, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
     async verify(input: { path: string }) {
@@ -212,9 +239,9 @@ Use when the same change must be applied everywhere in a file.`,
     parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     risk: "read",
     category: "Workspace",
-    async execute(input: { path: string }) {
+    async execute(input: { path: string }, ctx) {
       const { toolFileExists } = await import("../codingAgent");
-      const res = toolFileExists(input.path);
+      const res = toolFileExists(input.path, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
   }),
@@ -275,9 +302,9 @@ The patch must use standard unified diff format (---/+++ headers).`,
     parameters: { type: "object", properties: { query: { type: "string" }, root: { type: "string" }, maxDepth: { type: "number" }, type: { type: "string" } }, required: ["query"] },
     risk: "read",
     category: "Search",
-    async execute(input: { query: string; root?: string; maxDepth?: number; type?: string }) {
+    async execute(input: { query: string; root?: string; maxDepth?: number; type?: string }, ctx) {
       const { toolFindPath } = await import("../codingAgent");
-      const res = toolFindPath(input.query, input.root, input.maxDepth, input.type);
+      const res = toolFindPath(input.query, input.root, input.maxDepth, input.type, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
   }),
@@ -290,21 +317,22 @@ Use this to locate relevant code before editing.
     parameters: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" }, include: { type: "string" } }, required: ["pattern"] },
     risk: "read",
     category: "Search",
-    async execute(input: { pattern: string; path?: string; include?: string }) {
+    async execute(input: { pattern: string; path?: string; include?: string }, ctx) {
       const { toolGrep } = await import("../codingAgent");
-      const res = toolGrep(input.pattern, input.path || ".", input.include);
+      const res = toolGrep(input.pattern, input.path || ".", input.include, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
   }),
   tool({
     name: "grep_search",
+    aliasOf: "grep",
     description: "Search for text/regex pattern recursively across files (alias for grep).",
     parameters: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" }, include: { type: "string" } }, required: ["pattern"] },
     risk: "read",
     category: "Search",
-    async execute(input: { pattern: string; path?: string; include?: string }) {
+    async execute(input: { pattern: string; path?: string; include?: string }, ctx) {
       const { toolGrep } = await import("../codingAgent");
-      const res = toolGrep(input.pattern, input.path || ".", input.include);
+      const res = toolGrep(input.pattern, input.path || ".", input.include, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
   }),
@@ -316,21 +344,22 @@ Use to locate files matching a pattern, e.g. '*.test.ts', 'src/**/*.ts'.
     parameters: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" } }, required: ["pattern"] },
     risk: "read",
     category: "Search",
-    async execute(input: { pattern: string; path?: string }) {
+    async execute(input: { pattern: string; path?: string }, ctx) {
       const { toolGlob } = await import("../codingAgent");
-      const res = toolGlob(input.pattern, input.path || ".");
+      const res = toolGlob(input.pattern, input.path || ".", execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
   }),
   tool({
     name: "glob_search",
+    aliasOf: "glob",
     description: "Find files by glob pattern (alias for glob).",
     parameters: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" } }, required: ["pattern"] },
     risk: "read",
     category: "Search",
-    async execute(input: { pattern: string; path?: string }) {
+    async execute(input: { pattern: string; path?: string }, ctx) {
       const { toolGlob } = await import("../codingAgent");
-      const res = toolGlob(input.pattern, input.path || ".");
+      const res = toolGlob(input.pattern, input.path || ".", execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
   }),
@@ -357,6 +386,7 @@ Do not use destructive commands unless necessary and permitted.
   }),
   tool({
     name: "bash",
+    aliasOf: "shell",
     description: `Run a shell command in the workspace.
 Alias for shell. Use for tests, builds, typechecks, linting and project inspection.
 `,
@@ -377,6 +407,7 @@ Alias for shell. Use for tests, builds, typechecks, linting and project inspecti
   }),
   tool({
     name: "run_command",
+    aliasOf: "shell",
     description: `Run a shell command in the workspace.
 Alias for shell. Use for tests, builds, typechecks, linting and project inspection.
 `,
@@ -522,28 +553,23 @@ export const toolRegistry = {
     return REGISTRY.find((t) => t.name.toLowerCase() === n);
   },
 
-  /** Provider-compatible schemas — the single schema source for the LLM. */
+  /**
+   * Provider-compatible schemas — the single schema source for the LLM.
+   * Aliases are excluded so the model sees exactly one canonical name per
+   * capability (shell, not shell+bash+run_command).
+   */
   schemas(): ProviderToolDefinition[] {
-    return REGISTRY.map((t) => ({
-      type: "function",
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: t.parameters,
-      },
-    }));
+    return toSchemas(REGISTRY.filter((t) => !t.aliasOf));
   },
 
   /** Schemas filtered by predicate (e.g. Plan-mode read-only). */
   schemasFiltered(predicate: (t: ToolDefinition) => boolean): ProviderToolDefinition[] {
-    return REGISTRY.filter(predicate).map((t) => ({
-      type: "function",
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: t.parameters,
-      },
-    }));
+    return toSchemas(REGISTRY.filter((t) => !t.aliasOf).filter(predicate));
+  },
+
+  /** Canonical (non-alias) tool names — exactly what the model may call. */
+  canonicalNames(): string[] {
+    return REGISTRY.filter((t) => !t.aliasOf).map((t) => t.name);
   },
 
   /** Risk tier for a tool — used by SecurityEngine and UI. */
