@@ -22,6 +22,32 @@ const FILE_WRITE_TOOLS = new Set([
   "update_artifact",
 ]);
 
+/**
+ * Which argument carries the bytes being written, per file-mutating tool.
+ * Both snake_case (registry schema, what the model emits) and camelCase (legacy
+ * callers) are accepted so a hook always sees the real payload.
+ */
+const FILE_WRITE_CONTENT_FIELDS: Record<string, string[]> = {
+  write_file: ["content"],
+  edit_file: ["new_string", "newString"],
+  replace_all: ["new_string", "newString"],
+  apply_patch: ["patch", "diff"],
+  create_artifact: ["content"],
+  update_artifact: ["content"],
+};
+
+/** Locate the byte payload of a file-mutating call. */
+function writeBytesOf(
+  name: string,
+  args: Record<string, unknown>,
+): { field?: string; bytes?: string } {
+  for (const field of FILE_WRITE_CONTENT_FIELDS[name] ?? []) {
+    const value = args?.[field];
+    if (typeof value === "string") return { field, bytes: value };
+  }
+  return {};
+}
+
 /** Best-effort stderr extraction from a tool-result JSON envelope. */
 function extractStderr(envelope: string): string {
   try {
@@ -439,6 +465,80 @@ export class ToolGateway {
       });
     }
 
+    // 1.5 FILE WRITE HOOK (Phase 77.11)
+    //
+    // Placed after the permission decision and immediately before any filesystem
+    // mutation, giving the documented order:
+    //
+    //   tool.before → permission → file.beforeWrite → mutation → verify
+    //              → file.afterWrite → tool.after
+    //
+    // Returning here on a veto is what guarantees "no mutation ⇒ no after-hook":
+    // execution, `file.afterWrite` and `tool.after` are all downstream of this
+    // point. It also sits before the rate-limit record so a veto needs no
+    // release bookkeeping.
+    if (FILE_WRITE_TOOLS.has(name)) {
+      const { field, bytes } = writeBytesOf(name, args);
+
+      const fileReport = await hookRegistry.run(
+        "file.beforeWrite",
+        { tool: name, path: args?.path, sessionId, source: context.source },
+        {
+          tool: name,
+          path: typeof args?.path === "string" ? args.path : undefined,
+          bytes,
+        },
+        { sessionId, signal: context.signal },
+      );
+
+      if (fileReport.deniedBy) {
+        const durationMs = Date.now() - startTime;
+        auditLogger.logEvent({
+          timestamp: Date.now(),
+          toolName: name,
+          action: name,
+          args,
+          riskLevel: decision.riskLevel || "DANGEROUS",
+          category: decision.category,
+          capability: decision.capability,
+          mode,
+          decision: "BLOCKED_BY_HOOK",
+          allowed: false,
+          cwd,
+          target: args?.path,
+          reason: fileReport.deniedBy.reason,
+          correlationId,
+          toolCallId,
+          userSessionId: sessionId,
+          userId,
+          workspaceId,
+          agentRole: context.agentRole,
+          source: context.source,
+          durationMs,
+          metadata: { ...auditMeta, hook: "file.beforeWrite", hookOwner: fileReport.deniedBy.owner },
+        });
+
+        return {
+          stdout: "",
+          stderr: `Permission Denied: ${fileReport.deniedBy.reason}`,
+          exitCode: 1,
+          allowed: false,
+          decision: "DENY",
+          reason: fileReport.deniedBy.reason,
+          riskLevel: decision.riskLevel,
+          capability: decision.capability,
+          durationMs,
+        };
+      }
+
+      // A `file.beforeWrite` transform may rewrite the bytes about to be written
+      // (e.g. strip a secret); the mutation below sees the rewritten payload.
+      const transformedFile = fileReport.output as { bytes?: unknown } | undefined;
+      if (field && typeof transformedFile?.bytes === "string" && transformedFile.bytes !== bytes) {
+        args = { ...args, [field]: transformedFile.bytes };
+      }
+    }
+
     // Record rate limit before execution
     if (sessionId) {
       toolRateLimiter.record({
@@ -550,17 +650,13 @@ export class ToolGateway {
       // ── Phase 77: post-execution hooks ─────────────────────────────────────
       // Exactly one of `tool.after` / `tool.error` runs — a failed execution
       // never reports a successful after-hook (§77.30).
+      //
+      // Nesting order matches the documented lifecycle: the specific
+      // `file.afterWrite` edge completes BEFORE the generic `tool.after` edge,
+      // so the outer hook observes the same verified result the inner one did
+      // (§77.11).
       let finalOutput = sanitizedJson;
       if (exitCode === 0) {
-        const afterReport = await hookRegistry.run(
-          "tool.after",
-          { tool: name, args, exitCode, sessionId, source: context.source },
-          { result: sanitizedJson, exitCode, tool: name },
-          { sessionId, signal: context.signal },
-        );
-        const afterOutput = afterReport.output as { result?: string } | undefined;
-        if (typeof afterOutput?.result === "string") finalOutput = afterOutput.result;
-
         if (FILE_WRITE_TOOLS.has(name)) {
           await hookRegistry.run(
             "file.afterWrite",
@@ -569,6 +665,15 @@ export class ToolGateway {
             { sessionId, signal: context.signal },
           );
         }
+
+        const afterReport = await hookRegistry.run(
+          "tool.after",
+          { tool: name, args, exitCode, sessionId, source: context.source },
+          { result: sanitizedJson, exitCode, tool: name },
+          { sessionId, signal: context.signal },
+        );
+        const afterOutput = afterReport.output as { result?: string } | undefined;
+        if (typeof afterOutput?.result === "string") finalOutput = afterOutput.result;
       } else {
         await hookRegistry.run(
           "tool.error",

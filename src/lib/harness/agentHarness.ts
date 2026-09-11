@@ -165,6 +165,8 @@ export class AgentHarness {
       signal?: AbortSignal;
       onContentDelta?: (text: string) => void;
       reasoningEffort?: "low" | "medium" | "high";
+      /** Phase 77.11 — forwarded to the model hooks as session metadata. */
+      sessionId?: string;
     },
     mode: ExecutionMode,
     wantStream: boolean
@@ -181,6 +183,7 @@ export class AgentHarness {
         headers: req.headers,
         signal: req.signal,
         reasoningEffort: req.reasoningEffort,
+        sessionId: req.sessionId,
       });
       return {
         response,
@@ -203,6 +206,7 @@ export class AgentHarness {
       headers: req.headers,
       signal: req.signal,
       reasoningEffort: req.reasoningEffort,
+      sessionId: req.sessionId,
     })) {
       sawChunk = true;
 
@@ -636,6 +640,7 @@ export class AgentHarness {
             signal: combinedSignal,
             onContentDelta: options.onChunk,
             reasoningEffort: resolveReasoningEffort(model, options.reasoningSettings),
+            sessionId,
           },
           mode,
           options.stream === true

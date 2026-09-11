@@ -28,6 +28,7 @@ import {
 import { agentRegistry, type AgentRegistry } from "../agent/agents/registry";
 import { subagentManager as defaultManager, type SubagentManager } from "../agent/agents/manager";
 import { validateTeamworkPlan } from "./validation";
+import { hookRegistry } from "../hooks";
 import {
   MAX_DEPENDENCY_OUTPUT_CHARS,
   type TeamCondition,
@@ -247,13 +248,49 @@ export class TeamworkEngine {
     const node = state.node;
     const maxAttempts = Math.max(1, Math.min(Number(node.retry?.maxAttempts ?? 1) || 1, 5));
     const startedAt = Date.now();
-    const prompt = this.composeNodePrompt(node, states);
+    // Mutable so a `teamwork.node.before` transform carries across retries — a
+    // rewritten prompt must not silently revert on the second attempt.
+    let prompt = this.composeNodePrompt(node, states);
 
     let lastResult: TeamNodeResult | undefined;
 
     while (state.attempts < maxAttempts) {
       state.attempts++;
       const attempt = state.attempts;
+
+      // Phase 77.11 — `teamwork.node.before` fires in the ENGINE, before any
+      // child is spawned, so a veto guarantees "no subagent, no tool call, no
+      // process". A policy veto cannot be fixed by retrying, so a deny is
+      // terminal for this node and dependents see a deterministic failure.
+      const beforeReport = await hookRegistry.run(
+        "teamwork.node.before",
+        {
+          teamworkId: planId,
+          nodeId: node.id,
+          agent: node.agent,
+          attempt,
+          dependsOn: [...(node.dependsOn ?? [])],
+        },
+        { prompt, title: node.title, agent: node.agent },
+        { signal: options.signal },
+      );
+
+      if (beforeReport.deniedBy) {
+        lastResult = this.failedResult(node, attempt, startedAt, beforeReport.deniedBy.reason, "denied");
+        options.onNodeEvent?.({
+          nodeId: node.id,
+          agent: node.agent,
+          status: "error",
+          attempt,
+          errorKind: "denied",
+        });
+        break;
+      }
+
+      const transformedPrompt = (beforeReport.output as { prompt?: unknown } | undefined)?.prompt;
+      if (typeof transformedPrompt === "string" && transformedPrompt.length > 0) {
+        prompt = transformedPrompt;
+      }
 
       options.onNodeEvent?.({ nodeId: node.id, agent: node.agent, status: "running", attempt });
       const job = this.startNodeJob(node, prompt, planId, options);
@@ -271,6 +308,25 @@ export class TeamworkEngine {
 
       const result = this.toNodeResult(node, settled, attempt, startedAt);
       lastResult = result;
+
+      // `teamwork.node.after` receives the NORMALIZED node result — the same
+      // shape the plan aggregates — so a plugin never has to understand child
+      // envelopes or background job records.
+      await hookRegistry.run(
+        "teamwork.node.after",
+        {
+          teamworkId: planId,
+          nodeId: node.id,
+          agent: node.agent,
+          attempt,
+          status: result.status,
+          errorKind: result.errorKind,
+          durationMs: result.durationMs,
+          childSessionId: result.childSessionId,
+        },
+        { ...result },
+        { signal: options.signal },
+      );
 
       if (result.status === "completed") break;
       if (!this.isRetryable(result)) break;

@@ -63,30 +63,52 @@ denies the operation instead of silently becoming a no-op.
 
 ### Where hooks actually fire
 
-| Edge | Fired from | Class |
-|---|---|---|
-| `tool.before` | `ToolGateway.execute` (before the permission decision) | block |
-| `shell.before` | `ToolGateway.execute` (shell-class tools) | block |
-| `tool.after` | `ToolGateway.execute` (success **and** cache hits) | transform |
-| `tool.error` | `ToolGateway.execute` (non-zero exit or executor throw) | observe |
-| `file.afterWrite` | `ToolGateway.execute` (file-mutating tools) | transform |
-| `agent.start` / `agent.end` | `AgentHarness.executeLoop` (the one loop entry) | observe |
-| `background.started` / `background.completed` | `BackgroundJobService.launch` / `settle` (detached) | observe |
-| `session.end` | TUI `shutdownAndExit` (bounded teardown) | observe |
+Every row below is **wired and covered by a test**. A hook name that only
+existed as a type is not listed here.
 
-Everything else in the `HookName` union is declared in the contract but has no
-call site yet — deliberately, per the phase brief. Declaring them makes the
-contract stable for plugin authors; wiring them is a one-line change once a
-single authoritative edge exists.
+| Hook | Call site | Observe | Transform | Veto | Failure policy | Tests |
+|---|---|---|---|---|---|---|
+| `agent.start` | `AgentHarness.executeLoop` (the one loop entry) | ✅ | — | — | warn | `hooksRegistry`, `pluginsMcpHooksE2E` |
+| `agent.end` | `AgentHarness.executeLoop` (every exit path) | ✅ | — | — | warn | `hooksRegistry`, `pluginsMcpHooksE2E` |
+| `model.before` | `ModelAdapter.prepareRequest` (the one request-assembly point) | ✅ | ✅ temperature, reasoning effort, appended system text | — | warn | `phase7711HooksE2E` |
+| `model.after` | `ModelAdapter.complete` / `.stream` `finally` (once per model call, success **and** error) | ✅ | — | — | warn | `phase7711HooksE2E` |
+| `tool.before` | `ToolGateway.execute` (before the permission decision) | ✅ | ✅ tool args (re-evaluated by security) | ✅ | block | `pluginsMcpHooksE2E`, `phase7711HooksE2E` |
+| `shell.before` | `ToolGateway.execute` (shell-class tools) | ✅ | ✅ | ✅ | block | `pluginsMcpHooksE2E` |
+| `tool.after` | `ToolGateway.execute` (success **and** cache hits) | ✅ | ✅ result envelope | — | warn | `pluginsMcpHooksE2E`, `phase7711HooksE2E` |
+| `tool.error` | `ToolGateway.execute` (non-zero exit or executor throw) | ✅ | — | — | warn | `pluginsMcpHooksE2E` |
+| `file.beforeWrite` | `ToolGateway.execute` (after permission, immediately before the mutation) | ✅ | ✅ bytes about to be written | ✅ | block | `phase7711HooksE2E` |
+| `file.afterWrite` | `ToolGateway.execute` (only after a verified write) | ✅ | ✅ result envelope | — | warn | `phase7711HooksE2E` |
+| `teamwork.node.before` | `TeamworkEngine.runNode` (in the engine, before a child is spawned) | ✅ | ✅ node prompt | ✅ | warn | `phase7711HooksE2E` |
+| `teamwork.node.after` | `TeamworkEngine.runNode` (receives the NORMALIZED node result) | ✅ | — | — | warn | `phase7711HooksE2E` |
+| `background.started` / `background.completed` | `BackgroundJobService.launch` / `settle` (detached) | ✅ | — | — | warn | `pluginsMcpHooksE2E` |
+| `session.end` | TUI `shutdownAndExit` (bounded teardown) | ✅ | — | — | warn | `pluginsMcpHooksE2E` |
 
-`agent.start`/`agent.end` are fired in the **harness**, not per front-end, so
-every entry point (TUI, headless, subagent, teamwork node, REPL) reports exactly
-one start/end pair and none can forget or double-report it.
+Still declared but **not fired** (`session.start`, `shell.after`): the contract is
+stable for plugin authors, and wiring each is a one-line change at its
+authoritative site. The doc deliberately does not claim call sites they lack.
+
+Invocation cardinality is part of the contract:
+
+* `model.before`/`model.after` fire **exactly once** per model call. They live in
+  the adapter — the single place any provider call is assembled — so the planner
+  and every future caller get them for free, and the streaming fallback onto
+  `invokeProvider` cannot double-fire. `model.after` carries
+  `outcome: "completed" | "error"`, so failure observation needs no second edge.
+* `file.beforeWrite` runs **after** the permission decision and before the rate
+  limit / cache / executor, so a veto means: no mutation, no `file.afterWrite`,
+  no `tool.after`. The concrete nesting is
+  `tool.before → permission → file.beforeWrite → mutation → file.afterWrite → tool.after`.
+* `agent.start`/`agent.end` are fired in the **harness**, not per front-end, so
+  every entry point (TUI, headless, subagent, teamwork node, REPL) reports exactly
+  one start/end pair and none can forget or double-report it.
 
 Ordering guarantee for `tool.*`: because `tool.before` runs *before*
 `securityEngine.evaluate`, a hook veto means no permission evaluation and no
 process — and a `transform` hook's rewritten args are what the security engine
-actually evaluates.
+actually evaluates. Tool scope itself is **not** transformable: `model.before`
+reports the exposed tool names for observability and a hook that tries to change
+them is ignored with a warning, because widening scope would bypass both the
+capability gate and the permission system.
 
 ---
 
@@ -295,6 +317,7 @@ Both live under `examples/plugins/` and are inert until the user opts in.
 | `pluginRuntime.test.ts` | 27 | compat ranges (incl. fail-closed), config normalization + precedence + malformed JSON, loader staging (resolve/compat/validate), derivePluginId, registry registration + canonical naming, rollback on failing setup, duplicate id, namespacing vs shadowing, crash isolation, tool timeout, dispose idempotency, output normalization |
 | `mcpCanonical.test.ts` | 20 | schema rejection matrix, name sanitization, description/size/depth caps, annotation-driven risk, canonical names + permission resources, owner-scoped registration/unregistration, duplicate rejection, tool filters, malformed policy, manager status/dispose |
 | `pluginsMcpHooksE2E.test.ts` | 22 | **live stdio MCP server** (real spawn → initialize → tools/list → call → deny → reuse → withdraw), untrusted skip, plugin tool through the gateway, approval for mutating plugin tools, subagent MCP scoping, hook order/error routing/block/transform/fail-closed/withdrawal, background hooks, **both shipped example plugins loaded and exercised**, architecture guards |
+| `phase7711HooksE2E.test.ts` | 15 | real `ModelAdapter` + fake provider (before/transform/after cardinality, tool-scope widening refused, error outcome, streaming once), real `ToolGateway` file hooks (order, veto ⇒ no mutation and no after-hooks, scope), real `TeamworkEngine` node hooks (order + veto spawns no child), **MCP inside a subagent** (allow ⇒ one transport call; parent deny ⇒ zero), **MCP inside a DAG node** via the real global `SubagentManager`, architecture guards |
 
 Live E2E uses `helpers/fakePhase77McpServer.ts`: a genuine JSON-RPC stdio
 server process (`echo`, `read_fixture`, `fail_tool`, `slow_tool`,
@@ -310,10 +333,10 @@ stale doc.
 | Gate | Result |
 |---|---|
 | `bun run typecheck` | PASS |
-| `bun test` | **1521 pass / 2 skip / 0 fail** (110 files), 8/8 consecutive green runs |
+| `bun test` | **1536 pass / 2 skip / 0 fail** (111 files) |
 | `bun run build` | PASS (495 modules) |
 | `npm pack --dry-run` | PASS (`toolnetcli@1.2.4`, 6 files) |
-| Phase 73/74/75/76 regression | PASS (148 tests across 12 suites) |
+| Phase 73/74/75/76 regression | PASS (`coreDeterministicE2E`, background, teamwork, subagent scoping/delegation, LSP — 129 tests in the focused re-run) |
 
 ---
 
@@ -327,10 +350,10 @@ stale doc.
    with an explicit "not installed" reason.
 4. **OAuth is an abstraction only.** One tested flow (`config.env`/`auth`
    header) exists; the interactive OAuth provider is deferred.
-5. **Some hook edges are declared but not fired** (`model.before/after`,
-   `session.start`, `file.beforeWrite`, `shell.after`, `teamwork.node.*`). The
-   contract is stable; wiring each is a one-line change at its authoritative
-   site.
+5. **Two hook edges are declared but not fired** (`session.start`,
+   `shell.after`). Every other edge in the table above is wired and tested. The
+   contract is stable; wiring the remaining two is a one-line change at their
+   authoritative sites.
 6. **`src/lib/plugins/pluginManager.ts` remains** for the `/plugins` CLI and the
    legacy capability-grant model. Its model-facing tool exposure was removed
    (the registry is now the only source) and its `onAgentStart` / `onAgentEnd` /
