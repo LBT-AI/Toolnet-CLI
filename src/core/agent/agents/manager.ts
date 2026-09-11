@@ -60,6 +60,12 @@ export interface SubagentRunRequest {
 
   /** Resume an existing child session instead of creating a new one. */
   taskId?: string;
+  /**
+   * Explicit id for a NEW child session. Used by background jobs, which must
+   * know the child session id before the run starts so job and session can be
+   * correlated from the first event.
+   */
+  sessionId?: string;
 
   requestApproval?: ExecutionOptions["requestApproval"];
   /** Progress callback (audit/UI). Never used for control flow. */
@@ -196,14 +202,52 @@ export class SubagentManager {
 
     // An unknown `task_id` is not an error — it starts a new child, so a stale
     // id degrades into a fresh attempt instead of failing the parent turn.
-    const session = this.sessions.create({
+    const createInput = {
       parentSessionId: request.parentSessionId,
       agentId: agent.id,
       prompt: request.prompt,
       depth: childDepth,
       ...(request.model ? { model: request.model } : {}),
-    });
+    };
+
+    const session = request.sessionId
+      ? this.sessions.createWithId(request.sessionId, createInput)
+      : this.sessions.create(createInput);
     return { session, agent };
+  }
+
+  /**
+   * Reserve a child session id for a run that has not started yet.
+   * Kept on the manager so id allocation stays in one place.
+   */
+  allocateSessionId(parentSessionId: string, agentId?: string): string {
+    const agent = this.registry.resolve(agentId);
+    return this.sessions.allocateId(parentSessionId, agent.id);
+  }
+
+  /**
+   * Canonical id for a requested agent. Unknown ids fall back to `general`, so
+   * callers (and jobs) always record the agent that will actually run.
+   */
+  resolveAgentId(agentId?: string): string {
+    return this.registry.resolve(agentId).id;
+  }
+
+  /**
+   * The child session id a request WILL use: the resumed session when
+   * `taskId` names a live session, otherwise a freshly reserved id.
+   *
+   * Background jobs need this before the run starts so the job can be linked to
+   * the right session from its first event.
+   */
+  resolveSessionId(request: {
+    parentSessionId: string;
+    agentId?: string;
+    taskId?: string;
+  }): string {
+    const existing = request.taskId ? this.sessions.get(request.taskId) : undefined;
+    if (existing) return existing.id;
+    return this.allocateSessionId(request.parentSessionId, request.agentId);
   }
 
   /** Run the child on the shared engine, with its transcript when resuming. */

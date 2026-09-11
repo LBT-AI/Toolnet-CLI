@@ -29,6 +29,12 @@ const DESCRIPTION = [
   "",
   "Omit `subagent_type` to use `general`. Pass an existing `task_id` to continue",
   "a previous subagent with its history intact.",
+  "",
+  "Background mode: `background: true` launches the subagent asynchronously and",
+  "returns immediately. Foreground is the default — use it when you need the",
+  "result before continuing. Use background only for independent work that can",
+  "run while you continue elsewhere. You will be notified automatically when it",
+  "finishes: do NOT sleep, poll for status, or duplicate that task's work.",
 ].join("\n");
 
 /**
@@ -58,6 +64,11 @@ export const taskToolDefinition: ToolDefinition<TaskToolInput, string> = {
       task_id: {
         type: "string",
         description: "Resume a previous subagent session by its task id.",
+      },
+      background: {
+        type: "boolean",
+        description:
+          "Run the subagent asynchronously and return immediately. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress.",
       },
     },
     required: ["prompt"],

@@ -87,10 +87,26 @@ export type AgentEvent =
   | { type: "verification-start"; callId: string }
   | { type: "verification-result"; callId: string; ok: boolean }
   | { type: "text-delta"; text: string }
+  | { type: "notification"; text: string; jobId?: string }
   | { type: "step-finish" }
   | { type: "agent-complete" }
   | { type: "cancelled" }
-  | { type: "error"; error: string };
+  | { type: "error"; error: string }
+  // ── Phase 76A.5 — background job lifecycle. UIs render these; they never
+  // drive the scheduler. `parentSessionId` lets a front-end filter to its own
+  // session without knowing the job internals.
+  | { type: "background-job-started"; jobId: string; jobType: string; title: string; parentSessionId: string }
+  | { type: "background-job-queued"; jobId: string; jobType: string; title: string; parentSessionId: string }
+  | { type: "background-job-progress"; jobId: string; progress?: unknown }
+  | {
+      type: "background-job-completed";
+      jobId: string;
+      parentSessionId: string;
+      childSessionId?: string;
+      result?: unknown;
+    }
+  | { type: "background-job-error"; jobId: string; error: string; errorKind?: string }
+  | { type: "background-job-cancelled"; jobId: string; reason?: string };
 
 // ── Task Requirements / Completion Gate ─────────────────────────────────────
 

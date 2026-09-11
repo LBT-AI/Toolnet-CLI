@@ -61,6 +61,19 @@ export class SubagentSessionStore {
   }
 
   /**
+   * Reserve a child session id without creating the session yet.
+   *
+   * Phase 76A.3 — a background job must know its child session id up front so
+   * the job and the session can be correlated from the moment the job starts.
+   */
+  allocateId(parentSessionId: string, agentId: string): string {
+    const parentKey = parentSessionId || "session";
+    const next = (this.sequenceByParent.get(parentKey) ?? 0) + 1;
+    this.sequenceByParent.set(parentKey, next);
+    return deriveChildSessionId(parentKey, agentId, next);
+  }
+
+  /**
    * Create an orphan session with a caller-supplied id. Used when a caller
    * wants a stable id it controls (tests, external orchestration).
    */

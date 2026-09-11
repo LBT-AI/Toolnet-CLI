@@ -25,6 +25,7 @@ import type { ContextMessage } from "../../lib/context/types";
 import type { SandboxMode } from "../../lib/security/types";
 import type { AgentEvent, AgentResult, ToolResult } from "../contracts";
 import type { ToolPermissionScope } from "./agents/types";
+import { backgroundJobs, type BackgroundJobEvent } from "../background";
 
 export type AgentEngineMode =
   | "interactive"
@@ -133,6 +134,13 @@ export function toAgentEvents(ev: HarnessEvent): AgentEvent[] {
       return [{ type: "reasoning-delta", text }];
     }
 
+    case "agent:notification":
+      return [{
+        type: "notification",
+        text: typeof payload.text === "string" ? payload.text : "",
+        ...(typeof payload.jobId === "string" ? { jobId: payload.jobId } : {}),
+      }];
+
     case "tool:queued": {
       const callId = String(payload.id ?? payload.toolName ?? "unknown");
       return [{ type: "tool-call", callId, name: String(payload.toolName ?? "unknown"), input: payload.toolArgs ?? {} }];
@@ -197,6 +205,78 @@ export function toToolResult(raw: unknown): ToolResult {
   };
 }
 
+// ── Phase 76A.5 — background job events ─────────────────────────────────────
+
+/**
+ * Translate one background job event into the unified AgentEvent contract.
+ * Front-ends render these; they never drive the scheduler.
+ */
+export function toBackgroundAgentEvent(event: BackgroundJobEvent): AgentEvent {
+  switch (event.type) {
+    case "background-job-started":
+      return {
+        type: "background-job-started",
+        jobId: event.jobId,
+        jobType: event.jobType,
+        title: String(event.result ?? event.jobType),
+        parentSessionId: event.parentSessionId,
+      };
+
+    case "background-job-queued":
+      return {
+        type: "background-job-queued",
+        jobId: event.jobId,
+        jobType: event.jobType,
+        title: String(event.progress ?? event.jobType),
+        parentSessionId: event.parentSessionId,
+      };
+
+    case "background-job-completed":
+      return {
+        type: "background-job-completed",
+        jobId: event.jobId,
+        parentSessionId: event.parentSessionId,
+        ...(event.childSessionId ? { childSessionId: event.childSessionId } : {}),
+        ...(event.result !== undefined ? { result: event.result } : {}),
+      };
+
+    case "background-job-cancelled":
+      return {
+        type: "background-job-cancelled",
+        jobId: event.jobId,
+        ...(event.error ? { reason: event.error } : {}),
+      };
+
+    case "background-job-error":
+      return {
+        type: "background-job-error",
+        jobId: event.jobId,
+        error: event.error || "Background job failed",
+        ...(event.errorKind ? { errorKind: event.errorKind } : {}),
+      };
+
+    default:
+      return { type: "background-job-progress", jobId: event.jobId, progress: event.progress };
+  }
+}
+
+/**
+ * Subscribe a front-end to every background job event. Returns an unsubscribe
+ * function. Long-lived UIs use this so a job that outlives one agent turn still
+ * reports its outcome.
+ */
+export function bridgeBackgroundJobEvents(
+  onEvent: (event: AgentEvent) => void,
+  filter: { parentSessionId?: string } = {}
+): () => void {
+  return backgroundJobs.subscribe((event) => {
+    if (filter.parentSessionId && event.parentSessionId !== filter.parentSessionId) return;
+    try {
+      onEvent(toBackgroundAgentEvent(event));
+    } catch {}
+  });
+}
+
 export class AgentEngine {
   /**
    * Run one agent turn to completion. Every front-end uses this.
@@ -215,6 +295,13 @@ export class AgentEngine {
     });
 
     const emit = (event: AgentEvent) => options.onEvent?.(event);
+
+    // Phase 76A.5 — forward background job events for this session while the
+    // run is active. A job that outlives the turn is still reported to long-
+    // lived subscribers via `bridgeBackgroundJobEvents`.
+    const unsubscribeBackground = options.onEvent
+      ? bridgeBackgroundJobEvents(options.onEvent, { parentSessionId: options.sessionId })
+      : () => {};
 
     // One subscription fans out to the text/reasoning renderers AND the
     // normalized event stream — the UI never touches provider deltas directly.
@@ -239,7 +326,12 @@ export class AgentEngine {
       return { success: false, output: "", evidence: harness.getCompletionEvidence(), error: "Execution cancelled by user" };
     }
 
-    const result = await this.invoke(harness, options, mode);
+    let result: HarnessResult;
+    try {
+      result = await this.invoke(harness, options, mode);
+    } finally {
+      unsubscribeBackground();
+    }
 
     if (options.signal?.aborted) {
       emit({ type: "cancelled" });

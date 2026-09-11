@@ -19,6 +19,7 @@ import { TaskContextManager } from "./taskContext";
 import { bypassEngine } from "../bypass";
 import { getLanguageDirective, getResponseLanguage } from "../language";
 import { getModelCapabilities } from "../reasoning";
+import { sessionInbox } from "../../core/background/inbox";
 import { ToolCache, createMetrics, type ToolCall, type ToolPlannerMetrics } from "./toolPlanner";
 import { executeToolBatch, signatureForToolCall } from "./toolExecutor";
 import { toolRegistry } from "./toolRegistry";
@@ -517,6 +518,20 @@ export class AgentHarness {
 
     while (turnsUsed < maxTurns) {
       turnsUsed++;
+
+      // Phase 76A.4 — notification instead of polling. Runtime messages that
+      // arrived for this session (a finished background task) are drained into
+      // the conversation before the next model turn, so the model learns about
+      // the result through its own context rather than by sleeping and asking.
+      const pendingNotifications = sessionInbox.drain(sessionId);
+      for (const notification of pendingNotifications) {
+        messages.push({ role: "user", content: notification.content });
+        this.emitEvent("agent:notification", mode, {
+          notificationId: notification.id,
+          jobId: notification.jobId,
+          text: notification.content,
+        });
+      }
 
       if (Date.now() - startTime > timeoutMs) {
         this.agentState.transition("error", "timeout");

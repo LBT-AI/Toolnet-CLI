@@ -22,6 +22,8 @@ export type HarnessEventType =
   | "agent:thinking"
   | "agent:stream_chunk"
   | "agent:reasoning_chunk"
+  /** Phase 76A.4 — a runtime notification was injected into the conversation. */
+  | "agent:notification"
   | "tool:queued"
   | "tool:approval_required"
   | "tool:start"

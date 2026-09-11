@@ -197,6 +197,12 @@ export interface TaskToolInput {
   subagent_type?: string;
   /** Resume an existing child session instead of creating a new one. */
   task_id?: string;
+  /**
+   * Phase 76A.3 — run the subagent asynchronously. The tool returns
+   * immediately with a job id; the result is injected into the conversation
+   * when it finishes. Foreground (the default) blocks until the result exists.
+   */
+  background?: boolean;
 }
 
 // ── Configuration ────────────────────────────────────────────────────────────

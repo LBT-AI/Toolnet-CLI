@@ -18,6 +18,7 @@ import type { ToolDefinition as ProviderToolDefinition } from "../../providers/t
 import type { ToolExecutionContext } from "../security/types";
 import type { PostconditionResult } from "../toolVerification";
 import { taskToolDefinition } from "../../core/agent/agents/taskToolDefinition";
+import { teamworkToolDefinition } from "../../core/teamwork/tool";
 
 /** Risk tier — drives SecurityEngine policy and UI coloring. */
 export type ToolRisk = "read" | "write" | "execute" | "network";
@@ -594,6 +595,10 @@ Alias for shell. Use for tests, builds, typechecks, linting and project inspecti
   // Phase 75.7 — canonical subagent delegation. Registered like every other
   // tool, so it flows through permission → execute → verify unchanged.
   taskToolDefinition,
+
+  // Phase 76B.11 — canonical teamwork DAG submission. The tool only submits a
+  // plan; execution stays in the shared scheduler.
+  teamworkToolDefinition,
 ];
 
 // ── Registry API ─────────────────────────────────────────────────────────────

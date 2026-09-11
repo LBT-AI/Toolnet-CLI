@@ -98,7 +98,10 @@ export class SecurityEngine {
     // policy stays in one place: the harness derives it, the engine enforces it.
     if (context?.agentDepth !== undefined) {
       const isDelegation =
-        toolName === "task" || toolName === "spawn_subagent" || toolName === "delegate_task";
+        toolName === "task" ||
+        toolName === "teamwork" ||
+        toolName === "spawn_subagent" ||
+        toolName === "delegate_task";
       const maxDepth = context.subagent?.maxDepth ?? 1;
 
       if (isDelegation && context.agentDepth >= maxDepth) {
@@ -553,7 +556,7 @@ export class SecurityEngine {
     // Classifying `task` as SHELL_EXECUTE keeps it in the execution class
     // instead of letting it fall through to MCP_TOOL, which would wrongly treat
     // a first-party tool as an unknown external one (denied in workspace mode).
-    if (["task", "spawn_subagent", "delegate_task"].includes(toolName)) return "SHELL_EXECUTE";
+    if (["task", "teamwork", "spawn_subagent", "delegate_task"].includes(toolName)) return "SHELL_EXECUTE";
     if (["run_command", "shell", "bash", "exec", "terminal"].includes(toolName)) return "SHELL_EXECUTE";
     if (["write_file", "edit_file", "replace_all", "apply_patch", "create_artifact", "update_artifact"].includes(toolName)) {
       return "FILE_WRITE";
