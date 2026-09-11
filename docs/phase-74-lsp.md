@@ -165,6 +165,65 @@ Deterministic; no language-server binary and no network required.
 The in-memory transport (`createMemoryTransportPair`) and
 `createFakeLspServer` helper exercise the production client/manager code paths.
 
+## 9b. Live Acceptance (74.11)
+
+Proves the implementation against a **real language server process**, not the in-memory transport.
+
+**Environment**
+
+| Item | Value |
+|---|---|
+| Language server | `typescript-language-server` **6.0.0** (`--stdio`) |
+| TypeScript | 5.9.3 |
+| Fixture | `/tmp/toolnet-lsp-live` (`package.json`, `tsconfig.json`, `src/service.ts`, `src/controller.ts`, `src/index.ts`) |
+| Transport | production stdio JSON-RPC (`spawnStdioServer`) — no fake, no memory transport |
+| Suite | `src/teamwork/__tests__/lspLiveAcceptance.test.ts` |
+
+Installed deliberately for this acceptance only, into the fixture's own
+`node_modules/.bin` — which also exercises the project-local discovery path.
+ToolNet's runtime policy is unchanged: it never installs a server, and reports
+`available: false` with a clear reason when one is missing.
+
+The suite is opt-in by availability: it runs when the fixture and binary exist,
+and skips otherwise, so CI never depends on an installed language server.
+
+**Results — 15/15 PASS**
+
+| Check | Result |
+|---|---|
+| spawn → initialize handshake (`initialize` + `initialized`) | ✅ PASS |
+| `definition` → `src/service.ts:6:17` (workspace-relative, 1-based) | ✅ PASS |
+| `references` → `service.ts` + `controller.ts` + `index.ts` | ✅ PASS |
+| `hover` → real signature containing `getUser` / `User` | ✅ PASS |
+| `document_symbols` → `getUser`, `User` (with nested members) | ✅ PASS |
+| `workspace_symbols("getUser")` → `src/service.ts` | ✅ PASS |
+| `diagnostics` clean on untouched fixture | ✅ PASS |
+| **live mutation**: `name: "ToolNet"` → `name: 123` produces a real TypeScript error; restoring clears it | ✅ PASS |
+| cache invalidation: new symbol invisible while cached, visible after `invalidate()` | ✅ PASS |
+| process reuse: `spawnCount === 1` across definition/references/hover/symbols/diagnostics | ✅ PASS |
+| cancellation + bounded timeout leave the session usable | ✅ PASS |
+| shutdown → `shutdown`/`exit` → process reaped, **0 orphans** | ✅ PASS |
+| operations after shutdown degrade to `[]` (no respawn, no throw) | ✅ PASS |
+| fallback regression (no binary): `available:false` + grep hint, no crash | ✅ PASS |
+
+Two real findings from this acceptance were fixed:
+
+1. **`diagnostics()` stalled on already-open documents.** It waited for a publish
+   that never comes when the document is unchanged. `LspClient.openDocument` now
+   reports whether it actually sent `didOpen`/`didChange`, and `diagnostics()`
+   returns the cached batch immediately when the document is already in sync
+   (returning it only after the timeout before).
+2. **A disposed manager could respawn a server.** `LspManager.shutdown()` now
+   marks the workspace disposed, so a late tool call cannot leak a process after
+   the session it belonged to has ended.
+
+**Behavioural note (standard LSP):** `typescript-language-server` only offers
+complete cross-file resolution for documents loaded into the project. The
+acceptance therefore reads the fixture files first (what a real agent does
+before navigating) and the results are exact. `definition` on a symbol whose
+module has not been loaded yet returns the import binding — a useful pointer,
+and the target resolves once that file is read.
+
 ## 10. Definition of Done
 
 | Criterion | Status |
@@ -183,6 +242,7 @@ The in-memory transport (`createMemoryTransportPair`) and
 | `build` | ✅ (462 modules) |
 | `npm pack --dry-run` | ✅ (`toolnetcli@1.2.4`) |
 | Phase 73 regression tests | ✅ (core deterministic E2E + harness core + critical scenarios: 48 pass) |
+| **Live acceptance against a real language server** | ✅ **15/15 PASS** (see §9b) |
 
 ## 11. Known limitations
 
@@ -198,4 +258,7 @@ The in-memory transport (`createMemoryTransportPair`) and
    stable" by the phase spec).
 4. **Diagnostics are supplementary.** They are the server's static view; a
    typecheck/build/test run remains the source of truth for completion.
-5. Phase 75 (subagents/background) was not started, per the phase gating rule.
+5. **Live acceptance requires the server to be installed.** It is verified with
+   `typescript-language-server@6.0.0`, but the suite skips (rather than fails)
+   when the binary or fixture is absent, so it never blocks CI.
+6. Phase 75 (subagents/background) was not started, per the phase gating rule.

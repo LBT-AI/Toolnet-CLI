@@ -172,8 +172,15 @@ export class LspClient {
 
   // ── Document synchronization ──────────────────────────────────────────────
 
-  /** `didOpen` on first use, `didChange` (full text) when content differs. */
-  async openDocument(filePath: string): Promise<number> {
+  /**
+   * `didOpen` on first use, `didChange` (full text) when content differs.
+   *
+   * `changed` is true when a synchronization notification went out, which means
+   * the server will publish a fresh diagnostics batch. When it is false the
+   * document is already in sync and any cached diagnostics are still current —
+   * callers must not wait for a publish that is never coming.
+   */
+  async openDocument(filePath: string): Promise<{ version: number; changed: boolean }> {
     const absolute = path.resolve(filePath);
     const uri = toUri(absolute);
     let text: string;
@@ -195,10 +202,10 @@ export class LspClient {
           text,
         },
       });
-      return version;
+      return { version, changed: true };
     }
 
-    if (existing.text === text) return existing.version;
+    if (existing.text === text) return { version: existing.version, changed: false };
 
     const version = existing.version + 1;
     this.openDocuments.set(uri, { version, text });
@@ -206,7 +213,7 @@ export class LspClient {
       textDocument: { uri, version },
       contentChanges: [{ text }],
     });
-    return version;
+    return { version, changed: true };
   }
 
   // ── Diagnostics ───────────────────────────────────────────────────────────
@@ -219,8 +226,12 @@ export class LspClient {
   async diagnostics(filePath: string, options: RequestOptions = {}): Promise<DiagnosticItem[]> {
     const absolute = path.resolve(filePath);
     const after = this.now();
-    await this.openDocument(absolute);
-    const version = this.openDocuments.get(toUri(absolute))?.version;
+    const { version, changed } = await this.openDocument(absolute);
+
+    // Document already in sync → no publish is pending, so return the cached
+    // batch instead of waiting out the timeout.
+    if (!changed) return this.diagnosticsCache.get(absolute)?.items ?? [];
+
     await this.waitForDiagnostics(absolute, {
       after,
       version,

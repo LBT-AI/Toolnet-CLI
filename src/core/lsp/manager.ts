@@ -77,6 +77,12 @@ export class LspManager {
   private readonly spawning = new Map<string, Promise<LspClient | undefined>>();
   private readonly broken = new Set<string>();
   private readonly symbolCache = new Map<string, { expiresAt: number; value: SymbolInfo[] }>();
+  /**
+   * Set by `shutdown()`. A disposed workspace must not silently respawn a
+   * language server: a late tool call would otherwise leak a process after the
+   * session it belonged to is gone.
+   */
+  private disposed = false;
 
   constructor(options: LspManagerOptions) {
     this.workspaceRoot = options.workspaceRoot;
@@ -214,6 +220,7 @@ export class LspManager {
   }
 
   async shutdown(): Promise<void> {
+    this.disposed = true;
     const clients = [...this.clients.values()];
     this.clients.clear();
     this.spawning.clear();
@@ -255,6 +262,7 @@ export class LspManager {
   }
 
   private async getClient(filePath: string): Promise<LspClient | undefined> {
+    if (this.disposed) return undefined;
     const spec = selectServerForFile(filePath, this.servers);
     if (!spec) return undefined;
 
