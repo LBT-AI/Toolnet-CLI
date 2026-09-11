@@ -17,6 +17,7 @@
 import type { ToolDefinition as ProviderToolDefinition } from "../../providers/types";
 import type { ToolExecutionContext } from "../security/types";
 import type { PostconditionResult } from "../toolVerification";
+import { taskToolDefinition } from "../../core/agent/agents/taskToolDefinition";
 
 /** Risk tier — drives SecurityEngine policy and UI coloring. */
 export type ToolRisk = "read" | "write" | "execute" | "network";
@@ -555,7 +556,12 @@ Alias for shell. Use for tests, builds, typechecks, linting and project inspecti
     },
   }),
   tool({
+    // Phase 75.7 — legacy spawn entry. `task` is the canonical, model-visible
+    // way to delegate; this name stays resolvable for back-compat (old
+    // sessions, structured protocols) but is never advertised to the model, so
+    // there is exactly ONE subagent capability in the schema set.
     name: "spawn_subagent",
+    aliasOf: "task",
     description: "Spawn an autonomous specialized sub-agent to execute a sub-task independently.",
     parameters: {
       type: "object",
@@ -584,6 +590,10 @@ Alias for shell. Use for tests, builds, typechecks, linting and project inspecti
       return JSON.stringify({ stdout: res.output || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
   }),
+
+  // Phase 75.7 — canonical subagent delegation. Registered like every other
+  // tool, so it flows through permission → execute → verify unchanged.
+  taskToolDefinition,
 ];
 
 // ── Registry API ─────────────────────────────────────────────────────────────

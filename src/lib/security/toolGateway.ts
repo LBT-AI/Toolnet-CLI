@@ -378,6 +378,9 @@ export class ToolGateway {
         agentRole: context.agentRole,
         agentDepth: context.agentDepth,
         source: context.source,
+        // Phase 75: forwarded so the `task` tool can derive a child scope that
+        // can never exceed the spawning turn's permission.
+        subagent: context.subagent,
       });
 
       const sanitizedJson = compressToolResult(redactSecrets(rawJson), name);

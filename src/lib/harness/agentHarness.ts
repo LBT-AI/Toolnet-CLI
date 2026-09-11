@@ -27,6 +27,10 @@ import { AgentStateMachine } from "./agentState";
 import { ModelAdapter, type AgentModelResponse, type AgentToolCall } from "./modelAdapter";
 import { parseTaskRequirements, evaluateCompletionGate, recordEvidence, emptyEvidence } from "../../core/agent/completionGate";
 import type { CompletionEvidence, TaskRequirement } from "../../core/contracts";
+// Import the subagent pieces surgically (not via the module barrel) so the
+// harness graph does not pull the manager + registry in eagerly.
+import { DEFAULT_SUBAGENT_MAX_DEPTH, decideTool, type ToolPermissionScope } from "../../core/agent/agents/types";
+import { permissionScopeFromSandbox } from "../../core/agent/agents/permissions";
 import type {
   ExecutionMode,
   ExecutionOptions,
@@ -58,6 +62,12 @@ export class AgentHarness {
   private taskContextManager = new TaskContextManager();
   /** Phase 73.9 — verified side effects from the most recent loop run. */
   private lastCompletionEvidence: CompletionEvidence = emptyEvidence();
+  /** Phase 75 — permission scope applied to every tool call in this run. */
+  private toolPermissions?: ToolPermissionScope;
+  /** Phase 75 — maximum subagent nesting depth for this run. */
+  private maxSubagentDepth = DEFAULT_SUBAGENT_MAX_DEPTH;
+  /** Phase 75 — approval hook handed to child subagents. */
+  private approvalHook?: (input: { name: string; args: any; reason?: string }) => Promise<boolean>;
 
   constructor(config: HarnessConfig = {}) {
     const stableRoot =
@@ -259,17 +269,75 @@ export class AgentHarness {
 
     this.metrics.toolCallsRequested++;
 
+    // Phase 75 — scope gate. A tool denied by the active permission scope is
+    // refused BEFORE the security gateway, so a scoped agent (plan mode, a
+    // role-scoped subagent) can never reach an out-of-scope executor. This is
+    // the enforcement half of `deriveSubagentPermission`: the derived scope is
+    // not advisory, it is a hard gate.
+    const scope = this.toolPermissions;
+    if (scope) {
+      const verdict = decideTool(scope, name);
+
+      // An explicit deny can never be unlocked — not by the model, and not by
+      // a user approval prompt for a different (ASK) tool.
+      if (verdict === "deny") {
+        this.metrics.toolCallsExecuted++;
+        this.emitEvent("tool:error", this.activeMode, {
+          toolName: name,
+          toolArgs: args,
+          reason: "denied-by-scope",
+        });
+        return {
+          result: JSON.stringify({
+            error: `Permission Denied: tool '${name}' is not permitted in this agent's scope.`,
+          }),
+          allowed: false,
+          reason: `Tool '${name}' is outside the active permission scope.`,
+        };
+      }
+
+      if (verdict === "ask" && options.userApproved !== true) {
+        this.metrics.toolCallsExecuted++;
+        this.emitEvent("tool:approval_required", this.activeMode, {
+          toolName: name,
+          toolArgs: args,
+          reason: "scope-requires-approval",
+        });
+        return {
+          result: JSON.stringify({
+            stdout: "",
+            stderr: `Approval Required: tool '${name}' is gated by the active permission scope.`,
+            exitCode: 1,
+            approvalRequired: true,
+          }),
+          allowed: false,
+          needsApproval: true,
+          reason: `Tool '${name}' requires approval in the active permission scope.`,
+        };
+      }
+    }
+
     const { ToolGateway } = await import("../security/toolGateway");
+    const agentDepth = options.agentDepth ?? (this.activeMode === "SUBAGENT" ? 1 : 0);
     const gatewayRes = await ToolGateway.execute({ name, args }, {
       cwd,
       workspaceRoot: this.config.workspaceRoot,
       sandboxMode: mode,
       userApproved: options.userApproved,
       agentRole: options.agentRole || (this.activeMode === "SUBAGENT" ? "subagent" : undefined),
-      agentDepth: options.agentDepth || (this.activeMode === "SUBAGENT" ? 1 : 0),
+      agentDepth,
       sessionId: this.config.sessionId,
       source: this.activeMode === "SUBAGENT" ? "subagent" : this.activeMode === "TEAMWORK" ? "teamwork" : "headless",
       signal: options.signal,
+      // Phase 75 — a `task` call derives the child scope from the SPAWNING
+      // turn's scope. Absent an explicit scope, the sandbox mode is the honest
+      // baseline (never unbounded).
+      subagent: {
+        permission: scope ?? permissionScopeFromSandbox(mode),
+        depth: agentDepth,
+        maxDepth: this.maxSubagentDepth,
+        ...(this.approvalHook ? { requestApproval: this.approvalHook } : {}),
+      },
     });
 
     if (gatewayRes.needsApproval) {
@@ -422,6 +490,9 @@ export class AgentHarness {
     this.lastToolSig = null;
     this.consecutiveToolRepeat = 0;
     this.activeMode = mode;
+    this.toolPermissions = options.toolPermissionSet;
+    this.maxSubagentDepth = options.subagentMaxDepth ?? DEFAULT_SUBAGENT_MAX_DEPTH;
+    this.approvalHook = options.requestApproval;
 
     const abort = new AbortController() as AbortController & { aborted?: boolean };
     this.loopAbortController = abort;
@@ -944,6 +1015,21 @@ ${getLanguageDirective(getResponseLanguage())}`;
     return this.executeLoop([...messages], options, mode);
   }
 
+  /**
+   * Phase 75.9 — Rebuild the message list for a RESUMED child session.
+   *
+   * A resumed subagent must run under the same operating contract as its first
+   * call, so the live system prompt (project summary, permission context, role
+   * prompt) is regenerated instead of trusting a stale copy. Stored child
+   * transcripts deliberately exclude the system message for exactly this reason.
+   */
+  buildResumeMessages(
+    transcript: ContextMessage[],
+    options: ExecutionOptions = {}
+  ): ContextMessage[] {
+    return [{ role: "system", content: this.buildSystemPrompt(options.systemPrompt) }, ...transcript];
+  }
+
   async runHeadless(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
     const systemPrompt = this.buildSystemPrompt(options.systemPrompt);
 
@@ -976,7 +1062,12 @@ ${getCodingAgentToolUseGuidance()}`;
     options: ExecutionOptions = {}
   ): Promise<HarnessResult> {
     const { getSubagentRolePrompt, getSubagentTools } = await import("../../teamwork/subagentRuntime");
-    const rolePrompt = getSubagentRolePrompt(role, task.slice(0, 50), options.sessionId || this.config.sessionId);
+    // Phase 75: a caller that supplies a system prompt (an AgentDefinition
+    // composed by the subagent manager) owns the role contract. The legacy
+    // role-prompt generator is the fallback for role-only callers.
+    const rolePrompt = options.systemPrompt?.trim()
+      ? options.systemPrompt.trim()
+      : getSubagentRolePrompt(role, task.slice(0, 50), options.sessionId || this.config.sessionId);
     const tools = options.toolsOverride || getSubagentTools(role);
 
     const parentMode = this.config.sandboxMode || getSandboxMode();

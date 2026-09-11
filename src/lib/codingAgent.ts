@@ -382,8 +382,10 @@ export function toolGrep(pattern: string, searchPath = ".", include?: string, ct
 
     const { spawnSync } = require("node:child_process");
     const args = ["-rnI"]; // recursive, line number, ignore binary
-    // Emulate original exclusions: exclude hidden files and node_modules
-    args.push("--exclude-dir=.*", "--exclude-dir=node_modules", "--exclude=.*");
+    // Exclude noisy/vendored trees by NAME. Never use a bare `.*` glob here:
+    // grep matches these with fnmatch semantics (no FNM_PERIOD), so `--exclude=.*`
+    // matches EVERY filename and silently makes every search return nothing.
+    args.push("--exclude-dir=node_modules", "--exclude-dir=.git", "--exclude-dir=.cache", "--exclude-dir=dist", "--exclude-dir=build");
     
     if (include) {
       args.push(`--include=${include}`);

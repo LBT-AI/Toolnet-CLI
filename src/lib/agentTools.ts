@@ -27,7 +27,7 @@ import { getMcpAgentTools as getMcpRunnerAgentTools, executeMcpTool } from "./mc
 import { executeBrowserTool } from "./browserTool";
 import { ToolCache } from "./harness/toolPlanner";
 import { toolRegistry } from "./harness/toolRegistry";
-import type { ToolExecutionContext } from "./security/types";
+import type { SubagentRuntimeContext, ToolExecutionContext } from "./security/types";
 
 // ── Shared tool cache — used by ALL callers (TUI, AgentRuntime, SubAgent, Harness)
 const _toolCache = new ToolCache();
@@ -78,6 +78,8 @@ export interface ExecuteToolOptions {
   source?: "tui" | "headless" | "subagent" | "teamwork" | "plugin" | "vision" | "mcp";
   /** Abort signal — propagated to long-running executors (shell, fetch). */
   signal?: AbortSignal;
+  /** Phase 75: spawning-turn context for the `task` tool (scope + depth). */
+  subagent?: SubagentRuntimeContext;
 }
 
 // ── Raw tool execution (no cache, no compression) ──────────────────────
@@ -254,6 +256,7 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
               agentRole: options.agentRole,
               agentDepth: options.agentDepth,
               source: options.source,
+              subagent: options.subagent,
             }
           : {};
         const result = await regEntry.execute(args, ctx);

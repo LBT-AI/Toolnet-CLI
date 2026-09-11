@@ -93,8 +93,15 @@ export class SecurityEngine {
     const category = this.categorizeTool(toolName);
 
     // ── Subagent Recursion & Role Isolation Gates ───────────────────────────
-    if (context?.agentDepth !== undefined && context.agentDepth >= 1) {
-      if (toolName === "spawn_subagent" || toolName === "delegate_task") {
+    // Applies to every delegation entry point (`task` and its legacy aliases).
+    // The limit comes from the spawning turn's own max-depth setting, so the
+    // policy stays in one place: the harness derives it, the engine enforces it.
+    if (context?.agentDepth !== undefined) {
+      const isDelegation =
+        toolName === "task" || toolName === "spawn_subagent" || toolName === "delegate_task";
+      const maxDepth = context.subagent?.maxDepth ?? 1;
+
+      if (isDelegation && context.agentDepth >= maxDepth) {
         return {
           decision: "DENY",
           allowed: false,
@@ -541,6 +548,12 @@ export class SecurityEngine {
   }
 
   categorizeTool(toolName: string): ActionCategory {
+    // Phase 75 — agent delegation. A delegated subagent is NOT privileged: every
+    // tool it calls is evaluated by this same engine with its own derived scope.
+    // Classifying `task` as SHELL_EXECUTE keeps it in the execution class
+    // instead of letting it fall through to MCP_TOOL, which would wrongly treat
+    // a first-party tool as an unknown external one (denied in workspace mode).
+    if (["task", "spawn_subagent", "delegate_task"].includes(toolName)) return "SHELL_EXECUTE";
     if (["run_command", "shell", "bash", "exec", "terminal"].includes(toolName)) return "SHELL_EXECUTE";
     if (["write_file", "edit_file", "replace_all", "apply_patch", "create_artifact", "update_artifact"].includes(toolName)) {
       return "FILE_WRITE";

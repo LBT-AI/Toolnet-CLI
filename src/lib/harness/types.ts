@@ -7,6 +7,7 @@ import type { ContextMessage, ContextBudget } from "../context/types";
 import type { SandboxMode, RiskLevel } from "../security/types";
 import type { AgentRole, TaskGraph, SchedulerState } from "../../teamwork/types";
 import type { CompletionEvidence, TaskRequirement } from "../../core/contracts";
+import type { ToolPermissionScope } from "../../core/agent/agents/types";
 
 export type ExecutionMode =
   | "INTERACTIVE"
@@ -78,6 +79,14 @@ export interface ExecutionOptions {
   agentDepth?: number;
   /** Abort signal — cancelling stops provider calls AND running tools. */
   signal?: AbortSignal;
+  /**
+   * Phase 75 — effective permission scope for this run. When set, tools denied
+   * by the scope are refused BEFORE the security gateway, and `task` children
+   * inherit this scope (intersected with their agent definition).
+   */
+  toolPermissionSet?: ToolPermissionScope;
+  /** Phase 75 — maximum subagent nesting depth (default 1 = no grandchildren). */
+  subagentMaxDepth?: number;
   onChunk?: (chunk: string) => void;
   onEvent?: (event: string, data: any) => void;
   /** Phase 73.9 — task requirements parsed from the user prompt. When set, the

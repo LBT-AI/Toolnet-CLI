@@ -160,6 +160,8 @@ export interface AgentResult {
   turnsUsed?: number;
   tokensUsed?: number;
   durationMs?: number;
+  /** Tool executions performed during the run (from verified tool results). */
+  toolCalls?: number;
   /** Full post-run transcript (assistant turns + tool results). */
   messages?: AgentMessage[];
   error?: string;

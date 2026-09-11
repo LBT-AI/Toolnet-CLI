@@ -61,6 +61,38 @@ export interface ToolExecutionContext {
   source?: "tui" | "headless" | "subagent" | "teamwork" | "plugin" | "vision" | "mcp";
   /** Abort signal — propagated to the executor so running processes can be killed. */
   signal?: AbortSignal;
+  /**
+   * Phase 75 — runtime facts for tools that create subagents (`task`).
+   * The harness attaches the spawning turn's effective permission scope and
+   * nesting depth so a child can never be granted more than its parent holds.
+   */
+  subagent?: SubagentRuntimeContext;
+}
+
+/**
+ * What a subagent-capable tool needs to spawn a child safely. Structurally
+ * declared here (rather than imported from core) so the security layer keeps
+ * zero runtime dependency on the agent layer.
+ */
+export interface SubagentRuntimeContext {
+  /** Effective permission scope of the spawning turn. */
+  permission: ToolPermissionScopeLike;
+  /** Nesting depth of the spawning turn — a primary agent is 0. */
+  depth: number;
+  /** Maximum allowed child depth. */
+  maxDepth: number;
+  /**
+   * Interactive approval hook inherited by the child, so a child that hits an
+   * ASK can surface the same prompt the parent uses instead of failing closed.
+   */
+  requestApproval?: (input: { name: string; args: unknown; reason?: string }) => Promise<boolean>;
+}
+
+/** Structural shape of a tool permission scope (see core/agent/agents/types). */
+export interface ToolPermissionScopeLike {
+  defaultDecision: "allow" | "ask" | "deny";
+  tools: Record<string, "allow" | "ask" | "deny">;
+  allowedTools?: string[];
 }
 
 export interface ToolGatewayResult {

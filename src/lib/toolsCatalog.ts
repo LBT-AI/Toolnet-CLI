@@ -24,7 +24,7 @@ const CATEGORY_RULES: Array<{ matcher: RegExp; category: string }> = [
   { matcher: /^(find_path|grep|grep_search|glob|glob_search)$/i, category: "Search" },
   { matcher: /^(shell|run_command|bash)$/i, category: "Shell" },
   { matcher: /^(web_fetch|web_search|web_crawl|fetch|fetch_web_page|audit_url|audit|browser|browser_action|playwright)$/i, category: "Web" },
-  { matcher: /^(spawn_subagent|delegate_task|save_plan)$/i, category: "Agent" },
+  { matcher: /^(task|spawn_subagent|delegate_task|save_plan)$/i, category: "Agent" },
   { matcher: /^(create_artifact|update_artifact)$/i, category: "Artifacts" },
 ];
 

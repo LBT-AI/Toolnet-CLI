@@ -69,6 +69,15 @@ export function mapToolToAction(toolName: string, args?: any): string {
     return "Building…";
   }
 
+  // Guard 6.5: Phase 75 — subagent delegation. Surface WHICH agent is working
+  // so a delegated child is never mistaken for the primary agent's own work.
+  if (name === "task" || name === "spawn_subagent" || name === "delegate_task") {
+    const agentId = String(args?.subagent_type || args?.role || "general").toLowerCase();
+    if (agentId === "coder") return "Implementing (subagent)…";
+    if (agentId === "tester") return "Verifying (subagent)…";
+    return "Delegating…";
+  }
+
   // Guard 7: Searching / exploration
   if (
     name === "search" ||

@@ -24,6 +24,7 @@ import type { ExecutionMode, HarnessEvent, HarnessResult } from "../../lib/harne
 import type { ContextMessage } from "../../lib/context/types";
 import type { SandboxMode } from "../../lib/security/types";
 import type { AgentEvent, AgentResult, ToolResult } from "../contracts";
+import type { ToolPermissionScope } from "./agents/types";
 
 export type AgentEngineMode =
   | "interactive"
@@ -41,6 +42,12 @@ export interface AgentEngineRunOptions {
    * loop without losing conversation context.
    */
   messages?: ContextMessage[];
+  /**
+   * When resuming, rebuild and prepend the live system prompt. Used by resumed
+   * subagent sessions, whose stored transcripts intentionally omit the system
+   * message (so the role prompt is always regenerated from current policy).
+   */
+  prependSystemPrompt?: boolean;
 
   sessionId?: string;
   model?: string;
@@ -58,8 +65,18 @@ export interface AgentEngineRunOptions {
 
   /** Subagent role, used when mode === "subagent". */
   agentRole?: string;
+  /** Nesting depth of this run (0 = primary). Used by the subagent depth guard. */
+  agentDepth?: number;
   /** Restrict the tool set (subagents, scoped tasks). */
   toolsOverride?: unknown[];
+  /**
+   * Phase 75 — hard permission scope for this run. Denied tools are refused
+   * before the security gateway, and any `task` child inherits a scope derived
+   * from this one (never broader).
+   */
+  toolPermissionSet?: ToolPermissionScope;
+  /** Phase 75 — maximum subagent nesting depth for this run. */
+  subagentMaxDepth?: number;
 
   /** Ask the model to stream (provider must support it). */
   stream?: boolean;
@@ -236,6 +253,7 @@ export class AgentEngine {
       turnsUsed: result.turnsUsed,
       tokensUsed: result.tokensUsed,
       durationMs: result.durationMs,
+      toolCalls: result.toolCallsCount,
       messages: result.messages as unknown as AgentResult["messages"],
       error: result.error,
     };
@@ -258,13 +276,20 @@ export class AgentEngine {
       signal: options.signal,
       mode,
       agentRole: options.agentRole,
+      agentDepth: options.agentDepth,
+      toolPermissionSet: options.toolPermissionSet,
+      subagentMaxDepth: options.subagentMaxDepth,
       stream: options.stream,
       requestApproval: options.requestApproval,
       onCustomTool: options.onCustomTool,
       reasoningSettings: options.reasoningSettings,
     };
 
-    if (mode === "SUBAGENT" && options.agentRole) {
+    // Legacy role-only subagent entry: caller knows a role and a single task,
+    // with no conversation of its own. When a transcript IS supplied (resumed
+    // Phase 75 child session) the transcript wins — otherwise the stored child
+    // history would be silently discarded on resume.
+    if (mode === "SUBAGENT" && options.agentRole && !options.messages?.length) {
       return harness.runSubagent(
         options.agentRole as Parameters<AgentHarness["runSubagent"]>[0],
         options.prompt,
@@ -274,7 +299,10 @@ export class AgentEngine {
 
     // Resume from a caller-owned transcript (TUI) or start a fresh turn.
     if (options.messages && options.messages.length > 0) {
-      return harness.resume(options.messages, { ...base, toolsOverride: options.toolsOverride });
+      const messages = options.prependSystemPrompt
+        ? harness.buildResumeMessages(options.messages, base)
+        : options.messages;
+      return harness.resume(messages, { ...base, toolsOverride: options.toolsOverride });
     }
 
     return harness.execute({ ...base, prompt: options.prompt, toolsOverride: options.toolsOverride });
