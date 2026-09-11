@@ -364,6 +364,53 @@ Use to locate files matching a pattern, e.g. '*.test.ts', 'src/**/*.ts'.
     },
   }),
   tool({
+    name: "lsp",
+    description: `Semantic code intelligence via a language server.
+Prefer this over grep when you need to find a symbol's definition, every
+reference to a symbol, type information (hover), a file's symbols, workspace
+symbol search, or compiler diagnostics.
+Operations:
+  definition        — where a symbol is defined (needs path/line/character)
+  references        — every use of a symbol, including its declaration
+  hover            — type/signature information at a position
+  document_symbols  — all symbols in a file (needs path)
+  workspace_symbols — search symbols across the workspace (needs query)
+  diagnostics       — errors/warnings for a file (needs path)
+Line and character are 1-based, as shown in an editor.
+If the tool reports that LSP is unavailable, fall back to grep/glob/read_file.`,
+    parameters: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["definition", "references", "diagnostics", "document_symbols", "workspace_symbols", "hover"],
+        },
+        path: { type: "string" },
+        line: { type: "number" },
+        character: { type: "number" },
+        query: { type: "string" },
+      },
+      required: ["operation"],
+    },
+    risk: "read",
+    category: "Code Intelligence",
+    async execute(
+      input: {
+        operation: "definition" | "references" | "diagnostics" | "document_symbols" | "workspace_symbols" | "hover";
+        path?: string;
+        line?: number;
+        character?: number;
+        query?: string;
+      },
+      ctx
+    ) {
+      // Lazy import keeps the LSP stack out of the registry's eager graph and
+      // guarantees there is still exactly one execution path (through the tool).
+      const { runLspOperation } = await import("../../core/lsp/tool");
+      return runLspOperation(input, ctx);
+    },
+  }),
+  tool({
     name: "shell",
     description: `Run shell commands in the workspace.
 Use for tests, builds, typechecks, linting and project inspection.

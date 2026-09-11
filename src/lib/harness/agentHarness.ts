@@ -4,6 +4,7 @@
  */
 
 import fs from "node:fs";
+import path from "node:path";
 import { getActiveProvider, getActiveBaseUrl, getActiveDefaultModel, OpenAICompatibleProvider, type Provider } from "../../providers";
 import { workspaceRoot, currentCwd } from "../codingAgent";
 import { contextEngine, type ContextMessage } from "../context";
@@ -315,7 +316,15 @@ export class AgentHarness {
       }
     }
 
-    const output = gatewayRes.stdout || JSON.stringify({ success: true });
+    let output = gatewayRes.stdout || JSON.stringify({ success: true });
+
+    // Phase 74.6: mutations get LSP diagnostics as supplementary feedback so the
+    // model can repair before running a full test. This never spawns a server
+    // and never throws — see `withLspDiagnostics`.
+    if (isWriteTool && typeof args?.path === "string" && !options.signal?.aborted) {
+      output = await this.withLspDiagnostics(args.path, output, cwd, options.signal);
+    }
+
     this.metrics.rawToolOutputChars += output.length;
     this.metrics.retainedToolOutputChars += output.length;
 
@@ -323,6 +332,34 @@ export class AgentHarness {
       result: output,
       allowed: true,
     };
+  }
+
+  /**
+   * Attach `<diagnostics>` for a just-mutated file when a language server is
+   * already running for it. Deliberately does NOT spawn a server: paying a
+   * startup handshake on every edit would be worse than the diagnostics are
+   * worth. Failures are swallowed — diagnostics are an optional layer, never a
+   * prerequisite for completing a task.
+   */
+  private async withLspDiagnostics(
+    targetPath: string,
+    output: string,
+    cwd: string,
+    signal?: AbortSignal
+  ): Promise<string> {
+    try {
+      const absolute = path.isAbsolute(targetPath) ? targetPath : path.resolve(cwd, targetPath);
+      const { getLspManager } = await import("../../core/lsp/manager");
+      const manager = getLspManager({ workspaceRoot: this.config.workspaceRoot || cwd, cwd });
+      if (!manager.hasActiveClient(absolute)) return output;
+      const items = await manager.diagnostics(absolute, { signal });
+      if (items.length === 0) return output;
+      const { formatDiagnosticsReport } = await import("../../core/lsp/diagnostics");
+      const report = formatDiagnosticsReport(absolute, items);
+      return report ? `${output}\n${report}` : output;
+    } catch {
+      return output;
+    }
   }
 
   getChangeTracker(): ChangeTracker {
