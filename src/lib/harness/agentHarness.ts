@@ -46,6 +46,24 @@ import type {
 } from "./types";
 import type { AgentRole } from "../../teamwork/types";
 
+/**
+ * Phase 77.12 — process-lifetime ledger of `session.start` activations.
+ *
+ * Deliberately module-level, not per-harness: `AgentEngine.run` constructs a
+ * NEW harness for every turn, so an instance field would re-fire the hook on
+ * each turn and break the exactly-once contract. Child sessions get their own
+ * `sessionId` (subagent / teamwork ids), so they activate separately here too.
+ */
+const sessionStartActivated = new Set<string>();
+
+/**
+ * Phase 77.12 — test seam: forget every activated session. Production code
+ * never calls this; the process lifetime IS the dedup window.
+ */
+export function resetSessionStartLedger(): void {
+  sessionStartActivated.clear();
+}
+
 export class AgentHarness {
   private config: HarnessConfig;
   private eventListeners: Set<HarnessEventListener> = new Set();
@@ -464,6 +482,8 @@ export class AgentHarness {
     const model = options.model || this.config.model || "";
     const hookMeta = { sessionId, signal: options.signal };
 
+    await this.fireSessionStart(sessionId, mode);
+
     await hookRegistry.run(
       "agent.start",
       { sessionId, model, mode },
@@ -494,6 +514,45 @@ export class AgentHarness {
         hookMeta,
       );
       throw error;
+    }
+  }
+
+  /**
+   * Phase 77.12 — the canonical `session.start` edge.
+   *
+   * Contract: `session.start` means SESSION ACTIVATION, not per-turn setup. It
+   * fires exactly once per sessionId per process lifetime, on the FIRST turn
+   * that runs under that session — a fresh CLI session, a resumed session, a
+   * subagent child session or a teamwork node child all activate exactly once.
+   *
+   * Why the harness: executeLoop is the ONE loop entry every front-end funnels
+   * through (TUI, headless, REPL, subagent, teamwork node), so activation can
+   * neither be forgotten by a front-end nor double-reported. This is the same
+   * reasoning that puts `agent.start`/`agent.end` here.
+   *
+   * Why process-lifetime exactly-once: the persisted-session world has no
+   * server-side creation event — a `sess_*` file may already exist on disk when
+   * this process starts, and `AgentEngine.run` builds a fresh harness per turn.
+   * A per-instance ledger would therefore re-fire on every turn. "First
+   * activation in this runtime" is the only edge every consumer can agree on;
+   * resuming a session this process has already activated never re-fires it.
+   *
+   * Hook failures are observe-class (`warn`): activation must never be able to
+   * break the turn it precedes.
+   */
+  private async fireSessionStart(sessionId: string, mode: ExecutionMode): Promise<void> {
+    if (sessionStartActivated.has(sessionId)) return;
+    sessionStartActivated.add(sessionId);
+    try {
+      await hookRegistry.run(
+        "session.start",
+        { sessionId, mode },
+        { sessionId, mode },
+        { sessionId },
+      );
+    } catch {
+      // The registry already records failures per policy; activation itself
+      // must be unconditional.
     }
   }
 

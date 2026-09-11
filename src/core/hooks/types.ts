@@ -14,7 +14,7 @@
  * cannot downgrade a security hook into an advisory one.
  */
 
-/** Lifecycle edges the runtime actually fires. */
+/** Lifecycle edges the runtime actually fires (see `wired.ts` for the map). */
 export type HookName =
   | "agent.start"
   | "agent.end"
@@ -26,7 +26,6 @@ export type HookName =
   | "file.beforeWrite"
   | "file.afterWrite"
   | "shell.before"
-  | "shell.after"
   | "session.start"
   | "session.end"
   | "background.started"
@@ -71,7 +70,6 @@ export const DEFAULT_FAILURE_POLICY: Record<HookName, HookFailurePolicy> = {
   "file.beforeWrite": "block",
   "file.afterWrite": "warn",
   "shell.before": "block",
-  "shell.after": "warn",
   "session.start": "warn",
   "session.end": "warn",
   "background.started": "warn",
@@ -95,7 +93,6 @@ export const HOOK_CLASS: Record<HookName, HookClass> = {
   "file.beforeWrite": "block",
   "file.afterWrite": "transform",
   "shell.before": "block",
-  "shell.after": "observe",
   "session.start": "observe",
   "session.end": "observe",
   "background.started": "observe",

@@ -35,7 +35,7 @@ servers register *into* it, so the TUI no longer concatenates a second list.
 
 | Concept | Values |
 |---|---|
-| `HookName` | `agent.start/end`, `model.before/after`, `tool.before/after/error`, `file.beforeWrite/afterWrite`, `shell.before/after`, `session.start/end`, `background.started/completed`, `teamwork.node.before/after` |
+| `HookName` | `agent.start/end`, `model.before/after`, **`session.start`**, `tool.before/after/error`, `file.beforeWrite/afterWrite`, `shell.before`, `session.end`, `background.started/completed`, `teamwork.node.before/after` |
 | `HookClass` | `observe` (telemetry), `transform` (may rewrite payload), `block` (may veto) |
 | `HookDecision` | `{action:"continue"}` · `{action:"deny", reason}` · `{action:"transform", args}` |
 | `HookFailurePolicy` | `ignore` · `warn` · `block` (fail closed) |
@@ -61,10 +61,42 @@ pre-execution edges (`tool.before`, `file.beforeWrite`, `shell.before`,
 `teamwork.node.before`) default to **`block`**, so a security hook that throws
 denies the operation instead of silently becoming a no-op.
 
+### 77.12 — dead-hook cleanup
+
+Two contract edges existed only as declarations, with no runtime edge to fire
+them. Phase 77.12 resolves each one explicitly — nothing is left
+*declared-but-unfired*:
+
+* **`session.start` — IMPLEMENTED.** The canonical lifecycle edge is **session
+  activation**, not per-turn setup: it fires exactly once per `sessionId` per
+  process lifetime, on the first turn that runs under that session. It is wired
+  in `AgentHarness.executeLoop` (via `fireSessionStart`) because that is the one
+  loop entry every front-end funnels through — the same place `agent.start`/
+  `agent.end` live — so activation can neither be forgotten by a front-end nor
+  double-reported. The ledger is module-level, not per-harness: `AgentEngine.run`
+  builds a fresh harness each turn, so a per-instance ledger would re-fire on
+  every turn. A fresh session activates once; further turns do not re-fire; a
+  child session (subagent/teamwork child id) activates separately, once;
+  resuming a session this process has already activated never re-fires it.
+* **`shell.after` — REMOVED as redundant.** `tool.after` already fires for shell
+  tools and receives the same normalized result envelope, so a separate post
+  edge had no semantics of its own. `shell.before` remains as the dedicated
+  pre-execution veto point (the symmetric shell-specific edge that *does* carry
+  semantics); the shell lifecycle is now
+  `tool.before → shell.before → permission → process → tool.after/tool.error`,
+  and nothing else. Dead APIs are deleted, not left on life support.
+
+A static guard (`src/core/hooks/wired.ts` + `phase7712HookInventory.test.ts`)
+now derives the wired set from a canonical manifest: every public hook name
+must have a real call site in the manifest, and every manifest entry must
+contain its quoted firing edge in the named production file. A hook exported
+without a runtime edge fails the suite.
+
 ### Where hooks actually fire
 
 Every row below is **wired and covered by a test**. A hook name that only
-existed as a type is not listed here.
+existed as a type is not listed here — and since 77.12, cannot exist in the
+type at all.
 
 | Hook | Call site | Observe | Transform | Veto | Failure policy | Tests |
 |---|---|---|---|---|---|---|
@@ -81,11 +113,17 @@ existed as a type is not listed here.
 | `teamwork.node.before` | `TeamworkEngine.runNode` (in the engine, before a child is spawned) | ✅ | ✅ node prompt | ✅ | warn | `phase7711HooksE2E` |
 | `teamwork.node.after` | `TeamworkEngine.runNode` (receives the NORMALIZED node result) | ✅ | — | — | warn | `phase7711HooksE2E` |
 | `background.started` / `background.completed` | `BackgroundJobService.launch` / `settle` (detached) | ✅ | — | — | warn | `pluginsMcpHooksE2E` |
+| `session.start` | `AgentHarness.fireSessionStart` (from `executeLoop`; once per sessionId per process) | ✅ | — | — | warn | `phase7712HookInventory` |
 | `session.end` | TUI `shutdownAndExit` (bounded teardown) | ✅ | — | — | warn | `pluginsMcpHooksE2E` |
 
-Still declared but **not fired** (`session.start`, `shell.after`): the contract is
-stable for plugin authors, and wiring each is a one-line change at its
-authoritative site. The doc deliberately does not claim call sites they lack.
+The canonical machine-readable version of this table lives in
+`src/core/hooks/wired.ts` (`WIRED_HOOKS`) — the inventory test derives its guard
+from it, so docs and runtime cannot drift apart.
+
+Shell lifecycle (77.12): `tool.before → shell.before → permission → process →
+tool.after/tool.error`. There is deliberately **no** `shell.after`: `tool.after`
+already delivers the normalized shell result envelope, and a duplicate edge was
+removed rather than kept declared-but-unfired.
 
 Invocation cardinality is part of the contract:
 
@@ -101,6 +139,11 @@ Invocation cardinality is part of the contract:
 * `agent.start`/`agent.end` are fired in the **harness**, not per front-end, so
   every entry point (TUI, headless, subagent, teamwork node, REPL) reports exactly
   one start/end pair and none can forget or double-report it.
+* `session.start` (77.12) fires **exactly once per sessionId per process
+  lifetime**, on the first `executeLoop` that runs under that session — fresh,
+  resumed or child alike. It is deduped by a module-level ledger (a fresh harness
+  is built per turn), observe-class, and a throwing activation hook can never
+  break the turn it precedes.
 
 Ordering guarantee for `tool.*`: because `tool.before` runs *before*
 `securityEngine.evaluate`, a hook veto means no permission evaluation and no
@@ -318,6 +361,7 @@ Both live under `examples/plugins/` and are inert until the user opts in.
 | `mcpCanonical.test.ts` | 20 | schema rejection matrix, name sanitization, description/size/depth caps, annotation-driven risk, canonical names + permission resources, owner-scoped registration/unregistration, duplicate rejection, tool filters, malformed policy, manager status/dispose |
 | `pluginsMcpHooksE2E.test.ts` | 22 | **live stdio MCP server** (real spawn → initialize → tools/list → call → deny → reuse → withdraw), untrusted skip, plugin tool through the gateway, approval for mutating plugin tools, subagent MCP scoping, hook order/error routing/block/transform/fail-closed/withdrawal, background hooks, **both shipped example plugins loaded and exercised**, architecture guards |
 | `phase7711HooksE2E.test.ts` | 15 | real `ModelAdapter` + fake provider (before/transform/after cardinality, tool-scope widening refused, error outcome, streaming once), real `ToolGateway` file hooks (order, veto ⇒ no mutation and no after-hooks, scope), real `TeamworkEngine` node hooks (order + veto spawns no child), **MCP inside a subagent** (allow ⇒ one transport call; parent deny ⇒ zero), **MCP inside a DAG node** via the real global `SubagentManager`, architecture guards |
+| `phase7712HookInventory.test.ts` | 10 | **dead-hook static guard** (public `HOOK_NAMES` ⇔ `WIRED_HOOKS` manifest ⇔ quoted firing edges in production files, bidirectional), `shell.after` removal pins (contract + no production references), `session.start` cardinality on the real `AgentEngine` (fresh session = 1, multiple turns = 1, child sessions activate separately once, resume = no duplicate, throwing hook cannot break the turn) |
 
 Live E2E uses `helpers/fakePhase77McpServer.ts`: a genuine JSON-RPC stdio
 server process (`echo`, `read_fixture`, `fail_tool`, `slow_tool`,
@@ -333,10 +377,15 @@ stale doc.
 | Gate | Result |
 |---|---|
 | `bun run typecheck` | PASS |
-| `bun test` | **1536 pass / 2 skip / 0 fail** (111 files) |
-| `bun run build` | PASS (495 modules) |
-| `npm pack --dry-run` | PASS (`toolnetcli@1.2.4`, 6 files) |
-| Phase 73/74/75/76 regression | PASS (`coreDeterministicE2E`, background, teamwork, subagent scoping/delegation, LSP — 129 tests in the focused re-run) |
+| `bun test` | see §77.12 gate run below (updated after the dead-hook cleanup) |
+| `bun run build` | PASS |
+| `npm pack --dry-run` | PASS |
+| Phase 73/74/75/76 regression | PASS (`coreDeterministicE2E`, background, teamwork, subagent scoping/delegation, LSP) |
+
+77.12 gate run: `bun run typecheck` PASS · `bun test` PASS (0 fail) ·
+`bun run build` PASS · `npm pack --dry-run` PASS. The 77.11 numbers (1536 pass
+/ 2 skip, 111 files) were the pre-77.12 baseline; 77.12 adds
+`phase7712HookInventory.test.ts` on top.
 
 ---
 
@@ -350,10 +399,11 @@ stale doc.
    with an explicit "not installed" reason.
 4. **OAuth is an abstraction only.** One tested flow (`config.env`/`auth`
    header) exists; the interactive OAuth provider is deferred.
-5. **Two hook edges are declared but not fired** (`session.start`,
-   `shell.after`). Every other edge in the table above is wired and tested. The
-   contract is stable; wiring the remaining two is a one-line change at their
-   authoritative sites.
+5. **`shell.after` was removed (77.12)** as redundant with `tool.after`; every
+   remaining hook edge in the table above is wired and guarded by the
+   `phase7712HookInventory` static guard — a hook cannot be declared without a
+   runtime edge anymore. `session.start` is wired (activation, once per session
+   per process).
 6. **`src/lib/plugins/pluginManager.ts` remains** for the `/plugins` CLI and the
    legacy capability-grant model. Its model-facing tool exposure was removed
    (the registry is now the only source) and its `onAgentStart` / `onAgentEnd` /
