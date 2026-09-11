@@ -430,8 +430,12 @@ function delay(ms: number): Promise<void> {
 /**
  * Connects ONE server with connect-timeout, scrubbed env, and registry
  * bookkeeping. Concurrent calls for the same serverId share one init promise.
+ *
+ * Exported for the Phase 77 canonical McpManager, which drives per-server
+ * connect/disconnect; the security model (trust gate, scrubbed env, bounded
+ * connect) lives here so there is exactly one connector implementation.
  */
-async function connectServer(server: LocalMcpServer): Promise<boolean> {
+export async function connectServer(server: LocalMcpServer): Promise<boolean> {
   const existingLock = initLocks.get(server.serverId);
   if (existingLock) return existingLock;
 
@@ -705,6 +709,23 @@ export async function executeMcpTool(name: string, args: Record<string, any> = {
     };
     return JSON.stringify(typed);
   }
+}
+
+/** Active clients (Phase 77 McpManager tool discovery + status). */
+export function getActiveMcpClients(): ActiveMcpClient[] {
+  return [...activeClientsMap.values()];
+}
+
+/**
+ * Disconnect ONE server and drop its tools from the routing map, so a
+ * disconnected server's tools disappear on the next listing instead of failing
+ * late at call time.
+ */
+export async function disconnectServer(serverId: string): Promise<boolean> {
+  const clientInfo = activeClientsMap.get(serverId);
+  if (!clientInfo) return false;
+  await cleanupClient(clientInfo);
+  return true;
 }
 
 /**

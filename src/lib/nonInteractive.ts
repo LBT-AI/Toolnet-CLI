@@ -11,6 +11,7 @@ import { getGlobalTracker } from "./usage";
 import { validateAndLoadImage, isModelVisionSupported, type ValidatedImage, getImageMetadataSummary } from "./vision";
 import { redactOutputSecrets } from "./security/outputRedactor";
 import { getActiveDefaultModel } from "../providers";
+import { disposeExtensions, initializeExtensions } from "../core/extensions";
 
 export interface NonInteractiveOptions {
   prompt: string;
@@ -37,6 +38,10 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
 
   const writer = format === "jsonl" ? new JsonlWriter() : null;
   const sessionId = `sess_${Date.now()}`;
+
+  // Phase 77: headless runs use the same extension bootstrap as the TUI, so a
+  // plugin/MCP tool behaves identically in both front-ends.
+  await initializeExtensions({ workspaceRoot: process.cwd() });
 
   if (writer) {
     writer.write({
@@ -194,6 +199,8 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
         break;
     }
 
+    // Release plugin hooks, MCP processes and registered tools before exit.
+    await disposeExtensions();
     process.exit(result.success ? 0 : 1);
   } catch (err: unknown) {
     const durationMs = Date.now() - startTime;
@@ -221,6 +228,7 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
       process.stderr.write(`Error [${classified.code}]: ${safeMessage}\n`);
     }
 
+    await disposeExtensions();
     process.exit(1);
   }
 }

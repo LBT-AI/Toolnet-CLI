@@ -23,6 +23,7 @@ import { sessionInbox } from "../../core/background/inbox";
 import { ToolCache, createMetrics, type ToolCall, type ToolPlannerMetrics } from "./toolPlanner";
 import { executeToolBatch, signatureForToolCall } from "./toolExecutor";
 import { toolRegistry } from "./toolRegistry";
+import { hookRegistry } from "../../core/hooks";
 import { createWorkspaceContext, type WorkspaceContext } from "./workspace";
 import { AgentStateMachine } from "./agentState";
 import { ModelAdapter, type AgentModelResponse, type AgentToolCall } from "./modelAdapter";
@@ -441,7 +442,58 @@ export class AgentHarness {
 
   // ── Core Execution Loop ──────────────────────────────────────────────────
 
+  /**
+   * Phase 77.6 — public loop entry that brackets the whole turn with the
+   * `agent.start` / `agent.end` hooks.
+   *
+   * Every front-end (TUI, headless, subagent, teamwork node, REPL) funnels
+   * through this method, so a plugin observes exactly one start/end pair per
+   * agent turn no matter which entry point was used. Firing happens here rather
+   * than in each front-end precisely so it cannot be forgotten or doubled.
+   */
   async executeLoop(
+    initialMessages: ContextMessage[],
+    options: ExecutionOptions = {},
+    mode: ExecutionMode = "HEADLESS",
+  ): Promise<HarnessResult> {
+    const sessionId = options.sessionId || this.config.sessionId || "session";
+    const model = options.model || this.config.model || "";
+    const hookMeta = { sessionId, signal: options.signal };
+
+    await hookRegistry.run(
+      "agent.start",
+      { sessionId, model, mode },
+      { sessionId, model, mode },
+      hookMeta,
+    );
+
+    try {
+      const result = await this.executeLoopInner(initialMessages, options, mode);
+      await hookRegistry.run(
+        "agent.end",
+        { sessionId, model, mode, success: result.success },
+        { sessionId, model, success: result.success, error: result.error },
+        hookMeta,
+      );
+      return result;
+    } catch (error) {
+      // A plugin must still see the end of a crashed turn.
+      await hookRegistry.run(
+        "agent.end",
+        { sessionId, model, mode, success: false },
+        {
+          sessionId,
+          model,
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        hookMeta,
+      );
+      throw error;
+    }
+  }
+
+  private async executeLoopInner(
     initialMessages: ContextMessage[],
     options: ExecutionOptions = {},
     mode: ExecutionMode = "HEADLESS"

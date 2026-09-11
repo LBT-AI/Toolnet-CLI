@@ -601,18 +601,106 @@ Alias for shell. Use for tests, builds, typechecks, linting and project inspecti
   teamworkToolDefinition,
 ];
 
+// ── Dynamic registrations (Phase 77: plugins + MCP) ──────────────────────────
+//
+// External tool sources register HERE, not into a parallel catalog. Each entry
+// records its `owner` ("plugin:<id>" / "mcp:<serverId>") so a plugin or server
+// can be unloaded atomically without touching anyone else's tools.
+//
+// Duplicate IDs are rejected: a dynamic tool can never shadow a built-in, and
+// two owners can never both claim the same name.
+
+interface DynamicEntry {
+  def: ToolDefinition;
+  owner: string;
+}
+
+const DYNAMIC: DynamicEntry[] = [];
+
+/** Built-in names (and aliases) that no external source may override. */
+function reservedNames(): Set<string> {
+  return new Set(REGISTRY.map((t) => t.name.toLowerCase()));
+}
+
+function findDynamic(name: string): DynamicEntry | undefined {
+  const n = name.toLowerCase();
+  return DYNAMIC.find((e) => e.def.name.toLowerCase() === n);
+}
+
+function allDefinitions(): ToolDefinition[] {
+  return [...REGISTRY, ...DYNAMIC.map((e) => e.def)];
+}
+
 // ── Registry API ─────────────────────────────────────────────────────────────
 
 export const toolRegistry = {
-  /** All registered tools. */
+  /** All registered tools (built-ins first, then dynamic sources). */
   list(): ToolDefinition[] {
-    return [...REGISTRY];
+    return allDefinitions();
   },
 
   /** Look up a single tool by name (case-insensitive). */
   get(name: string): ToolDefinition | undefined {
     const n = name.toLowerCase();
-    return REGISTRY.find((t) => t.name.toLowerCase() === n);
+    return allDefinitions().find((t) => t.name.toLowerCase() === n);
+  },
+
+  /** True when the name resolves to a registered tool. */
+  has(name: string): boolean {
+    return this.get(name) !== undefined;
+  },
+
+  /** True when the name belongs to a built-in (non-dynamic) tool. */
+  isBuiltin(name: string): boolean {
+    const n = name.toLowerCase();
+    return REGISTRY.some((t) => t.name.toLowerCase() === n);
+  },
+
+  /**
+   * Register an external tool. Returns `false` (never throws) when the name is
+   * taken, so a single bad plugin tool cannot abort the whole plugin load.
+   */
+  register(def: ToolDefinition, owner: string): boolean {
+    if (!def?.name) return false;
+    if (reservedNames().has(def.name.toLowerCase())) return false;
+    if (findDynamic(def.name)) return false;
+    DYNAMIC.push({ def, owner });
+    return true;
+  },
+
+  /** Register many tools for one owner; returns how many were accepted. */
+  registerAll(defs: ToolDefinition[], owner: string): number {
+    let accepted = 0;
+    for (const def of defs) {
+      if (this.register(def, owner)) accepted++;
+    }
+    return accepted;
+  },
+
+  /** Remove every tool registered by `owner`. Returns the number removed. */
+  unregisterOwner(owner: string): number {
+    let removed = 0;
+    for (let i = DYNAMIC.length - 1; i >= 0; i--) {
+      if (DYNAMIC[i].owner !== owner) continue;
+      DYNAMIC.splice(i, 1);
+      removed++;
+    }
+    return removed;
+  },
+
+  /** Owner of a dynamic tool, or undefined for built-ins. */
+  ownerOf(name: string): string | undefined {
+    return findDynamic(name)?.owner;
+  },
+
+  /** Names currently registered by a given owner. */
+  namesByOwner(owner: string): string[] {
+    return DYNAMIC.filter((e) => e.owner === owner).map((e) => e.def.name);
+  },
+
+  /** Drop all dynamic registrations (test/CLI shutdown support). */
+  clearDynamic(): void {
+    DYNAMIC.length = 0;
   },
 
   /**
@@ -621,17 +709,17 @@ export const toolRegistry = {
    * capability (shell, not shell+bash+run_command).
    */
   schemas(): ProviderToolDefinition[] {
-    return toSchemas(REGISTRY.filter((t) => !t.aliasOf));
+    return toSchemas(allDefinitions().filter((t) => !t.aliasOf));
   },
 
   /** Schemas filtered by predicate (e.g. Plan-mode read-only). */
   schemasFiltered(predicate: (t: ToolDefinition) => boolean): ProviderToolDefinition[] {
-    return toSchemas(REGISTRY.filter((t) => !t.aliasOf).filter(predicate));
+    return toSchemas(allDefinitions().filter((t) => !t.aliasOf).filter(predicate));
   },
 
   /** Canonical (non-alias) tool names — exactly what the model may call. */
   canonicalNames(): string[] {
-    return REGISTRY.filter((t) => !t.aliasOf).map((t) => t.name);
+    return allDefinitions().filter((t) => !t.aliasOf).map((t) => t.name);
   },
 
   /** Risk tier for a tool — used by SecurityEngine and UI. */

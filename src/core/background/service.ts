@@ -36,6 +36,7 @@ import {
   savePersistedJobs,
   getBackgroundJobsPath,
 } from "./persistence";
+import { hookRegistry } from "../hooks";
 
 interface JobRecord {
   info: BackgroundJob;
@@ -356,7 +357,32 @@ export class BackgroundJobService {
     this.emit(record, "background-job-started");
     this.persist();
 
+    // Phase 77.6 — `background.started` observer edge. Fired detached: a plugin
+    // must never be able to delay or fail job startup.
+    this.notifyHook("background.started", record);
+
     record.promise = this.drive(record);
+  }
+
+  /**
+   * Fire a background lifecycle hook without ever affecting job scheduling.
+   * Errors are swallowed by design — these are observability edges.
+   */
+  private notifyHook(name: "background.started" | "background.completed", record: JobRecord): void {
+    try {
+      const payload = {
+        jobId: record.info.id,
+        type: record.info.type,
+        status: record.info.status,
+        parentSessionId: record.info.parentSessionId,
+        childSessionId: record.info.childSessionId,
+      };
+      void hookRegistry
+        .run(name, payload, payload, { sessionId: record.info.parentSessionId })
+        .catch(() => {});
+    } catch {
+      // Never let a hook wiring failure touch the scheduler.
+    }
   }
 
   /**
@@ -453,6 +479,10 @@ export class BackgroundJobService {
 
     this.emit(record, eventType);
     this.persist();
+
+    // Phase 77.6 — `background.completed` observer edge (fires for every
+    // terminal state, with `status` telling the plugin which one).
+    this.notifyHook("background.completed", record);
 
     // The notification hook runs detached: a slow/throwy listener must never
     // affect job settlement.

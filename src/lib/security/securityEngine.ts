@@ -25,6 +25,13 @@ import {
 export class SecurityEngine {
   private currentMode: SandboxMode = "workspace";
   private pluginTools = new Set<string>();
+  /**
+   * Phase 77.10 — declared risk of a plugin tool. A plugin tool that mutates is
+   * an approval checkpoint like any built-in write; a plugin tool declared
+   * read-only stays friction-free. Legacy registrations without a risk keep the
+   * historical behaviour of being handled by the plugin's own capability model.
+   */
+  private pluginToolRisks = new Map<string, "read" | "write" | "execute" | "network">();
   private readonly trustManager = new SessionTrustManager();
 
   setMode(mode: SandboxMode) {
@@ -36,16 +43,53 @@ export class SecurityEngine {
    * plugin's own capability-grant model (see PluginManager.executePluginTool), so
    * the generic external-MCP-tool heuristic must not blanket-block them.
    */
-  registerPluginTool(name: string): void {
-    if (name) this.pluginTools.add(name);
+  registerPluginTool(name: string, risk?: "read" | "write" | "execute" | "network"): void {
+    if (!name) return;
+    this.pluginTools.add(name);
+    if (risk) this.pluginToolRisks.set(name, risk);
   }
 
   unregisterPluginTool(name: string): void {
     this.pluginTools.delete(name);
+    this.pluginToolRisks.delete(name);
   }
 
   isPluginTool(name: string): boolean {
     return this.pluginTools.has(name);
+  }
+
+  /**
+   * Canonical permission resource for an external tool (Phase 77.16/77.11).
+   * `mcp__github__search_code` → `mcp:github/search_code`
+   * `plugin__my-plugin__reverse` → `plugin:my-plugin/reverse`
+   * Built-ins have no external resource and return undefined.
+   */
+  toolPermissionResource(toolName: string): string | undefined {
+    const parts = toolName.split("__");
+    if (parts.length === 3 && parts[0] === "mcp") return `mcp:${parts[1]}/${parts[2]}`;
+    if (parts.length === 3 && parts[0] === "plugin") return `plugin:${parts[1]}/${parts[2]}`;
+    return undefined;
+  }
+
+  /**
+   * Underlying tool name behind a namespaced external tool. Used so an external
+   * read/write heuristic inspects the real capability, never the namespace.
+   */
+  private effectiveToolName(toolName: string): string {
+    const parts = toolName.split("__");
+    if (parts.length === 3 && (parts[0] === "mcp" || parts[0] === "plugin")) return parts[2] || toolName;
+    return toolName;
+  }
+
+  /**
+   * Approval requirement for a plugin tool, or null when the name is not a
+   * plugin tool / carries no declared risk (legacy path).
+   */
+  private pluginToolNeedsApproval(toolName: string): boolean | null {
+    if (!this.isPluginTool(toolName)) return null;
+    const risk = this.pluginToolRisks.get(toolName);
+    if (!risk) return null;
+    return risk !== "read";
   }
 
   getMode(): SandboxMode {
@@ -387,7 +431,15 @@ export class SecurityEngine {
         }
       }
       if (category === "MCP_TOOL" && !this.isPluginTool(toolName)) {
-        return { decision: "ASK", allowed: false, needsApproval: true, riskLevel: "DANGEROUS", capability: toolCap, reason: `External MCP tool '${toolName}' requires user confirmation.` };
+        const resource = this.toolPermissionResource(toolName) ?? toolName;
+        return { decision: "ASK", allowed: false, needsApproval: true, riskLevel: "DANGEROUS", capability: toolCap, reason: `External MCP tool '${resource}' requires user confirmation.` };
+      }
+      // Phase 77.10 — a plugin tool that is NOT declared read-only is an approval
+      // checkpoint, exactly like a built-in write. Plugin registration does not
+      // buy the tool any privilege.
+      if (this.pluginToolNeedsApproval(toolName)) {
+        const resource = this.toolPermissionResource(toolName) ?? toolName;
+        return { decision: "ASK", allowed: false, needsApproval: true, riskLevel: "MODERATE_WRITE", capability: toolCap, reason: `Plugin tool '${resource}' requires user confirmation.` };
       }
       return { decision: "ALLOW", allowed: true, needsApproval: false, riskLevel: analysisRisk, capability: toolCap };
     }
@@ -397,16 +449,24 @@ export class SecurityEngine {
       return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "DANGEROUS", capability: toolCap, reason: `Blocked in 'workspace' sandbox mode: ${analysisReason || "Dangerous command"}` };
     }
 
+    // Phase 77.10 — plugin tools carry a declared risk. A mutating plugin tool
+    // in workspace mode is an approval prompt, never a silent allow; a plugin
+    // tool explicitly declared read-only stays usable.
+    const pluginNeedsApproval = this.pluginToolNeedsApproval(toolName);
+    if (pluginNeedsApproval === true) {
+      const resource = this.toolPermissionResource(toolName) ?? toolName;
+      return { decision: "ASK", allowed: false, needsApproval: true, riskLevel: "MODERATE_WRITE", capability: toolCap, reason: `Plugin tool '${resource}' requires user confirmation.` };
+    }
+
     if (category === "MCP_TOOL" && !this.isPluginTool(toolName)) {
       // Phase 3: evaluate the UNDERLYING MCP tool name. The public tool may be
       // namespaced (mcp__<server>__<tool>) — never let the mcp__ prefix make a
       // mutating tool look read-only, and never let it look built-in.
-      const effectiveName = toolName.startsWith("mcp__")
-        ? (toolName.split("__")[2] || toolName)
-        : toolName;
+      const effectiveName = this.effectiveToolName(toolName);
       const isReadOnly = /^(read|list|get|inspect|search|find|view|query)/i.test(effectiveName);
       if (!isReadOnly) {
-        return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "DANGEROUS", capability: toolCap, reason: `Mutating external MCP tool '${effectiveName}' is blocked in workspace mode.` };
+        const resource = this.toolPermissionResource(toolName) ?? effectiveName;
+        return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "DANGEROUS", capability: toolCap, reason: `Mutating external MCP tool '${resource}' is blocked in workspace mode.` };
       }
     }
 
@@ -454,10 +514,13 @@ export class SecurityEngine {
     }
 
     if (category === "MCP_TOOL") {
-      // Phase 3: underlying tool name for namespaced MCP tools.
-      const effectiveName = toolName.startsWith("mcp__")
-        ? (toolName.split("__")[2] || toolName)
-        : toolName;
+      // Phase 77: underlying tool name for namespaced external tools (mcp__ /
+      // plugin__). The namespace must never change the assessed capability.
+      const effectiveName = this.effectiveToolName(toolName);
+      const declaredRisk = this.pluginToolRisks.get(toolName);
+      if (declaredRisk && declaredRisk !== "read") {
+        return { riskLevel: "MODERATE_WRITE", capability: "EXECUTE" };
+      }
       const isReadOnly = /^(read|list|get|inspect|search|find|view|query)/i.test(effectiveName);
       return { riskLevel: isReadOnly ? "SAFE_READ" : "MODERATE_WRITE", capability: "EXECUTE" };
     }

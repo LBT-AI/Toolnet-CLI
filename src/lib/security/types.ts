@@ -163,7 +163,9 @@ export type SecurityAuditDecision =
   | "APPROVAL"
   | "EXECUTION_START"
   | "EXECUTION_COMPLETE"
-  | "RATE_LIMITED";
+  | "RATE_LIMITED"
+  /** Phase 77: a lifecycle hook vetoed the call before any side effect. */
+  | "BLOCKED_BY_HOOK";
 
 export interface SecurityAuditEvent {
   timestamp?: number | string;

@@ -1,5 +1,4 @@
 import { toolRegistry, type ToolDefinition as RegistryTool } from "./harness/toolRegistry";
-import { pluginManager } from "./plugins/pluginManager";
 import type { ListItem } from "../tui/renderers/listPanelRenderer";
 
 export interface ToolParameter {
@@ -41,11 +40,19 @@ export function classifyTool(name: string): string {
  * The registry is the single definition source, so the catalog never grows a
  * schema of its own — it only re-shapes metadata the model already sees.
  */
+/**
+ * Project a canonical registry entry into the UI view model.
+ *
+ * The registry is the single definition source — including Phase 77 plugin and
+ * MCP tools, which register INTO it — so the catalog never grows a schema of
+ * its own. Ownership decides the `source` label shown in `/tools`.
+ */
 function fromRegistry(def: RegistryTool): ToolInfo {
   const params = (def.parameters ?? {}) as {
     properties?: Record<string, ToolParameter>;
     required?: unknown;
   };
+  const owner = toolRegistry.ownerOf(def.name);
   return {
     id: def.name,
     name: def.name,
@@ -53,24 +60,7 @@ function fromRegistry(def: RegistryTool): ToolInfo {
     description: def.description || "",
     parameters: params.properties || {},
     required: Array.isArray(params.required) ? (params.required as string[]) : [],
-    source: "local",
-    status: "enabled",
-  };
-}
-
-/** Plugin tools still arrive as OpenAI-style function schemas. */
-function fromProviderSchema(raw: unknown, source: string): ToolInfo | null {
-  const fn = (raw as { function?: { name?: string; description?: string; parameters?: { properties?: Record<string, ToolParameter>; required?: unknown } } })?.function;
-  if (!fn?.name) return null;
-  const params = fn.parameters || {};
-  return {
-    id: fn.name,
-    name: fn.name,
-    category: classifyTool(fn.name),
-    description: fn.description || "",
-    parameters: params.properties || {},
-    required: Array.isArray(params.required) ? (params.required as string[]) : [],
-    source,
+    source: owner?.startsWith("mcp:") ? "mcp" : owner?.startsWith("plugin:") ? "plugin" : "local",
     status: "enabled",
   };
 }
@@ -79,20 +69,13 @@ export function getAllTools(): ToolInfo[] {
   const seen = new Set<string>();
   const tools: ToolInfo[] = [];
 
-  // Canonical local tools only: aliases (bash/run_command/grep_search/glob_search)
-  // stay dispatchable but are never surfaced as a separate tool definition.
+  // Every tool, from one registry: built-ins plus plugin/MCP registrations.
+  // Aliases (bash/run_command/grep_search/glob_search) stay dispatchable but
+  // are never surfaced as a separate tool definition.
   for (const def of toolRegistry.list()) {
     if (def.aliasOf || seen.has(def.name)) continue;
     seen.add(def.name);
     tools.push(fromRegistry(def));
-  }
-
-  for (const raw of pluginManager.getRegisteredTools()) {
-    const info = fromProviderSchema(raw, "plugin");
-    if (info && !seen.has(info.name)) {
-      seen.add(info.name);
-      tools.push(info);
-    }
   }
 
   tools.sort((a, b) => {

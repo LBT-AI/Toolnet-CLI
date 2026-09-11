@@ -27,7 +27,11 @@ import { loadConfig } from "../lib/config";
 import { parseSessionArgs, loadSession, getLastSessionId, formatExitMessage } from "../lib/sessionPersistence";
 import { providerPicker } from "../components/ProviderPicker";
 import { checkPendingRecovery, clearPendingRecovery, markCleanExit } from "../lib/crashRecovery";
-import { pluginManager } from "../lib/plugins/pluginManager";
+import { disposeExtensions, initializeExtensions } from "../core/extensions";
+import { hookRegistry } from "../core/hooks";
+
+/** Upper bound on extension teardown before the CLI exits regardless. */
+const EXTENSION_TEARDOWN_TIMEOUT_MS = 1_500;
 import { getActiveProviderConfig, getActiveProvider, autoRestoreActiveProvider } from "../providers";
 import { onProviderSwitch } from "../commands/provider";
 import { statusManager } from "./statusService";
@@ -416,13 +420,48 @@ export function openKeyManager(): void {
   tuiState.openKeyManager();
 }
 
+let exiting = false;
+
 function exitApp(): void {
+  void shutdownAndExit();
+}
+
+/**
+ * Phase 77.6/77.25 — teardown ordering.
+ *
+ * The `session.end` hook fires and extension resources (plugin hooks, MCP
+ * child processes) are released BEFORE the process exits, otherwise cleanup
+ * handlers would be cut off. The whole teardown is bounded so a hung plugin or
+ * an unresponsive MCP server can never trap the user in the CLI.
+ */
+async function shutdownAndExit(): Promise<void> {
+  if (exiting) return;
+  exiting = true;
+
   statusManager.stop();
   const hasContent = (tuiState.messages && tuiState.messages.length > 0) || messageQueue.size() > 0;
   const sessionId = tuiState.currentSessionId;
   if (hasContent && sessionId) {
     tuiState.saveCurrentSession();
   }
+
+  const teardown = (async () => {
+    await hookRegistry.run("session.end", { sessionId }, { sessionId }, { sessionId });
+    await disposeExtensions();
+  })();
+
+  let bound: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      teardown,
+      new Promise<void>((resolve) => {
+        bound = setTimeout(resolve, EXTENSION_TEARDOWN_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (bound) clearTimeout(bound);
+  }
+
   markCleanExit();
   isAltScreenActive = false;  // stop renderAll() from painting during teardown
   restoreTerminal();
@@ -438,7 +477,9 @@ function handleResize(): void {
 
 export async function main(): Promise<void> {
   initWorkspace();
-  await pluginManager.loadAllPlugins();
+  // Phase 77: plugins + MCP register their tools/hooks into the canonical
+  // registries before the first turn, so the model only ever sees one tool set.
+  await initializeExtensions({ workspaceRoot: process.cwd() });
 
   // Crash Recovery check
   const pendingRecovery = checkPendingRecovery();

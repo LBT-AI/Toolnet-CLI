@@ -18,7 +18,6 @@ import { A } from "../../term";
 import { updateCrashToolResult, markCleanExit } from "../../lib/crashRecovery";
 import { restoreTerminal } from "../../lib/terminalLifecycle";
 import { pinToTail } from "../viewport";
-import { pluginManager } from "../../lib/plugins/pluginManager";
 import { getActiveProvider, getActiveDefaultModel } from "../../providers";
 import { statusManager } from "../statusService";
 import { messageQueue } from "../../lib/messageQueue";
@@ -63,8 +62,12 @@ async function handleSavePlan(parsedArgs: any): Promise<string> {
  * The engine passes this straight to the harness — the TUI never assembles a
  * second, divergent schema set.
  */
-function buildToolsForMode(mode: "Build" | "Plan", pluginTools: any[]): any[] | undefined {
-  const base = [...toolRegistry.schemas(), ...pluginTools];
+function buildToolsForMode(mode: "Build" | "Plan"): any[] | undefined {
+  // Phase 77: plugin and MCP tools are registered INTO the canonical registry,
+  // so `schemas()` already contains them. The TUI must not concatenate a second
+  // tool source — doing so previously exposed plugin tools that no dispatcher
+  // could execute.
+  const base = toolRegistry.schemas();
 
   if (mode !== "Plan") return base;
 
@@ -136,7 +139,6 @@ export async function sendMessage(text: string): Promise<void> {
   tuiState.agentPhase = supportsReasoning(tuiState.currentModel) ? "thinking" : "idle";
   tuiState.saveCurrentSession();
 
-  pluginManager.triggerAgentStart({ sessionId: tuiState.currentSessionId, prompt: text });
 
   try {
     // ── Phase 73.6 — Shared Agent Engine ──────────────────────────────────
@@ -182,8 +184,7 @@ export async function sendMessage(text: string): Promise<void> {
     apiMessages.unshift({ role: "system", content: tuiState.agentMode === "Plan" ? PLANNER_SYSTEM_PROMPT : getAgentSystemPrompt(tuiState.currentSessionId) });
     assertPrimarySystemMessageInvariant(apiMessages as any);
 
-    const pluginTools = pluginManager.getRegisteredTools();
-    const toolsOverride = buildToolsForMode(tuiState.agentMode, pluginTools);
+    const toolsOverride = buildToolsForMode(tuiState.agentMode);
 
     tuiState.setStatus("Streaming response…");
 
@@ -329,7 +330,9 @@ export async function sendMessage(text: string): Promise<void> {
     tuiState.saveCurrentSession();
   } finally {
     tuiState.abortController = null;
-    pluginManager.triggerAgentEnd({ sessionId: tuiState.currentSessionId });
+    // NOTE: `agent.start` / `agent.end` are fired by AgentHarness.executeLoop,
+    // the single loop entry every front-end uses — not here. Firing them in the
+    // TUI would double-report the lifecycle.
 
     if (messageQueue.size() > 0) {
       const nextTask = messageQueue.dequeue();

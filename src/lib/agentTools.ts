@@ -240,10 +240,12 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
       });
       return JSON.stringify({ stdout: res.output || "", stderr: res.error || "", exitCode: res.success ? 0 : 1, tokensUsed: res.tokensUsed, toolCallsCount: res.toolCallsCount });
     } else {
-      const mcpResult = await executeMcpTool(name, args);
-      if (mcpResult !== null) {
-        return mcpResult;
-      }
+      // Phase 77: external tools (MCP + plugin) live in the canonical registry,
+      // so they are found here first and receive the full execution context
+      // (cwd / workspace / abort signal). The raw `executeMcpTool` call below
+      // remains only as a compatibility fallback for callers that invoke an
+      // MCP tool name without having synced the registry — both converge on the
+      // same runner implementation, so there is still one executor.
       const regEntry = toolRegistry.get(name);
       if (regEntry?.execute) {
         const ctx: ToolExecutionContext = options
@@ -261,6 +263,10 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
           : {};
         const result = await regEntry.execute(args, ctx);
         return result;
+      }
+      const mcpResult = await executeMcpTool(name, args);
+      if (mcpResult !== null) {
+        return mcpResult;
       }
       return JSON.stringify({ stdout: "", stderr: `Unknown tool: ${name}`, exitCode: 1 });
     }
