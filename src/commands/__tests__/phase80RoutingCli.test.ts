@@ -43,7 +43,10 @@ describe("Phase 80 — `toolnet routing`", () => {
     expect(code).toBe(0);
     expect(stdout()).toContain("Routing profile:    auto");
     expect(stdout()).toContain("Routing policy:     priority");
-    expect(stdout()).toContain("Profiles:");
+    // Phase 82 separates model profiles from provider policies in the view.
+    expect(stdout()).toContain("Model profiles:");
+    expect(stdout()).toContain("Provider policies:");
+    expect(stdout()).toContain("Provider policy:    priority");
   });
 
   it("lists every profile with its weights", async () => {

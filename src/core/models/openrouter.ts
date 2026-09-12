@@ -33,7 +33,65 @@ interface OpenRouterTopProvider {
   context_length?: unknown;
   max_completion_tokens?: unknown;
   is_moderated?: unknown;
+  /** Present on setups that declare which upstream serves the model. */
+  name?: unknown;
+  provider_name?: unknown;
+  provider_display_name?: unknown;
+  slug?: unknown;
+  tag?: unknown;
   [key: string]: unknown;
+}
+
+/**
+ * Phase 82 §8/§9 — declared upstream identity.
+ *
+ * OpenRouter's listing endpoint usually does NOT name the serving upstream; the
+ * endpoints endpoint does. We read ONLY an explicitly declared name and never
+ * derive one from the model id or from a provider count. Missing ⇒ `undefined`
+ * ⇒ the route stays `provider::default::model`, which is the honest answer.
+ */
+export function declaredUpstreamName(record: Record<string, unknown>): string | undefined {
+  const top = (record.top_provider ?? {}) as OpenRouterTopProvider;
+  const candidates: unknown[] = [
+    record.upstream,
+    record.upstream_id,
+    top.name,
+    top.provider_name,
+    top.provider_display_name,
+    top.slug,
+    top.tag,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value.trim().toLowerCase();
+  }
+  return undefined;
+}
+
+/**
+ * Phase 82 §8 — normalize an OpenRouter *endpoints* payload into per-upstream
+ * route metadata.
+ *
+ * The caller decides whether to fetch endpoints (this module performs no
+ * network I/O). Malformed entries are skipped; a payload that declares nothing
+ * yields an empty map rather than invented upstreams.
+ *
+ * Expected shape: `{ data: { endpoints: [{ name|provider_name, ... }] } }`.
+ */
+export function normalizeOpenRouterEndpoints(raw: unknown): Map<string, { upstream: string; contextWindow?: number }> {
+  const out = new Map<string, { upstream: string; contextWindow?: number }>();
+  const data = (raw as { data?: unknown })?.data ?? raw;
+  const endpoints = (data as { endpoints?: unknown })?.endpoints;
+  if (!Array.isArray(endpoints)) return out;
+
+  for (const entry of endpoints) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const name = declaredUpstreamName(record);
+    if (!name) continue;
+    const contextWindow = positive(record.context_length);
+    out.set(name, { upstream: name, ...(contextWindow !== undefined ? { contextWindow } : {}) });
+  }
+  return out;
 }
 
 function asNumber(value: unknown): number | undefined {
@@ -120,6 +178,9 @@ export function normalizeOpenRouterModel(
   if (typeof record.description === "string") metadata.description = record.description;
   if (typeof record.created === "number") metadata.created = record.created;
   if (topProvider.is_moderated !== undefined) metadata.moderated = topProvider.is_moderated;
+  // Phase 82 §8 — only a DECLARED upstream becomes route identity.
+  const upstream = declaredUpstreamName(record);
+  if (upstream) metadata.upstream = upstream;
   if (Array.isArray(record.supported_parameters)) {
     metadata.supportedParameters = record.supported_parameters;
   }

@@ -142,6 +142,15 @@ export interface ProviderHealth {
   latencyMs?: number;
   lastSuccessAt?: number;
   lastErrorAt?: number;
+  /** Phase 82 §4 — when the last provider-attributable failure was observed. */
+  lastFailureAt?: number;
+  /**
+   * Phase 82 §4 — successCount / (successCount + failureCount), i.e. availability
+   * over provider-attributable outcomes only. Undefined until enough samples.
+   */
+  availability?: number;
+  /** Phase 82 §4 — failure kinds observed, most recent last (bounded). */
+  recentFailures?: string[];
   /** Human-readable, already-redacted. Never contains credentials. */
   lastError?: string;
 }
@@ -232,6 +241,12 @@ export interface RoutingRequest {
   minContextWindow?: number;
   timeout?: number;
   signal?: AbortSignal;
+  /**
+   * Phase 82 §3 — hard provider/upstream constraints for this request
+   * (`allowProviders`, `denyProviders`, price caps, context floor,
+   * `allowFallback`). Ordering is chosen by the configured provider policy.
+   */
+  providerConstraints?: Partial<import("./providerPolicy").ProviderConstraints>;
 }
 
 export interface ResolvedModel {
@@ -246,6 +261,14 @@ export interface ResolvedModel {
   profile?: string;
   /** Phase 80 — scorer total for the head candidate, when score-ranked. */
   score?: number;
+  /**
+   * Phase 82 — the same chain expressed as provider ROUTES. `candidates` stays
+   * for backward compatibility (it is a model list); `routes` carries the
+   * provider/upstream identity that bounded fallback actually needs.
+   */
+  routes?: import("./route").ProviderRoute[];
+  /** Phase 82 — the selected route (head of `routes`). */
+  route?: import("./route").ProviderRoute;
 }
 
 // ── Usage / cost ────────────────────────────────────────────────────────────

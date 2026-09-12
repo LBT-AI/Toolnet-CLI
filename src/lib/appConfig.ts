@@ -28,7 +28,7 @@ import { getToolnetConfigPath, getToolnetHome } from "./toolnetHome";
 import { BANNER_SETTINGS } from "../banner/types";
 import type { BannerSetting } from "../banner/types";
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 export type SandboxMode = "workspace" | "ask" | "full-access";
 export const SANDBOX_MODES: SandboxMode[] = ["workspace", "ask", "full-access"];
@@ -48,6 +48,13 @@ export interface AppRoutingSettings {
   maxAttempts: number;
   /** Providers never considered unless explicitly named. */
   excludedProviders: string[];
+  /**
+   * Phase 82 — provider/upstream ordering policy (`priority`, `cheapest`,
+   * `fastest`, `balanced`, `reliability-first`).
+   */
+  providerPolicy: string;
+  /** Phase 82 — absolute veto on provider/upstream fallback for a request. */
+  allowProviderFallback: boolean;
 }
 
 export const DEFAULT_ROUTING_SETTINGS: AppRoutingSettings = {
@@ -56,6 +63,8 @@ export const DEFAULT_ROUTING_SETTINGS: AppRoutingSettings = {
   fallback: [],
   maxAttempts: 3,
   excludedProviders: [],
+  providerPolicy: "priority",
+  allowProviderFallback: true,
 };
 
 /**
@@ -246,6 +255,13 @@ export function validateRoutingSettings(input: unknown): AppRoutingSettings {
       .map((entry) => entry.trim().toLowerCase())
       .filter((entry) => entry.length > 0);
   }
+  // Phase 82 — provider/upstream ordering + fallback veto.
+  if (typeof input.providerPolicy === "string" && input.providerPolicy.trim()) {
+    out.providerPolicy = input.providerPolicy.trim().toLowerCase();
+  }
+  if (typeof input.allowProviderFallback === "boolean") {
+    out.allowProviderFallback = input.allowProviderFallback;
+  }
   return out;
 }
 
@@ -284,6 +300,12 @@ function migrateConfig(raw: Record<string, unknown>): AppConfig {
   if (cfg.schemaVersion < 4) {
     cfg.harness = validateHarnessSettings((raw as Record<string, unknown>).harness);
     cfg.schemaVersion = 4;
+  }
+
+  // v4 → v5 migration (Phase 82): add the provider routing policy/fallback veto.
+  if (cfg.schemaVersion < 5) {
+    cfg.routing = validateRoutingSettings({ ...cfg.routing, ...(raw as Record<string, unknown>).routing as object });
+    cfg.schemaVersion = 5;
   }
 
   // Legacy flat config from ~/.toolnetapi/config.json (no schemaVersion).

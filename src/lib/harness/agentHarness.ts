@@ -7,9 +7,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { getActiveDefaultModel, type Provider } from "../../providers";
 import {
+  invokeRouteChain,
   noteModelFailure,
   noteModelSuccess,
+  persistRoutingIntelligence,
+  providerRegistry,
   resolveRuntimeModel,
+  type ProviderRoute,
 } from "../../core/models";
 import { workspaceRoot, currentCwd } from "../codingAgent";
 import { contextEngine, type ContextMessage } from "../context";
@@ -334,6 +338,12 @@ export class AgentHarness {
    * emitted as contract events (`agent:stream_chunk` / `agent:reasoning_chunk`)
    * and the final response is reassembled from them. Otherwise a single
    * non-streaming completion is used.
+   *
+   * Phase 82 §7 — `routes` is the ordered provider/upstream chain for this
+   * model. A single route (the default: no fallback configured) takes the
+   * pre-Phase-82 path verbatim. A multi-route chain walks it with BOUNDED
+   * fallback: each route once, retryable failures only, and never after output
+   * has already been streamed to the user.
    */
   private async completeModel(
     provider: Provider,
@@ -350,17 +360,83 @@ export class AgentHarness {
       sessionId?: string;
     },
     mode: ExecutionMode,
-    wantStream: boolean
-  ): Promise<{ response: AgentModelResponse; hadMessage: boolean }> {
-    const startedAt = Date.now();
+    wantStream: boolean,
+    routes?: ProviderRoute[]
+  ): Promise<{ response: AgentModelResponse; hadMessage: boolean; route?: ProviderRoute }> {
+    const chain = routes && routes.length > 1 ? routes : [];
+
+    // Identity path: exactly one route — no fallback machinery is engaged.
+    if (chain.length === 0) {
+      const startedAt = Date.now();
+      try {
+        const result = await this.completeModelOnce(provider, req, mode, wantStream);
+        // Phase 79.12 — health derives from observed outcomes only.
+        noteModelSuccess(provider.id, Date.now() - startedAt);
+        return result;
+      } catch (error) {
+        noteModelFailure(provider.id, error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+    }
+
+    // Multi-route chain. `emitted` makes a partially streamed turn terminal: the
+    // consumer already saw output, so replaying it on another provider would
+    // duplicate content and corrupt the transcript.
+    let emitted = false;
+    const outcome = await invokeRouteChain(
+      chain,
+      async (route) => {
+        const instance = this.providerForRoute(route) ?? provider;
+        return this.completeModelOnce(
+          instance,
+          {
+            ...req,
+            model: route.apiModelId,
+            onFirstDelta: () => {
+              emitted = true;
+            },
+          },
+          mode,
+          wantStream
+        );
+      },
+      {
+        ...(req.signal ? { signal: req.signal } : {}),
+        maxAttempts: chain.length,
+        // Terminal once anything reached the user, or the caller cancelled.
+        isTerminal: (error) => emitted || req.signal?.aborted === true,
+        onAttempt: (record) => {
+          if (!record.ok && record.retryable) {
+            this.emitEvent("agent:routing", mode, {
+              routeId: record.routeId,
+              providerId: record.providerId,
+              failureKind: record.failureKind,
+              message: `provider ${record.providerId} failed (${record.failureKind ?? "error"}); trying next route`,
+            });
+          }
+        },
+      }
+    );
+
+    // Phase 82 §13 — the chain just produced real routing evidence (latency,
+    // success, failure classifications). Snapshot the derived numeric
+    // intelligence to disk so the next process routes on it. Best-effort: a
+    // persistence failure can never fail a completed request.
+    persistRoutingIntelligence();
+
+    return { ...outcome.result, route: outcome.route };
+  }
+
+  /**
+   * Build the adapter for a fallback route without a second provider factory.
+   * Returns null when the registry cannot produce an instance, in which case the
+   * caller keeps the already-resolved provider.
+   */
+  private providerForRoute(route: ProviderRoute): Provider | null {
     try {
-      const result = await this.completeModelOnce(provider, req, mode, wantStream);
-      // Phase 79.12 — health derives from observed outcomes only.
-      noteModelSuccess(provider.id, Date.now() - startedAt);
-      return result;
-    } catch (error) {
-      noteModelFailure(provider.id, error instanceof Error ? error.message : String(error));
-      throw error;
+      return providerRegistry.createInstance(route.providerId);
+    } catch {
+      return null;
     }
   }
 
@@ -375,6 +451,8 @@ export class AgentHarness {
       headers?: Record<string, string>;
       signal?: AbortSignal;
       onContentDelta?: (text: string) => void;
+      /** Phase 82 — fires once, on the first emitted delta of any kind. */
+      onFirstDelta?: () => void;
       reasoningEffort?: "low" | "medium" | "high";
       sessionId?: string;
     },
@@ -382,6 +460,14 @@ export class AgentHarness {
     wantStream: boolean
   ): Promise<{ response: AgentModelResponse; hadMessage: boolean }> {
     const adapter = new ModelAdapter(provider);
+    let firstDeltaSeen = false;
+    // Only USER-VISIBLE deltas count: partial tool-call deltas are internal (the
+    // tool has not run yet), so a failure after them is still safely retryable.
+    const noteFirstDelta = () => {
+      if (firstDeltaSeen) return;
+      firstDeltaSeen = true;
+      req.onFirstDelta?.();
+    };
     const canStream = typeof provider.stream === "function";
 
     if (!wantStream || !canStream) {
@@ -421,11 +507,13 @@ export class AgentHarness {
       sawChunk = true;
 
       if (chunk.reasoningDelta) {
+        noteFirstDelta();
         reasoning += chunk.reasoningDelta;
         this.emitEvent("agent:reasoning_chunk", mode, { text: chunk.reasoningDelta });
       }
 
       if (chunk.contentDelta) {
+        noteFirstDelta();
         content += chunk.contentDelta;
         this.emitEvent("agent:stream_chunk", mode, { text: chunk.contentDelta });
         req.onContentDelta?.(chunk.contentDelta);
@@ -1034,7 +1122,11 @@ export class AgentHarness {
             sessionId,
           },
           mode,
-          options.stream === true
+          options.stream === true,
+          // Phase 82 — the provider/upstream chain the router decided. A single
+          // route keeps the exact pre-Phase-82 path; a multi-route chain (only
+          // present when fallback is configured) enables bounded fallback.
+          modelResolution.resolved?.routes
         );
       } catch (netErr: any) {
         if (options.signal?.aborted || abort.signal?.aborted) {

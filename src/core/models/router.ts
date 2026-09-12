@@ -21,7 +21,7 @@
 
 import { getActiveProviderConfig } from "../../providers";
 import { modelCatalog, ModelCatalog } from "./catalog";
-import { ProviderError, ModelRoutingError, ProviderNotFoundError, ProviderUnavailableError } from "./errors";
+import { ProviderError, ModelRoutingError, ModelCapabilityError, ProviderNotFoundError, ProviderUnavailableError } from "./errors";
 import { healthRank } from "./health";
 import { missingCapabilities } from "./capabilities";
 import { parseModelRef } from "./ref";
@@ -29,6 +29,12 @@ import { providerRegistry, ProviderRegistry } from "./registry";
 import type { ModelDefinition, ModelRef, ProviderDefinition, ProviderHealth, ResolvedModel, RoutingPolicy, RoutingRequest } from "./types";
 import { blendedPrice, satisfiesCapabilities } from "./types";
 import { indexProfiles, type ModelPerformanceProfile } from "./performance";
+import { routeFromModel, routeLabel, type ProviderRoute, type RouteRejection } from "./route";
+import type { ProviderRoutingPolicy } from "./providerPolicy";
+import { resolveProviderRoutes, type RouteRelaxation, type RouteResolutionRequest } from "./routeResolver";
+import { classifyProviderFailure } from "./failureKind";
+import { routePerformance, type RoutePerformanceTracker } from "./routePerformance";
+import type { RouteScore } from "./routeScoring";
 import {
   DEFAULT_ROUTING_PROFILE,
   resolveRoutingProfile,
@@ -47,6 +53,10 @@ export interface RoutingConfig {
   maxAttempts: number;
   /** Providers never considered unless explicitly named. */
   excludedProviders: string[];
+  /** Phase 82 — provider/upstream ordering policy. */
+  providerPolicy: string;
+  /** Phase 82 — whether a retryable failure may try the next route. */
+  allowProviderFallback: boolean;
 }
 
 let routingConfig: RoutingConfig = {
@@ -55,6 +65,8 @@ let routingConfig: RoutingConfig = {
   fallback: [],
   maxAttempts: 3,
   excludedProviders: [],
+  providerPolicy: "priority",
+  allowProviderFallback: true,
 };
 
 export function setRoutingConfig(patch: Partial<RoutingConfig>): RoutingConfig {
@@ -73,7 +85,37 @@ export function resetRoutingConfig(): void {
     fallback: [],
     maxAttempts: 3,
     excludedProviders: [],
+    providerPolicy: "priority",
+    allowProviderFallback: true,
   };
+}
+
+/**
+ * Phase 82 §10 — provider-level decision evidence.
+ *
+ * Produced without any provider call, health mutation or billing, so `explain`
+ * and `simulate` are safe to run at any time.
+ */
+export interface RoutingDecision {
+  request: RoutingRequest;
+  /** Phase 80 model-selection profile. */
+  profile: string;
+  /** Phase 79/80 model-selection policy. */
+  modelPolicy: RoutingPolicy;
+  /** Phase 82 provider/upstream policy. */
+  providerPolicy: ProviderRoutingPolicy;
+  selectedRoute?: ProviderRoute;
+  /** Ordered the way fallback would walk them. */
+  candidateRoutes: ProviderRoute[];
+  scores: RouteScore[];
+  rejected: RouteRejection[];
+  relaxed: RouteRelaxation[];
+  /** The bounded chain that would actually be attempted. */
+  fallbackChain: ProviderRoute[];
+  /** Human-readable, secret-free evidence. */
+  reasons: string[];
+  /** Provider-independent model identity, when one model was requested. */
+  logicalKey?: string;
 }
 
 interface Candidate {
@@ -97,6 +139,8 @@ export interface RouterOptions {
    * Never a hard dependency, so a fresh install routes the same as before.
    */
   performance?: () => ModelPerformanceProfile[] | Map<string, ModelPerformanceProfile>;
+  /** Phase 82 — injectable per-route performance tracker (defaults to the singleton). */
+  routePerformance?: RoutePerformanceTracker;
 }
 
 export class ModelRouter {
@@ -104,12 +148,14 @@ export class ModelRouter {
   private readonly catalog: ModelCatalog;
   private readonly activeProviderId: () => string | null;
   private readonly performanceSource?: () => ModelPerformanceProfile[] | Map<string, ModelPerformanceProfile>;
+  private readonly routePerf: RoutePerformanceTracker;
 
   constructor(options: RouterOptions = {}) {
     this.registry = options.registry ?? providerRegistry;
     this.catalog = options.catalog ?? modelCatalog;
     this.activeProviderId = options.activeProviderId ?? activeProviderId;
     this.performanceSource = options.performance;
+    this.routePerf = options.routePerformance ?? routePerformance;
   }
 
   // ── Resolution ────────────────────────────────────────────────────────────
@@ -130,12 +176,28 @@ export class ModelRouter {
 
     const pinned = this.resolvePinned(request, excluded);
 
-    // Explicit pin under a non-fallback policy: the chain is exactly that model.
-    if (pinned && policy === "explicit") {
+    // Explicit pin with provider fallback DISABLED: the chain is exactly that
+    // model. When a configured fallback chain (or the `fallback` policy) is in
+    // effect, the pin stays the head but the chain continues — otherwise an
+    // explicitly requested model could never fall back, which is the whole point
+    // of the feature.
+    if (pinned && policy === "explicit" && !providerFallbackEnabled()) {
       return this.buildResolved(pinned, [pinned], `explicit ${pinned.model.id}`);
     }
 
     const candidates = this.rankCandidates(request, policy, excluded, profile);
+
+    // Phase 82 §17 (defect hunt) — an explicit pin is a PIN, not a capability
+    // waiver. If the requested model fails the request's required capabilities
+    // (including the profile's), that is a hard error, not a silent downgrade
+    // to a model that cannot do the job.
+    if (pinned) {
+      const required = { ...(profile.requiredCapabilities ?? {}), ...(request.requiredCapabilities ?? {}) };
+      const missing = missingCapabilities(pinned.model.capabilities, required);
+      if (missing.length > 0) {
+        throw new ModelCapabilityError(pinned.model.id, missing, pinned.provider.id);
+      }
+    }
 
     // The explicit pin always heads the chain, even when the policy would have
     // ranked another model first.
@@ -154,8 +216,7 @@ export class ModelRouter {
     // Fallback is a config-level capability: it is enabled by an explicit
     // `fallback` policy, by the configured policy, or by a configured chain —
     // even when the request overrides only the ORDERING policy.
-    const appliedFallback =
-      policy === "fallback" || routingConfig.policy === "fallback" || routingConfig.fallback.length > 0;
+    const appliedFallback = providerFallbackEnabled(policy);
     // The configured fallback list is honoured in order, then the policy-ranked
     // pool fills the remainder. The head never moves.
     const chain = appliedFallback
@@ -238,10 +299,39 @@ export class ModelRouter {
         );
       }
       if (matches.length > 1) {
-        throw new ModelRoutingError(
-          `Model '${request.model}' is ambiguous across providers: ${matches.map((m) => m.providerId).join(", ")}.`,
-          { model: request.model },
-        );
+        // Phase 82 §1/§9 — one logical model served by several providers is the
+        // SUPPORTED case, not an error: pick the best provider route with the
+        // deterministic provider policy (health → priority → id) and let the
+        // fallback chain keep the alternates reachable. Throwing here would
+        // make the advertised multi-upstream routing unusable from the bare-id
+        // path.
+        const eligible: Array<{ model: ModelDefinition; provider: ProviderDefinition }> = [];
+        for (const model of matches) {
+          const provider = this.registry.get(model.providerId);
+          if (!provider || excluded.has(provider.id)) continue;
+          if (!provider.enabled || provider.status === "disabled") continue;
+          eligible.push({ model, provider });
+        }
+        if (eligible.length > 0) {
+          eligible.sort((a, b) => {
+            const healthDelta = healthRank(this.registry.healthOf(a.provider.id).state) -
+              healthRank(this.registry.healthOf(b.provider.id).state);
+            if (healthDelta !== 0) return healthDelta;
+            if (a.provider.priority !== b.provider.priority) return a.provider.priority - b.provider.priority;
+            return a.provider.id.localeCompare(b.provider.id);
+          });
+          const [head, ...rest] = eligible;
+          return this.describe({ provider: head.provider, model: head.model },
+            `explicit request — best of ${eligible.length} serving providers`);
+        }
+        // All matching providers excluded/disabled: fall through to the
+        // structured error below so the caller learns why nothing is usable.
+      }
+      if (matches.length === 1) {
+        const provider = this.registry.get(matches[0].providerId);
+        if (provider && !excluded.has(provider.id)) {
+          return this.describe({ provider, model: matches[0] }, "explicit request");
+        }
       }
       throw new ModelRoutingError(`Unknown model '${request.model}'.`, { model: request.model });
     }
@@ -438,16 +528,211 @@ export class ModelRouter {
     profile?: string,
     score?: number,
   ): ResolvedModel {
+    const ordered = dedupeById(chain);
+    // Phase 82 §1 — expose the same chain as provider routes so bounded fallback
+    // and diagnostics operate on provider/upstream identity, not on model ids.
+    const routes = ordered.map((candidate) =>
+      routeFromModel(candidate.model, candidate.provider, this.registry.healthOf(candidate.provider.id)),
+    );
     return {
       provider: head.provider,
       model: head.model,
       capabilities: head.model.capabilities,
       routingReason: reason,
-      candidates: dedupeById(chain).map((candidate) => candidate.model),
+      candidates: ordered.map((candidate) => candidate.model),
       ...(profile ? { profile } : {}),
       ...(score !== undefined ? { score } : {}),
+      routes,
+      ...(routes[0] ? { route: routes[0] } : {}),
     };
   }
+
+  // ── Phase 82 §10 — routing explanation ────────────────────────────────────
+
+  /**
+   * Full decision evidence for one request, with NO provider call, no health
+   * mutation and no billing. This is what `toolnet routing explain/simulate`
+   * and the TUI consume, so diagnostics can never diverge from the real
+   * decision path.
+   */
+  explain(request: RoutingRequest = {}): RoutingDecision {
+    const profile = resolveRoutingProfile(request.profile ?? routingConfig.profile);
+    const policy: RoutingPolicy =
+      request.policy ?? (profile.ranking === "score" ? profile.policy : routingConfig.policy);
+    const excluded = [
+      ...routingConfig.excludedProviders,
+      ...(request.excludedProviders ?? []),
+    ];
+
+    // Phase 82 §3 — an explicit request policy governs the provider layer too:
+    // `explain({ policy: "cheapest" })` must mean the same thing to model
+    // selection and provider ordering. A provider-pinning policy like
+    // `explicit`/`fallback` maps to the declared-priority route policy.
+    const MODEL_ONLY_POLICIES: ReadonlySet<string> = new Set(["explicit", "fallback", "capability-first"]);
+    const routePolicy = MODEL_ONLY_POLICIES.has(policy) ? this.providerPolicyName : policy;
+
+    const routeRequest: RouteResolutionRequest = {
+      model: request.model,
+      provider: request.provider,
+      requiredCapabilities: {
+        ...(profile.requiredCapabilities ?? {}),
+        ...(request.requiredCapabilities ?? {}),
+      } as Record<string, boolean>,
+      policy: routePolicy,
+      constraints: {
+        ...(request.providerConstraints ?? {}),
+        allowFallback: request.providerConstraints?.allowFallback ?? routingConfig.allowProviderFallback,
+      },
+      excludedProviders: excluded,
+    };
+
+    const resolution = resolveProviderRoutes(routeRequest, {
+      registry: this.registry,
+      catalog: this.catalog,
+      performance: this.performance,
+    });
+
+    // The model-selection layer (Phase 79/80) owns WHICH logical model; the
+    // route policy owns which PROVIDER serves it (§16). When the request names
+    // a model, the two layers agree on the pool, so the policy-ranked route
+    // order wins and the resolved chain only contributes models the route
+    // layer cannot see (e.g. models from an otherwise-disabled provider the
+    // explicit pin legitimately reaches).
+    let chain: ProviderRoute[] = resolution.routes;
+    let modelReason = `${profile.id}/${policy}`;
+    try {
+      const resolved = this.resolve(request);
+      modelReason = resolved.routingReason;
+      const resolvedRoutes = resolved.routes ?? [];
+      if (request.model) {
+        // Pinned logical model: merge resolved-only routes INTO the policy
+        // order, so the provider policy still decides provider ordering.
+        const routeIds = new Set(resolution.routes.map((route) => route.routeId));
+        const extras = resolvedRoutes.filter((route) => !routeIds.has(route.routeId));
+        if (extras.length > 0) chain = dedupeRoutes([...resolution.routes, ...extras]);
+      } else if (resolvedRoutes.length > 0) {
+        // Discovery-style request: model-selection rank leads, route policy
+        // orders providers within it.
+        chain = dedupeRoutes([...resolvedRoutes, ...resolution.routes]);
+      }
+    } catch (error) {
+      // A model-selection failure is reported as evidence, not thrown: explain
+      // must always be able to say why nothing was selected.
+      if (resolution.routes.length === 0) {
+        return {
+          request,
+          profile: profile.id,
+          modelPolicy: policy,
+          providerPolicy: resolution.policy,
+          candidateRoutes: [],
+          scores: [],
+          rejected: resolution.rejected,
+          relaxed: resolution.relaxed,
+          fallbackChain: [],
+          reasons: [
+            `model selection failed: ${error instanceof Error ? error.message : String(error)}`,
+            ...resolution.rejected.map((entry) => `rejected ${routeLabelOf(entry)}: ${entry.reason} — ${entry.detail}`),
+          ],
+          ...(resolution.logicalKey ? { logicalKey: resolution.logicalKey } : {}),
+        };
+      }
+    }
+
+    // Phase 82 §7 — the chain can never contain a route the policy layer
+    // rejected (allow/deny list, disabled, capability, context, price).
+    // Without this filter the model-selection merge could re-introduce a
+    // provider the route policy excluded, letting fallback bypass constraints.
+    const rejectedRouteIds = new Set<string>();
+    const rejectedProviderIds = new Set<string>();
+    for (const entry of resolution.rejected) {
+      rejectedRouteIds.add(entry.routeId);
+      rejectedProviderIds.add(entry.providerId);
+    }
+    chain = chain.filter(
+      (route) => !rejectedRouteIds.has(route.routeId) && !rejectedProviderIds.has(route.providerId),
+    );
+
+    const scoreByRoute = new Map(resolution.scores.map((score) => [score.routeId, score]));
+    // The reported fallback chain mirrors what production `resolve()` would
+    // attempt: head + configured fallback references, gated by the same
+    // `providerFallbackEnabled()` predicate — never "every candidate".
+    const fallbackChain = providerFallbackEnabled(policy)
+      ? dedupeRoutes([chain[0], ...this.fallbackRefRoutes(chain[0]), ...chain.slice(1)].filter(Boolean))
+      : chain.slice(0, 1);
+    const reasons: string[] = [`model: ${modelReason}`];
+    if (chain[0]) {
+      reasons.push(`route: ${routeLabel(chain[0])}`);
+      const score = scoreByRoute.get(chain[0].routeId);
+      if (score) reasons.push(...score.reasons.map((reason) => `  ${reason}`));
+    }
+    for (const entry of resolution.rejected) {
+      reasons.push(`rejected ${routeLabelOf(entry)}: ${entry.reason} — ${entry.detail}`);
+    }
+    for (const entry of resolution.relaxed) {
+      reasons.push(`relaxed ${entry.constraint}: ${entry.detail}`);
+    }
+
+    return {
+      request,
+      profile: profile.id,
+      modelPolicy: policy,
+      providerPolicy: resolution.policy,
+      ...(chain[0] ? { selectedRoute: chain[0] } : {}),
+      candidateRoutes: chain,
+      scores: resolution.scores,
+      rejected: resolution.rejected,
+      relaxed: resolution.relaxed,
+      fallbackChain,
+      reasons,
+      ...(resolution.logicalKey ? { logicalKey: resolution.logicalKey } : {}),
+    };
+  }
+
+  /** Provider routing policy currently in effect (Phase 82). */
+  private get providerPolicyName(): string {
+    return routingConfig.providerPolicy;
+  }
+
+  /**
+   * Resolve the configured fallback references to concrete routes, in order,
+   * for decision evidence. Unresolvable entries are skipped (advisory, same
+   * as `resolveFallbackChain`), and no health/performance state is mutated.
+   */
+  private fallbackRefRoutes(head: ProviderRoute | undefined): ProviderRoute[] {
+    if (routingConfig.fallback.length === 0) return [];
+    const seen = new Set(head ? [head.routeId] : []);
+    const routes: ProviderRoute[] = [];
+    for (const reference of routingConfig.fallback) {
+      try {
+        const candidate = this.resolvePinned({ model: reference }, new Set());
+        if (!candidate) continue;
+        const health = this.registry.healthOf(candidate.provider.id);
+        const route = routeFromModel(candidate.model, candidate.provider, health);
+        if (!seen.has(route.routeId)) {
+          seen.add(route.routeId);
+          routes.push(route);
+        }
+      } catch {
+        // Unresolvable fallback entries are advisory; evidence continues.
+      }
+    }
+    return routes;
+  }
+
+  private get performance(): RoutePerformanceTracker {
+    return this.routePerf;
+  }
+}
+
+/**
+ * Phase 82 §7 — is provider/upstream fallback enabled for this decision?
+ *
+ * `allowProviderFallback: false` is an absolute veto: it pins the decision to a
+ * single route even when a configured chain exists.
+ */
+function providerFallbackEnabled(policy?: RoutingPolicy): boolean {
+  if (!routingConfig.allowProviderFallback) return false;
+  return policy === "fallback" || routingConfig.policy === "fallback" || routingConfig.fallback.length > 0;
 }
 
 function dedupeById(candidates: Candidate[]): Candidate[] {
@@ -501,9 +786,15 @@ function activeProviderId(): string | null {
 export interface AttemptRecord {
   modelId: string;
   providerId: string;
+  /** Phase 82 — the provider route that was attempted. */
+  routeId?: string;
   ok: boolean;
   error?: string;
   retryable?: boolean;
+  /** Phase 82 — normalized failure classification. */
+  failureKind?: string;
+  /** Rolling TTFT observation for streaming attempts. */
+  ttftMs?: number;
   durationMs: number;
 }
 
@@ -536,48 +827,135 @@ export async function invokeWithFallback<T>(
   const router = options.router ?? new ModelRouter({ registry });
   const resolved = router.resolve(request);
 
-  const maxAttempts = Math.max(1, Math.min(options.maxAttempts ?? routingConfig.maxAttempts, resolved.candidates.length));
+  // Phase 82 §7 — ONE executor. `invokeWithFallback` is the request-level
+  // convenience wrapper over the route-aware chain below; there is no second
+  // fallback implementation anywhere in the codebase.
+  const routes = resolved.routes ?? [];
+  if (routes.length === 0) {
+    throw new ModelRoutingError("Routing produced no candidate route.", {
+      model: request.model,
+      retryable: false,
+    });
+  }
+
+  const chain = await invokeRouteChain(
+    routes,
+    async (route) => run(withRoute(resolved, route, registry)),
+    {
+      registry,
+      maxAttempts: options.maxAttempts ?? routingConfig.maxAttempts,
+      ...(request.signal ? { signal: request.signal } : {}),
+      ...(options.onAttempt ? { onAttempt: options.onAttempt } : {}),
+      ...(options.isTerminal ? { isTerminal: options.isTerminal } : {}),
+    },
+  );
+
+  return {
+    result: chain.result,
+    resolved: withRoute(resolved, chain.route, registry),
+    attempts: chain.attempts,
+  };
+}
+
+/** Re-point a resolved model at one concrete route, keeping the chain intact. */
+function withRoute(
+  resolved: ResolvedModel,
+  route: ProviderRoute,
+  registry: ProviderRegistry,
+): ResolvedModel {
+  const model = resolved.candidates.find((candidate) => candidate.id === route.modelId);
+  return {
+    ...resolved,
+    provider: registry.get(route.providerId) ?? resolved.provider,
+    model: model ?? resolved.model,
+    capabilities: model?.capabilities ?? resolved.model.capabilities,
+    route,
+  };
+}
+
+/**
+ * Phase 82 §7 — bounded, route-aware fallback execution.
+ *
+ * Contract:
+ *  - each route is attempted AT MOST ONCE per invocation;
+ *  - only RETRYABLE failures advance the chain (timeout, 429, 5xx, network,
+ *    unavailable) — auth, malformed request, permission denial and
+ *    cancellation are terminal and rethrown immediately;
+ *  - the caller's AbortSignal is checked before every attempt AND passed to
+ *    `run`, so a cancellation mid-chain stops at the next boundary;
+ *  - health and route performance are recorded from real outcomes only, and a
+ *    caller-fault failure never degrades the provider.
+ */
+export async function invokeRouteChain<T>(
+  routes: ProviderRoute[],
+  run: (route: ProviderRoute) => Promise<T>,
+  options: RouteChainOptions = {},
+): Promise<RouteChainResult<T>> {
+  const registry = options.registry ?? providerRegistry;
+  const performance = options.performance ?? routePerformance;
+  const signal = options.signal;
+  const maxAttempts = Math.max(1, Math.min(options.maxAttempts ?? routingConfig.maxAttempts, routes.length));
   const attempts: AttemptRecord[] = [];
   let lastError: unknown;
 
   for (let index = 0; index < maxAttempts; index++) {
-    if (request.signal?.aborted) {
+    if (signal?.aborted) {
       throw new ModelRoutingError("Routing cancelled by caller.", { retryable: false });
     }
 
-    const model = resolved.candidates[index];
-    const providerId = model.providerId;
-    const singleResolved: ResolvedModel = {
-      ...resolved,
-      provider: registry.get(providerId) ?? resolved.provider,
-      model,
-      capabilities: model.capabilities,
-    };
-
+    const route = routes[index];
     const startedAt = Date.now();
     try {
-      const result = await run(singleResolved);
+      const result = await run(route);
       const durationMs = Date.now() - startedAt;
-      registry.recordSuccess(providerId, durationMs);
-      const record: AttemptRecord = { modelId: model.id, providerId, ok: true, durationMs };
+      registry.recordSuccess(route.providerId, durationMs);
+      performance.record(route.routeId, { ok: true, durationMs });
+      const record: AttemptRecord = {
+        modelId: route.modelId,
+        providerId: route.providerId,
+        routeId: route.routeId,
+        ok: true,
+        durationMs,
+      };
       attempts.push(record);
       options.onAttempt?.(record);
-      return { result, resolved: singleResolved, attempts };
+      return { result, route, attempts };
     } catch (error) {
       const durationMs = Date.now() - startedAt;
-      const retryable = !(options.isTerminal?.(error) ?? false) && isRetryableFailure(error);
+      const classification = classifyProviderFailure(error);
+      const terminalByCaller = options.isTerminal?.(error) ?? false;
+      const retryable = !terminalByCaller && classification.retryable;
+      const message = classification.detail ?? (error instanceof Error ? error.message : String(error));
       const record: AttemptRecord = {
-        modelId: model.id,
-        providerId,
+        modelId: route.modelId,
+        providerId: route.providerId,
+        routeId: route.routeId,
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
         retryable,
+        failureKind: classification.kind,
         durationMs,
       };
       attempts.push(record);
       options.onAttempt?.(record);
 
-      if (retryable) registry.recordFailure(providerId, record.error);
+      // Real observed outcome. Health is moved only by provider-attributable
+      // failures; a caller-fault failure (permission, cancellation, bad request,
+      // schema) is recorded but can never degrade the provider. This is
+      // independent of retryability — "do not retry this" is not "do not learn
+      // from this".
+      registry.recordOutcome(route.providerId, {
+        ok: false,
+        error,
+        kind: classification.kind,
+        affectsHealth: classification.affectsHealth,
+      });
+      performance.record(route.routeId, {
+        ok: false,
+        durationMs,
+        failureKind: classification.kind,
+        affectsHealth: classification.affectsHealth,
+      });
 
       // Terminal: rethrow immediately, no fallback.
       if (!retryable) throw error;
@@ -586,6 +964,39 @@ export async function invokeWithFallback<T>(
   }
 
   throw lastError ?? new ModelRoutingError("All routing attempts failed.", { retryable: false });
+}
+
+export interface RouteChainOptions {
+  maxAttempts?: number;
+  signal?: AbortSignal;
+  /** Extra terminal predicate evaluated before the built-in classifier. */
+  isTerminal?: (error: unknown) => boolean;
+  onAttempt?: (record: AttemptRecord) => void;
+  registry?: ProviderRegistry;
+  performance?: RoutePerformanceTracker;
+}
+
+export interface RouteChainResult<T> {
+  result: T;
+  /** The route that succeeded. */
+  route: ProviderRoute;
+  attempts: AttemptRecord[];
+}
+
+export function dedupeRoutes(routes: ProviderRoute[]): ProviderRoute[] {
+  const seen = new Set<string>();
+  const out: ProviderRoute[] = [];
+  for (const route of routes) {
+    if (seen.has(route.routeId)) continue;
+    seen.add(route.routeId);
+    out.push(route);
+  }
+  return out;
+}
+
+/** Label for a rejection — the route id when a model was considered. */
+function routeLabelOf(rejection: RouteRejection): string {
+  return rejection.modelId ?? rejection.routeId;
 }
 
 /** Aliases kept for readability at call sites. */

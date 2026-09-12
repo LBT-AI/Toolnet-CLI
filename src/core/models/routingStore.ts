@@ -16,6 +16,7 @@ import {
   type AppRoutingSettings,
 } from "../../lib/appConfig";
 import { ROUTING_PROFILE_NAMES, resolveRoutingProfile } from "./profiles";
+import { PROVIDER_ROUTING_POLICIES, isProviderRoutingPolicyName, resolveProviderRoutingPolicy } from "./providerPolicy";
 import { getRoutingConfig, resetRoutingConfig, setRoutingConfig, type RoutingConfig } from "./router";
 import type { RoutingPolicy } from "./types";
 
@@ -44,6 +45,11 @@ export function validateRoutingPatch(patch: Partial<AppRoutingSettings>): Routin
   if (patch.maxAttempts !== undefined && (!Number.isInteger(patch.maxAttempts) || patch.maxAttempts < 1 || patch.maxAttempts > 10)) {
     errors.push("maxAttempts must be an integer between 1 and 10.");
   }
+  if (patch.providerPolicy !== undefined && !isProviderRoutingPolicyName(patch.providerPolicy)) {
+    errors.push(
+      `Unknown provider routing policy '${patch.providerPolicy}'. Known: ${PROVIDER_ROUTING_POLICIES.join(", ")}.`,
+    );
+  }
   for (const reference of patch.fallback ?? []) {
     if (typeof reference !== "string" || !reference.trim() || /\s/.test(reference)) {
       errors.push(`Invalid fallback reference '${String(reference)}'.`);
@@ -71,6 +77,9 @@ export function applyRoutingSettings(settings: AppRoutingSettings): RoutingConfi
     fallback: settings.fallback,
     maxAttempts: settings.maxAttempts,
     excludedProviders: settings.excludedProviders,
+    // Phase 82 — provider/upstream ordering + fallback veto.
+    providerPolicy: resolveProviderRoutingPolicy(settings.providerPolicy).name,
+    allowProviderFallback: settings.allowProviderFallback,
   });
 }
 

@@ -32,6 +32,8 @@ export type HarnessEventType =
   | "agent:compact"
   | "agent:complete"
   | "agent:error"
+  /** Phase 82 — provider/upstream routing observation (route attempted/failed). */
+  | "agent:routing"
   | "subagent:spawn"
   | "subagent:complete"
   | "session:saved"

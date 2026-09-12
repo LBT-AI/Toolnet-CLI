@@ -40,6 +40,10 @@ export interface LiveAcceptanceReport {
   capabilities?: ModelCapabilities;
   routingReason?: string;
   adapterBound?: boolean;
+  /** Phase 82 §15 — provider candidates + dry decision evidence, secret-free. */
+  providerCandidates?: number;
+  fallbackChain?: number;
+  dryDecision?: string[];
   failureClass?: LiveFailureClass;
   error?: string;
   steps: string[];
@@ -132,6 +136,13 @@ export async function runLiveAcceptance(options: LiveAcceptanceOptions = {}): Pr
     const adapterBound = instance instanceof OpenRouterProvider && Boolean(new ModelAdapter(instance).providerId);
     steps.push(`adapter bound (${adapterBound ? "yes" : "no"})`);
 
+    // 6 — Phase 82 §15: dry provider-routing decision. No provider call, no
+    // health mutation, no billing — `explain` is read-only by contract.
+    const decision = router.explain({ model: formatModelRef("openrouter", sample.apiModelId) });
+    steps.push(
+      `dry decision: ${decision.candidateRoutes.length} candidate route(s), fallback chain ${decision.fallbackChain.length}`,
+    );
+
     return {
       ran: true,
       ok: adapterBound,
@@ -141,6 +152,9 @@ export async function runLiveAcceptance(options: LiveAcceptanceOptions = {}): Pr
       capabilities: resolved.model.capabilities,
       routingReason: resolved.routingReason,
       adapterBound,
+      providerCandidates: decision.candidateRoutes.length,
+      fallbackChain: decision.fallbackChain.length,
+      dryDecision: decision.reasons,
       ...(adapterBound ? {} : { failureClass: "CORE_RUNTIME" as const }),
       steps,
     };

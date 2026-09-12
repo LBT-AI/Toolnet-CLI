@@ -14,9 +14,16 @@
 
 import { getAppConfig, updateAppConfig } from "../lib/appConfig";
 import {
+  PROVIDER_ROUTING_POLICIES,
   ROUTING_PROFILES,
   ROUTING_PROFILE_NAMES,
   addFallback,
+  buildRoutingView,
+  describeProviderRoutingPolicy,
+  renderRoutingView,
+  resolveProviderRoutingPolicy,
+  routePerformance,
+  validateProviderRoutingPolicy,
   bootstrapProviderRegistry,
   currentSettings,
   describeProfile,
@@ -61,9 +68,21 @@ USAGE:
   toolnet model <provider/model>    Validate a reference and show its resolution.
   toolnet model set <provider/model>
                                     Persist it as the default model.
-  toolnet routing [show] [--json]   Show the active routing profile, policy and fallbacks.
-  toolnet routing profiles          List every routing profile with its weights.
-  toolnet routing profile <name>    Persist the default routing profile.
+  toolnet routing status [--json]   Show the active routing profile, model policy,
+                                    provider policy and fallbacks.
+  toolnet routing policies          List every provider routing policy.
+  toolnet routing policy <name>     Persist the provider routing policy.
+  toolnet routing explain <model>   Explain the provider/upstream decision for a
+                                    model: candidates, scores, rejections,
+                                    fallback chain. No provider call is made.
+  toolnet routing providers <model> List the routes that could serve a model.
+  toolnet routing simulate <model> [--policy <name>] [--provider <id>]
+                    [--max-input-price <n>] [--max-output-price <n>]
+                    [--min-context <n>] [--no-fallback]
+                                    Dry-run a routing decision. NEVER calls a
+                                    provider, never bills, never touches health.
+  toolnet routing profiles          List every model routing profile with its weights.
+  toolnet routing profile <name>    Persist the default MODEL routing profile.
   toolnet routing model <provider/model>
                                     Persist the default model.
   toolnet routing fallback add <provider/model>
@@ -73,6 +92,7 @@ USAGE:
 NOTES:
   · Model references are 'provider/model'; the model part may itself contain
     slashes (e.g. openrouter/anthropic/claude-sonnet).
+  · MODEL selection (profile) and PROVIDER selection (policy) are independent.
   · Secrets are never printed — only env var names and presence.`;
 
 export interface ModelsCliDeps {
@@ -175,7 +195,7 @@ export async function runModelsCli(args: string[], deps: ModelsCliDeps = {}): Pr
     case "model":
       return handleModel(io, json, positional);
     case "routing":
-      return handleRouting(io, json, positional);
+      return handleRouting(io, json, positional, args);
     default:
       io.err(`Unknown models subcommand: ${group || "(none)"}`);
       io.err(MODELS_CLI_USAGE);
@@ -445,12 +465,126 @@ function showRouting(io: ModelsCliIO, json: boolean): number {
   }
   io.out(`Routing profile:    ${config.profile}`);
   io.out(`Routing policy:     ${config.policy}`);
+  io.out(`Provider policy:    ${config.providerPolicy}`);
+  io.out(`Provider fallback:  ${config.allowProviderFallback ? "enabled" : "disabled"}`);
   io.out(`Max attempts:       ${config.maxAttempts}`);
   io.out(`Fallback chain:     ${resolvedFallbacks.length > 0 ? resolvedFallbacks.join(" → ") : "(none)"}`);
   io.out(`Excluded providers: ${config.excludedProviders.length > 0 ? config.excludedProviders.join(", ") : "(none)"}`);
   io.out("");
-  io.out("Profiles: " + ROUTING_PROFILE_NAMES.join(", "));
+  io.out("Model profiles:    " + ROUTING_PROFILE_NAMES.join(", "));
+  io.out("Provider policies: " + PROVIDER_ROUTING_POLICIES.join(", "));
   return 0;
+}
+
+/**
+ * Phase 82 §11 — `routing explain|providers|simulate`.
+ *
+ * All three are PURE reads of the decision path: no provider call, no billing,
+ * no health mutation, no config write. `simulate` differs only in accepting a
+ * policy/constraint override so a different policy can be previewed.
+ */
+function explainRouting(
+  io: ModelsCliIO,
+  json: boolean,
+  action: string,
+  positional: string[],
+  args: string[],
+): number {
+  const reference = positional[2];
+  if (!reference) {
+    io.err(`Usage: toolnet routing ${action} <model>`);
+    return 1;
+  }
+
+  const policy = flagValue(args, "--policy");
+  if (policy && !validateProviderRoutingPolicy(policy).ok) {
+    io.err(validateProviderRoutingPolicy(policy).ok ? "" : `Unknown provider routing policy '${policy}'.`);
+    io.err(`Policies: ${PROVIDER_ROUTING_POLICIES.join(", ")}`);
+    return 1;
+  }
+
+  const constraints: {
+    allowProviders?: string[];
+    maxInputPrice?: number;
+    maxOutputPrice?: number;
+    minContextLength?: number;
+    allowFallback: boolean;
+  } = { allowFallback: args.includes("--no-fallback") ? false : true };
+
+  const provider = flagValue(args, "--provider");
+  if (provider) constraints.allowProviders = [provider];
+  const maxInput = numericFlag(args, "--max-input-price");
+  if (maxInput !== undefined) constraints.maxInputPrice = maxInput;
+  const maxOutput = numericFlag(args, "--max-output-price");
+  if (maxOutput !== undefined) constraints.maxOutputPrice = maxOutput;
+  const minContext = numericFlag(args, "--min-context");
+  if (minContext !== undefined) constraints.minContextLength = minContext;
+
+  let view;
+  try {
+    view = buildRoutingView({
+      model: reference,
+      ...(provider ? { provider } : {}),
+      ...(policy ? { policy } : {}),
+      constraints,
+      metrics: new Map(routePerformance.snapshots().map((snapshot) => [snapshot.routeId, snapshot])),
+    });
+  } catch (error) {
+    io.err(`Could not explain '${reference}': ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+
+  if (json) {
+    io.out(
+      jsonPayload({
+        model: reference,
+        mode: action,
+        providerPolicy: view.providerPolicy,
+        modelPolicy: view.modelPolicy,
+        selectedRouteId: view.selectedRouteId ?? null,
+        routes: view.rows,
+        fallbackChain: view.fallbackChain,
+        rejected: view.rejected,
+        relaxed: view.relaxed,
+        reasons: view.reasons,
+      }),
+    );
+    return view.rows.length > 0 ? 0 : 1;
+  }
+
+  if (action === "providers") {
+    if (view.rows.length === 0) {
+      io.err(`No route could serve '${reference}'.`);
+      for (const entry of view.rejected) io.err(`  ${entry.modelId ?? entry.routeId}: ${entry.reason} — ${entry.detail}`);
+      return 1;
+    }
+    io.out(`Routes for ${view.logicalKey ?? reference} (policy=${view.providerPolicy})`);
+    for (const row of view.rows) {
+      io.out(
+        `  ${row.selected ? "*" : " "} ${row.providerId}${row.upstreamId ? `:${row.upstreamId}` : ""}  ` +
+          `health=${row.health}  priority=${row.priority}  score=${row.score === undefined ? "—" : row.score.toFixed(3)}  ` +
+          `price=${row.priceLabel}  context=${row.contextWindow ?? "—"}`,
+      );
+    }
+    if (view.fallbackChain.length > 1) {
+      io.out(`  fallback: ${view.fallbackChain.join(" → ")}`);
+    }
+    return 0;
+  }
+
+  for (const line of renderRoutingView(view)) io.out(line);
+  if (action === "simulate") {
+    io.out("");
+    io.out("Simulation only — no provider was called, nothing was billed, health is unchanged.");
+  }
+  return view.rows.length > 0 ? 0 : 1;
+}
+
+function numericFlag(args: string[], flag: string): number | undefined {
+  const raw = flagValue(args, flag);
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function sanitizeReference(reference: string): string {
@@ -474,12 +608,46 @@ function safeSettings() {
  * Every mutation is validated before it is written; an invalid value never
  * reaches the config file.
  */
-function handleRouting(io: ModelsCliIO, json: boolean, positional: string[]): number {
+function handleRouting(io: ModelsCliIO, json: boolean, positional: string[], args: string[] = []): number {
   const action = (positional[1] ?? "show").toLowerCase();
 
   switch (action) {
+    case "status":
     case "show":
       return showRouting(io, json);
+
+    case "policies": {
+      const entries = PROVIDER_ROUTING_POLICIES.map((name) =>
+        describeProviderRoutingPolicy(resolveProviderRoutingPolicy(name)),
+      );
+      if (json) {
+        io.out(jsonPayload(PROVIDER_ROUTING_POLICIES.map((name) => resolveProviderRoutingPolicy(name))));
+        return 0;
+      }
+      for (const entry of entries) io.out(entry);
+      return 0;
+    }
+
+    case "policy": {
+      const name = positional[2];
+      if (!name) {
+        io.err("Usage: toolnet routing policy <name>");
+        io.err(`Policies: ${PROVIDER_ROUTING_POLICIES.join(", ")}`);
+        return 1;
+      }
+      const valid = validateProviderRoutingPolicy(name);
+      if (!valid.ok) {
+        io.err(valid.error);
+        return 1;
+      }
+      const result = persistRoutingConfig({ providerPolicy: valid.name });
+      return reportMutation(io, json, result, `Provider routing policy set to '${valid.name}'.`);
+    }
+
+    case "explain":
+    case "providers":
+    case "simulate":
+      return explainRouting(io, json, action, positional, args);
 
     case "profiles": {
       const entries = ROUTING_PROFILE_NAMES.map((name) => {

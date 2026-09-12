@@ -5,6 +5,8 @@
  * modules, so the surface stays stable as internals move.
  */
 
+import { loadRoutingIntelligence } from "./routingIntelligence";
+
 // Types
 export type {
   CapabilityKey,
@@ -57,7 +59,13 @@ export {
 export { formatModelRef, isQualified, parseModelRef, tryParseModelRef } from "./ref";
 
 // Health
-export { FAILURE_THRESHOLD, ProviderHealthTracker, healthRank } from "./health";
+export {
+  AVAILABILITY_MIN_SAMPLES,
+  FAILURE_THRESHOLD,
+  ProviderHealthTracker,
+  healthRank,
+  type ProviderOutcome,
+} from "./health";
 
 // Phase 80 — performance profiles + eval evidence
 export {
@@ -128,6 +136,15 @@ export {
   type CachedProviderModels,
 } from "./cache";
 
+// Phase 82 — read-only routing projection (TUI/CLI)
+export {
+  buildRoutingView,
+  renderRoutingView,
+  type RoutingRouteRow,
+  type RoutingView,
+  type RoutingViewInput,
+} from "./routingView";
+
 // Phase 80 — read-only catalog projection (TUI/CLI)
 export {
   buildCatalogRows,
@@ -187,6 +204,7 @@ export {
   ModelRouter,
   getRoutingConfig,
   invokeModel,
+  invokeRouteChain,
   invokeWithFallback,
   isRetryableFailure,
   modelRouter,
@@ -196,8 +214,92 @@ export {
   type AttemptRecord,
   type FallbackOptions,
   type FallbackResult,
+  type RouteChainOptions,
+  type RouteChainResult,
   type RoutingConfig,
+  type RoutingDecision,
 } from "./router";
+
+// Phase 82 — provider routes + route routing
+  export {
+    DEFAULT_UPSTREAM,
+    declaredUpstream,
+    logicalModelKey,
+    routeFromModel,
+    routeIdOf,
+    routeLabel,
+    sameRoute,
+    type ProviderRoute,
+    type RouteRejection,
+    type RouteRejectionReason,
+  } from "./route";
+
+  export {
+    DEFAULT_PROVIDER_CONSTRAINTS,
+    DEFAULT_PROVIDER_ROUTING_POLICY,
+    PROVIDER_ROUTING_POLICIES,
+    PROVIDER_ROUTING_POLICY_DEFINITIONS,
+    describeProviderRoutingPolicy,
+    isProviderRoutingPolicyName,
+    mergeConstraints,
+    resolveProviderRoutingPolicy,
+    validateProviderRoutingPolicy,
+    type ProviderConstraints,
+    type ProviderRoutingPolicy,
+    type ProviderRoutingPolicyName,
+    type ProviderRoutingWeights,
+  } from "./providerPolicy";
+
+  export {
+    ROUTE_COST_REFERENCE_USD,
+    ROUTE_LATENCY_REFERENCE_MS,
+    ROUTE_PRIORITY_REFERENCE,
+    compareRoutes,
+    scoreRoute,
+    tieBreakReasons,
+    type RouteScore,
+    type RouteScoreComponent,
+    type RouteScoreComponentKey,
+    type RouteScoreInput,
+  } from "./routeScoring";
+
+  export {
+    resolveProviderRoutes,
+    routeLabels,
+    type RouteRelaxation,
+    type RouteResolution,
+    type RouteResolutionOptions,
+    type RouteResolutionRequest,
+  } from "./routeResolver";
+
+  export {
+    ROUTE_LATENCY_MIN_SAMPLES,
+    ROUTE_METRIC_TTL_MS,
+    ROUTE_RING_SIZE,
+    RoutePerformanceTracker,
+    routePerformance,
+    type RouteOutcome,
+    type RoutePerformanceRecord,
+    type RoutePerformanceSnapshot,
+  } from "./routePerformance";
+
+  export {
+    affectsProviderHealth,
+    classifyProviderFailure,
+    failureProfile,
+    isRetryableKind,
+    type FailureClassification,
+    type FailureKind,
+  } from "./failureKind";
+
+  export {
+    getRoutingIntelligencePath,
+    loadRoutingIntelligence,
+    persistRoutingIntelligence,
+    readRoutingIntelligence,
+    ROUTING_INTELLIGENCE_SCHEMA_VERSION,
+    type RoutingIntelligenceFile,
+  } from "./routingIntelligence";
 
 // Live acceptance
   export {
@@ -219,3 +321,9 @@ export {
   syncAdapterCapabilities,
   type RuntimeModel,
 } from "./runtime";
+
+// Phase 82 §13 — hydrate the canonical route-performance tracker from the
+// persisted intelligence snapshot exactly once per process, so the first
+// routing decision of a session already reflects observed reality. Stale
+// records decay on load; a corrupt file is quarantined, never thrown.
+loadRoutingIntelligence();

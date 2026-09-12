@@ -16,7 +16,7 @@ import type { Provider, ProviderConfig } from "../../providers";
 import { createProviderInstance } from "../../providers";
 import { ModelCatalog, modelCatalog } from "./catalog";
 import { DuplicateProviderError, ModelNotFoundError, ProviderNotFoundError } from "./errors";
-import { ProviderHealthTracker } from "./health";
+import { ProviderHealthTracker, type ProviderOutcome } from "./health";
 import { formatModelRef } from "./ref";
 import type {
   ModelDefinition,
@@ -175,6 +175,16 @@ export class ProviderRegistry {
 
   markUnavailable(id: string, error?: string): void {
     this.health.markUnavailable(normalizeId(id), error);
+  }
+
+  /**
+   * Phase 82 §4 — classification-aware outcome recording.
+   *
+   * Caller-fault failures (permission, cancellation, malformed request, schema)
+   * are observed but never degrade the provider.
+   */
+  recordOutcome(id: string, outcome: ProviderOutcome, now?: number): ProviderHealth {
+    return this.health.recordOutcome(normalizeId(id), outcome, now);
   }
 
   resetHealth(id?: string): void {
