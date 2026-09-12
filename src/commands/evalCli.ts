@@ -12,8 +12,9 @@
 
 import { getAppConfig } from "../lib/appConfig";
 import { modelCatalog, providerRegistry } from "../core/models";
-import { BUILTIN_SUITES, EvalRunner, EvalStore, findSuite, profilesFromRecords, type EvalRunRecord } from "../core/eval";
+import { BUILTIN_SUITES, EvalRunner, EvalStore, findSuite, harnessVersionOf, profilesFromRecords, resolveHarnessId, type EvalRunRecord } from "../core/eval";
 import { MIN_SAMPLES, type ModelPerformanceProfile } from "../core/models/performance";
+import { harnessRegistry, currentHarnessSettings } from "../core/harness";
 
 export interface EvalCliIO {
   out: (line: string) => void;
@@ -35,6 +36,15 @@ USAGE:
                                           Add --suite <id> to run both first.
   toolnet eval results [--limit <n>]      Show stored run history.
   toolnet eval show <runId>               Show one run's per-case detail.
+
+  # Phase 81 — cross-harness measurement (same model, different policy)
+  toolnet eval harnesses                  List harness profiles and run counts.
+  toolnet eval run <suite> --harness <id> Run a suite under one harness profile.
+  toolnet eval compare-harness --model <m> <h1> <h2> [...]
+                                          Compare profiles for one model.
+  toolnet eval matrix <suite> [--models a,b] [--harnesses x,y]
+                                          Model x harness grid from stored runs.
+                                          Add --run to execute the missing cells.
 
 NOTES:
   · Graders are deterministic — a model that narrates an edit without calling a
@@ -71,6 +81,13 @@ export async function runEvalCli(args: string[], deps: EvalCliDeps = {}): Promis
       return listResults(args, io, json, store);
     case "show":
       return showRun(positional[1], io, json, store);
+    case "harnesses":
+      return listHarnesses(io, json, store);
+    case "compare-harness":
+    case "compare-harnesses":
+      return compareHarnesses(args, positional, io, json, store, deps);
+    case "matrix":
+      return harnessMatrix(args, positional, io, json, store, deps);
     default:
       io.err(`Unknown eval subcommand: ${action}`);
       io.err(EVAL_CLI_USAGE);
@@ -136,22 +153,31 @@ async function runSuiteCommand(
     return 1;
   }
 
+  // Phase 81 §14 — an explicit profile is validated before anything runs.
+  const harness = resolveHarnessId(flagValue(args, "--harness") ?? currentHarnessSettings().profile);
+  if (!harnessRegistry.has(harness)) {
+    io.err(`Unknown harness profile '${harness}'. Known: ${harnessRegistry.ids().join(", ")}.`);
+    return 1;
+  }
+
   const runner = deps.runner ?? new EvalRunner({ store: deps.store });
 
   try {
-    const record = await runner.runSuite(suite, model);
+    const record = await runner.runSuite(suite, model, { harness });
     if (json) {
       io.out(JSON.stringify(record, null, 2));
       return record.failed === 0 ? 0 : 1;
     }
-    io.out(`Run ${record.runId}  suite=${record.suiteId}  model=${record.provider}/${record.model}`);
+    io.out(
+      `Run ${record.runId}  suite=${record.suiteId}  model=${record.provider}/${record.model}  harness=${record.harnessId}`,
+    );
     io.out("─".repeat(78));
     for (const entry of record.cases) {
       const mark = entry.pass ? "PASS" : "FAIL";
       io.out(`  ${pad(mark, 5)} ${pad(entry.caseId, 24)} ${pad(`${Math.round(entry.durationMs)}ms`, 8)} ${entry.pass ? "" : `[${entry.failureClass}] `}${entry.detail}`);
     }
     io.out("");
-    io.out(`Passed ${record.passed}/${record.cases.length}  passRate=${record.metrics.passRate}  mean=${record.metrics.meanDurationMs}ms  tools=${record.metrics.totalToolCalls} (failed ${record.metrics.totalFailedToolCalls})`);
+    io.out(`Passed ${record.passed}/${record.cases.length}  passRate=${record.metrics.passRate}  mean=${record.metrics.meanDurationMs}ms  turns=${record.metrics.meanTurns ?? 0}  tools=${record.metrics.totalToolCalls} (failed ${record.metrics.totalFailedToolCalls})`);
     return record.failed === 0 ? 0 : 1;
   } catch (error) {
     io.err(`Eval run failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -326,6 +352,325 @@ function showRun(runId: string | undefined, io: EvalCliIO, json: boolean, store:
     if (!entry.pass) io.out(`        [${entry.failureClass}] ${entry.detail}`);
   }
   return 0;
+}
+
+// ── Phase 81 §14/§15 — cross-harness comparison ──────────────────────────────
+
+interface HarnessAggregate {
+  harness: string;
+  harnessVersion: string;
+  runs: number;
+  cases: number;
+  success: number;
+  toolUse: number | null;
+  toolUseSamples: number;
+  reliability: number | null;
+  meanTurns: number | null;
+  meanLatencyMs: number | null;
+}
+
+/**
+ * Aggregate stored runs for one (model, harness) pair.
+ *
+ * Records with no harness identity are NOT attributed to any profile — they are
+ * counted as unattributed and reported, because guessing "default" would make a
+ * comparison silently wrong.
+ */
+function aggregateHarness(
+  records: EvalRunRecord[],
+  model: string,
+  harness: string,
+): HarnessAggregate {
+  const wantedModel = normalizeModel(model);
+  const matching = records.filter((record) => {
+    if (resolveHarnessId(record.harnessId) !== harness) return false;
+    if (record.harnessId === undefined) return false;
+    const qualified = normalizeModel(`${record.provider}/${record.model}`);
+    return (
+      normalizeModel(record.model) === wantedModel ||
+      qualified === wantedModel ||
+      `${record.provider}/${record.model}` === model
+    );
+  });
+
+  const cases = matching.flatMap((record) => record.cases);
+  const passed = cases.filter((entry) => entry.pass).length;
+  const toolCases = cases.filter((entry) => entry.type === "TOOL" || entry.type === "CODE");
+  const reliable = cases.filter(
+    (entry) =>
+      entry.failureClass !== "CORE_RUNTIME" && entry.failureClass !== "PROVIDER_PROTOCOL",
+  ).length;
+  const turnsSeen = cases.filter((entry) => typeof entry.turns === "number");
+
+  return {
+    harness,
+    harnessVersion: harnessVersionOf(harness),
+    runs: matching.length,
+    cases: cases.length,
+    success: cases.length > 0 ? round3(passed / cases.length) : 0,
+    toolUse:
+      toolCases.length > 0
+        ? round3(toolCases.filter((entry) => entry.pass).length / toolCases.length)
+        : null,
+    toolUseSamples: toolCases.length,
+    reliability: cases.length > 0 ? round3(reliable / cases.length) : null,
+    meanTurns:
+      turnsSeen.length > 0
+        ? Math.round(
+            (turnsSeen.reduce((sum, entry) => sum + (entry.turns ?? 0), 0) / turnsSeen.length) * 10,
+          ) / 10
+        : null,
+    meanLatencyMs:
+      cases.length > 0
+        ? Math.round(cases.reduce((sum, entry) => sum + entry.durationMs, 0) / cases.length)
+        : null,
+  };
+}
+
+function listHarnesses(io: EvalCliIO, json: boolean, store: EvalStore): number {
+  const records = store.list();
+  const active = currentHarnessSettings().profile;
+  const unattributed = records.filter((record) => record.harnessId === undefined).length;
+
+  const rows = harnessRegistry.list().map((profile) => ({
+    id: profile.id,
+    version: profile.version,
+    description: profile.description,
+    active: profile.id === active,
+    runs: records.filter((record) => record.harnessId === profile.id).length,
+  }));
+
+  if (json) {
+    io.out(JSON.stringify({ active, unattributed, harnesses: rows }, null, 2));
+    return 0;
+  }
+
+  io.out(`Harness profiles (${rows.length})   active: ${active}`);
+  io.out("─".repeat(86));
+  io.out(`${pad("", 3)}${pad("PROFILE", 14)}${pad("VERSION", 9)}${pad("RUNS", 7)}DESCRIPTION`);
+  for (const row of rows) {
+    io.out(
+      `${pad(row.active ? "*" : " ", 3)}${pad(row.id, 14)}${pad(`v${row.version}`, 9)}${pad(String(row.runs), 7)}${row.description}`,
+    );
+  }
+  if (unattributed > 0) {
+    io.out("");
+    io.out(`${unattributed} stored run(s) predate harness attribution and are excluded from comparisons.`);
+  }
+  return 0;
+}
+
+async function compareHarnesses(
+  args: string[],
+  positional: string[],
+  io: EvalCliIO,
+  json: boolean,
+  store: EvalStore,
+  deps: EvalCliDeps,
+): Promise<number> {
+  const model = flagValue(args, "--model") ?? defaultModel();
+  const harnesses = positional.slice(1).map((entry) => resolveHarnessId(entry));
+
+  if (!model) {
+    io.err("No model selected. Pass --model <provider/model>.");
+    return 1;
+  }
+  if (harnesses.length < 2) {
+    io.err("Usage: toolnet eval compare-harness --model <model> <harnessA> <harnessB> [...]");
+    io.err(`Harnesses: ${harnessRegistry.ids().join(", ")}`);
+    return 1;
+  }
+  const unknown = harnesses.filter((id) => !harnessRegistry.has(id));
+  if (unknown.length > 0) {
+    io.err(`Unknown harness profile(s): ${unknown.join(", ")}. Known: ${harnessRegistry.ids().join(", ")}.`);
+    return 1;
+  }
+
+  // --run executes each profile on the production path. Without it the command
+  // is pure reporting over stored results, so it is never a surprise spend.
+  const suiteId = flagValue(args, "--suite");
+  if (suiteId || args.includes("--run")) {
+    const id = suiteId ?? "coding";
+    const suite = findSuite(id);
+    if (!suite) {
+      io.err(`Unknown suite '${id}'. Known: ${BUILTIN_SUITES.map((entry) => entry.id).join(", ")}.`);
+      return 1;
+    }
+    const runner = deps.runner ?? new EvalRunner({ store });
+    for (const id of harnesses) {
+      io.out(`Running suite '${suite.id}' for ${model} under harness '${id}'…`);
+      await runner.runSuite(suite, model, { harness: id });
+    }
+  }
+
+  const records = store.list();
+  const rows = harnesses.map((id) => aggregateHarness(records, model, id));
+
+  if (json) {
+    io.out(JSON.stringify({ model, harnesses: rows }, null, 2));
+    return 0;
+  }
+
+  io.out(`Harness comparison — model ${model}`);
+  io.out("─".repeat(86));
+  io.out(
+    `${pad("HARNESS", 14)}${pad("SUCCESS", 10)}${pad("TOOL USE", 12)}${pad("RELIABILITY", 13)}${pad("TURNS", 8)}${pad("LATENCY", 10)}SAMPLES`,
+  );
+  for (const row of rows) {
+    io.out(
+      `${pad(row.harness, 14)}${pad(formatRate(row.success), 10)}${pad(formatRate(row.toolUse), 12)}` +
+        `${pad(formatRate(row.reliability), 13)}${pad(formatTurns(row.meanTurns), 8)}` +
+        `${pad(row.meanLatencyMs === null ? "—" : `${row.meanLatencyMs}ms`, 10)}${row.cases}`,
+    );
+  }
+  io.out("");
+  io.out(
+    `Sample counts per harness: ${rows.map((row) => `${row.harness}=${row.cases}`).join(", ")}. ` +
+      `Below ${MIN_SAMPLES} samples a rate reads 'insufficient'; no winner is declared.`,
+  );
+  return 0;
+}
+
+interface MatrixCell {
+  model: string;
+  harness: string;
+  score: number | null;
+  samples: number;
+}
+
+async function harnessMatrix(
+  args: string[],
+  positional: string[],
+  io: EvalCliIO,
+  json: boolean,
+  store: EvalStore,
+  deps: EvalCliDeps,
+): Promise<number> {
+  const suiteId = positional[1];
+  if (!suiteId) {
+    io.err("Usage: toolnet eval matrix <suite> [--models a,b] [--harnesses x,y] [--run]");
+    io.err(`Suites: ${BUILTIN_SUITES.map((entry) => entry.id).join(", ")}`);
+    return 1;
+  }
+  const suite = findSuite(suiteId);
+  if (!suite) {
+    io.err(`Unknown suite '${suiteId}'.`);
+    return 1;
+  }
+
+  const models = splitList(flagValue(args, "--models"));
+  const harnesses = (splitList(flagValue(args, "--harnesses")) ?? harnessRegistry.ids()).map(
+    (entry) => resolveHarnessId(entry),
+  );
+  const unknown = harnesses.filter((id) => !harnessRegistry.has(id));
+  if (unknown.length > 0) {
+    io.err(`Unknown harness profile(s): ${unknown.join(", ")}.`);
+    return 1;
+  }
+
+  const records = store.list().filter((record) => record.suiteId === suite.id);
+  // Stored models when none were named — the matrix never invents model ids.
+  const modelIds =
+    models && models.length > 0
+      ? models
+      : [...new Set(records.map((record) => `${record.provider}/${record.model}`))];
+
+  if (modelIds.length === 0) {
+    io.err(
+      `No stored runs for suite '${suite.id}'. Run one first: toolnet eval run ${suite.id} --model <model> --harness <profile>`,
+    );
+    return 1;
+  }
+
+  // §15 — executing cells is opt-in; the default is a report over stored data.
+  if (args.includes("--run")) {
+    const runner = deps.runner ?? new EvalRunner({ store });
+    for (const model of modelIds) {
+      for (const harness of harnesses) {
+        const have = aggregateHarness(records, model, harness).cases;
+        if (have > 0) continue;
+        io.out(`Running suite '${suite.id}' for ${model} under harness '${harness}'…`);
+        await runner.runSuite(suite, model, { harness });
+      }
+    }
+    return printMatrix(io, json, suite.id, store.list().filter((record) => record.suiteId === suite.id), modelIds, harnesses);
+  }
+
+  return printMatrix(io, json, suite.id, records, modelIds, harnesses);
+}
+
+function printMatrix(
+  io: EvalCliIO,
+  json: boolean,
+  suiteId: string,
+  records: EvalRunRecord[],
+  modelIds: string[],
+  harnesses: string[],
+): number {
+  const cells: MatrixCell[] = [];
+  for (const model of modelIds) {
+    for (const harness of harnesses) {
+      const aggregate = aggregateHarness(records, model, harness);
+      cells.push({
+        model,
+        harness,
+        score: aggregate.cases > 0 ? aggregate.success : null,
+        samples: aggregate.cases,
+      });
+    }
+  }
+
+  if (json) {
+    io.out(JSON.stringify({ suiteId, harnesses, models: modelIds, cells }, null, 2));
+    return 0;
+  }
+
+  const modelColumn = Math.max(20, ...modelIds.map((model) => model.length + 2));
+  io.out(`Model x harness matrix — suite '${suiteId}'`);
+  io.out("─".repeat(modelColumn + harnesses.length * 16));
+  io.out(`${pad("MODEL", modelColumn)}${harnesses.map((entry) => pad(cellLabel(entry), 16)).join("")}`);
+  for (const model of modelIds) {
+    const row = harnesses
+      .map((harness) => {
+        const cell = cells.find((entry) => entry.model === model && entry.harness === harness);
+        if (!cell || cell.score === null) return pad("— (0)", 16);
+        return pad(`${cell.score.toFixed(2)} (${cell.samples})`, 16);
+      })
+      .join("");
+    io.out(`${pad(model, modelColumn)}${row}`);
+  }
+  io.out("");
+  io.out(
+    `Each cell is 'success rate (sample count)'. Fewer than ${MIN_SAMPLES} samples is not a result. ` +
+      "Add --run to execute missing cells on the production path.",
+  );
+  return 0;
+}
+
+function cellLabel(harness: string): string {
+  return harness.length > 14 ? `${harness.slice(0, 13)}…` : harness;
+}
+
+function splitList(value: string | undefined): string[] | undefined {
+  if (!value) return undefined;
+  const entries = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return entries.length > 0 ? entries : undefined;
+}
+
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function formatRate(value: number | null): string {
+  if (value === null) return "—";
+  return value.toFixed(2);
+}
+
+function formatTurns(value: number | null): string {
+  return value === null ? "—" : String(value);
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────

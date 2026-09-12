@@ -50,7 +50,9 @@ export {
   buildMetrics,
   classifyFailure,
   countDuplicateToolCalls,
+  harnessVersionOf,
   resolveFixturesDir,
+  resolveHarnessId,
   type EvalHarness,
   type EvalRunnerOptions,
 } from "./runner";

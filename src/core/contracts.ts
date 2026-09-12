@@ -181,6 +181,15 @@ export interface AgentResult {
   /** Full post-run transcript (assistant turns + tool results). */
   messages?: AgentMessage[];
   error?: string;
+  /** Phase 81 — evidence-derived outcome (never "the model said it finished"). */
+  verdict?: "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED" | "TIMEOUT";
+  /** Phase 81 — which harness profile policy produced this run. */
+  harnessId?: string;
+  harnessVersion?: string;
+  /** Phase 81 — every unmet requirement behind a non-SUCCESS verdict. */
+  completionReasons?: string[];
+  /** Phase 81 — observed side effects (files, commands, denials). */
+  executionEvidence?: import("./harness/evidence").ExecutionEvidence;
 }
 
 // ── Guard: helpful builders ─────────────────────────────────────────────────

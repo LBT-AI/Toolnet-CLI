@@ -119,6 +119,7 @@ SUBCOMMANDS:
   model [set] <provider/model>      Show or persist the default model
   providers                         List providers with status, models and health
   routing [profile|model|fallback]  Inspect or persist routing profile/policy
+  harness <list|show|current|use|reset>  Harness policy profiles (prompt/tools/loops)
   eval <list|run|compare|results|show>  Deterministic model evaluation
   completion [bash|zsh|fish|install] Shell auto-completion scripts
   update [--check]      Check for and apply updates
@@ -147,6 +148,15 @@ if (subCmd === "models" || subCmd === "model" || subCmd === "providers" || subCm
 if (subCmd === "eval") {
   const { runEvalCli } = await import("./commands/evalCli");
   const code = await runEvalCli(args.slice(1));
+  process.exit(code);
+}
+
+// ---- Harness subcommands (Phase 81.18) ----
+// `toolnet harness` inspects and selects the policy profile for the ONE
+// AgentHarness. Independent of `toolnet routing`, which selects the model.
+if (subCmd === "harness") {
+  const { runHarnessCli } = await import("./commands/harnessCli");
+  const code = await runHarnessCli(args.slice(1));
   process.exit(code);
 }
 

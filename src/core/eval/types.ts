@@ -120,6 +120,12 @@ export interface EvalCase {
   cleanupPaths?: string[];
   /** Per-case environment overrides (never secrets). */
   env?: Record<string, string>;
+  /**
+   * Phase 81 §13 — harness profile for this case. The same model under
+   * different harness policies is exactly what a cross-harness comparison
+   * measures, so the profile is part of the case, not a global setting.
+   */
+  harness?: string;
 }
 
 export interface EvalSuite {
@@ -191,11 +197,19 @@ export interface EvalCaseResult {
   costUsd?: number;
   failureClass?: EvalFailureClass;
   output?: string;
+  /** Phase 81 — the harness profile actually used for this case. */
+  harnessId?: string;
+  /** Phase 81 §11 — evidence-derived verdict, when the harness reported one. */
+  verdict?: "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED" | "TIMEOUT";
+  /** Phase 81 — model turns consumed by the case. */
+  turns?: number;
 }
 
 export interface EvalRunMetrics {
   passRate: number;
   meanDurationMs: number;
+  /** Phase 81 §14 — mean turns per case, so harnesses are comparable. */
+  meanTurns?: number;
   meanInputTokens: number;
   meanOutputTokens: number;
   totalToolCalls: number;
@@ -219,6 +233,16 @@ export interface EvalRunRecord {
   failed: number;
   metrics: EvalRunMetrics;
   cases: EvalCaseResult[];
+  /**
+   * Phase 81 §13 — which harness policy contract produced this run.
+   *
+   * Optional because records written before Phase 81 (and records replayed from
+   * the store) legitimately have no harness identity. Every NEW run populates
+   * both fields; readers must treat them as "unattributed" when absent rather
+   * than assuming `default`.
+   */
+  harnessId?: string;
+  harnessVersion?: string;
   toolnetVersion?: string;
   commit?: string;
   /** Never contains prompts judged secret; prompts are eval fixtures only. */

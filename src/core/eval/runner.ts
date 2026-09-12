@@ -26,6 +26,7 @@ import type { HarnessConfig } from "../../lib/harness/types";
 import { hookRegistry } from "../hooks";
 import type { HookInvocation } from "../hooks/types";
 import { modelRouter } from "../models/router";
+import { harnessRegistry, DEFAULT_HARNESS_PROFILE_ID } from "../harness";
 import { EVAL_RUN_SCHEMA_VERSION } from "./schema";
 import { graderFor, stableStringify } from "./graders";
 import { EvalStore } from "./store";
@@ -48,7 +49,14 @@ export interface EvalHarness {
     tokensUsed: number;
     durationMs: number;
     error?: string;
+    /** Phase 81 — evidence-derived verdict and harness identity. */
+    verdict?: "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED" | "TIMEOUT";
+    turnsUsed?: number;
+    harnessId?: string;
+    harnessVersion?: string;
   }>;
+  /** Phase 81 — present on the real harness; absent on minimal test doubles. */
+  getProfile?(): { id: string; version: string };
 }
 
 export interface EvalRunnerOptions {
@@ -65,6 +73,12 @@ export interface EvalRunnerOptions {
   /** Keep per-case workspaces for debugging (default false). */
   keepWorkspaces?: boolean;
   maxTurns?: number;
+  /**
+   * Phase 81 §13/§14 — harness profile for every case in the run. A case's own
+   * `harness` wins, which lets one run measure several policies against the same
+   * model. Defaults to the configured profile, then `default`.
+   */
+  harness?: string;
 }
 
 interface UsageTotals {
@@ -74,6 +88,20 @@ interface UsageTotals {
 }
 
 const DEFAULT_CASE_TIMEOUT_MS = 60_000;
+
+/**
+ * Phase 81 §13 — which harness contract a run measures. `default` is the
+ * identity profile, so an unlabelled run is still attributed honestly.
+ */
+export function resolveHarnessId(id?: string): string {
+  const trimmed = id?.trim().toLowerCase();
+  return trimmed ? trimmed : DEFAULT_HARNESS_PROFILE_ID;
+}
+
+/** Version of a harness profile, for the stored run record. */
+export function harnessVersionOf(id: string): string {
+  return harnessRegistry.get(resolveHarnessId(id))?.version ?? "unknown";
+}
 
 /** Resolve the fixtures directory in source and bundled layouts. */
 export function resolveFixturesDir(): string {
@@ -103,17 +131,28 @@ export class EvalRunner {
   /**
    * Run a whole suite against one model reference (resolved through the router).
    * The suite is never aborted by a single case failure.
+   *
+   * Phase 81 §13 — the run records WHICH harness policy produced it, so a
+   * comparison between profiles is a comparison of measured runs rather than of
+   * assumptions about what a profile ought to do.
    */
-  async runSuite(suite: EvalSuite, model: string): Promise<EvalRunRecord> {
+  async runSuite(
+    suite: EvalSuite,
+    model: string,
+    runOptions: { harness?: string } = {},
+  ): Promise<EvalRunRecord> {
     const runId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const startedAt = new Date();
     const startedMs = Date.now();
     const identity = this.identify(model);
+    const harness = resolveHarnessId(
+      runOptions.harness ?? this.options.harness,
+    );
 
     const cases: EvalCaseResult[] = [];
     for (const entry of suite.cases) {
       if (this.options.signal?.aborted) break;
-      const result = await this.runCase(entry, { model, runId });
+      const result = await this.runCase(entry, { model, runId, harness });
       cases.push(result);
       this.options.onCaseResult?.(result);
     }
@@ -126,6 +165,8 @@ export class EvalRunner {
       suiteVersion: suite.version,
       model: identity.model,
       provider: identity.provider,
+      harnessId: harness,
+      harnessVersion: harnessVersionOf(harness),
       startedAt: startedAt.toISOString(),
       finishedAt: new Date().toISOString(),
       durationMs: Date.now() - startedMs,
@@ -141,7 +182,10 @@ export class EvalRunner {
   }
 
   /** Run one case in an isolated workspace. */
-  async runCase(entry: EvalCase, context: { model: string; runId: string }): Promise<EvalCaseResult> {
+  async runCase(
+    entry: EvalCase,
+    context: { model: string; runId: string; harness?: string },
+  ): Promise<EvalCaseResult> {
     const startedMs = Date.now();
     const workspace = this.createWorkspace(entry);
     const usage: UsageTotals = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -168,6 +212,9 @@ export class EvalRunner {
     let runtimeError: string | undefined;
     let threw = false;
     let output = "";
+    let verdict: EvalCaseResult["verdict"];
+    let turns: number | undefined;
+    let caseHarnessId: string | undefined;
 
     const controller = new AbortController();
     const timeoutMs = entry.timeoutMs ?? DEFAULT_CASE_TIMEOUT_MS;
@@ -212,8 +259,14 @@ export class EvalRunner {
         maxTurns: entry.maxTurns ?? this.options.maxTurns ?? 8,
         timeoutMs,
         sessionId: `${context.runId}-${entry.id}`,
+        // Phase 81 — the profile travels through the PRODUCTION path
+        // (`AgentHarness` → policies). The runner never applies policy itself.
+        harness: entry.harness ?? context.harness,
       });
       output = result.output ?? "";
+      verdict = result.verdict;
+      turns = result.turnsUsed;
+      caseHarnessId = result.harnessId ?? entry.harness ?? context.harness;
       if (!result.success && result.error) {
         // A cancellation is a run STATE, not a runtime defect. The harness
         // reports it as `success:false` rather than throwing, and an aborted
@@ -273,6 +326,13 @@ export class EvalRunner {
       retries: duplicates,
       ...(graded.pass ? {} : { failureClass: classifyFailure(entry, observation) }),
       output: output.slice(0, 2000),
+      // Phase 81 — record the policy contract, so a stored result can be
+      // attributed to a harness as well as a model.
+      harnessId:
+        caseHarnessId ??
+        resolveHarnessId(entry.harness ?? context.harness),
+      ...(verdict ? { verdict } : {}),
+      ...(typeof turns === "number" ? { turns } : {}),
     };
 
     if (!this.options.keepWorkspaces) {
@@ -322,7 +382,7 @@ export class EvalRunner {
   private buildHarness(
     entry: EvalCase,
     workspace: string,
-    context: { model: string; runId: string },
+    context: { model: string; runId: string; harness?: string },
     signal: AbortSignal,
   ): EvalHarness {
     void signal;
@@ -334,6 +394,10 @@ export class EvalRunner {
       sandboxMode: "workspace",
       maxTurns: entry.maxTurns ?? this.options.maxTurns ?? 8,
       timeoutMs: entry.timeoutMs ?? DEFAULT_CASE_TIMEOUT_MS,
+      // Phase 81 §13 — same harness class, different policy contract.
+      ...(entry.harness ?? context.harness
+        ? { harness: entry.harness ?? context.harness }
+        : {}),
     };
     return this.options.harnessFactory
       ? this.options.harnessFactory(config)
@@ -459,6 +523,10 @@ export function classifyFailure(entry: EvalCase, observation: EvalObservation): 
   if (/abort|cancel/i.test(detail)) return "CANCELLED";
   if (entry.cancelAfterMs !== undefined) return "CANCELLED";
   if (observation.runtimeError && /timeout|timed out/i.test(observation.runtimeError)) return "TIMEOUT";
+  // Phase 81 — an unrunnable harness configuration is a RUNTIME problem, not a
+  // model-quality signal. Blaming the model here would poison exactly the
+  // comparison the harness dimension exists to support.
+  if (/HARNESS_PROFILE_NOT_FOUND|Unknown harness profile/i.test(detail)) return "CORE_RUNTIME";
   if (/permission|denied|not permitted|forbidden/i.test(detail)) return "PERMISSION";
   if (/HTTP\s+4\d\d|unauthor|invalid (request|api)|malformed|bad request/i.test(detail)) return "PROVIDER_PROTOCOL";
   if (/HTTP\s+5\d\d|ECONNREFUSED|ENOTFOUND|fetch failed|socket hang up/i.test(detail)) return "PROVIDER_PROTOCOL";
@@ -500,6 +568,8 @@ export function buildMetrics(cases: EvalCaseResult[]): EvalRunRecord["metrics"] 
   let failedToolCalls = 0;
   let cost = 0;
   let costSeen = false;
+  let turns = 0;
+  let turnsSeen = 0;
 
   for (const entry of cases) {
     duration += entry.durationMs;
@@ -507,6 +577,10 @@ export function buildMetrics(cases: EvalCaseResult[]): EvalRunRecord["metrics"] 
     outputTokens += entry.outputTokens;
     toolCalls += entry.toolCalls;
     failedToolCalls += entry.failedToolCalls;
+    if (typeof entry.turns === "number") {
+      turns += entry.turns;
+      turnsSeen += 1;
+    }
     if (typeof entry.costUsd === "number") {
       cost += entry.costUsd;
       costSeen = true;
@@ -522,6 +596,8 @@ export function buildMetrics(cases: EvalCaseResult[]): EvalRunRecord["metrics"] 
   return {
     passRate: Math.round((passed / count) * 1000) / 1000,
     meanDurationMs: Math.round(duration / count),
+    // §14 — turns are only meaningful when the harness reported them.
+    meanTurns: turnsSeen > 0 ? Math.round((turns / turnsSeen) * 10) / 10 : 0,
     meanInputTokens: Math.round(input / count),
     meanOutputTokens: Math.round(outputTokens / count),
     totalToolCalls: toolCalls,

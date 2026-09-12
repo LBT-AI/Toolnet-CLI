@@ -2,6 +2,15 @@ import type { Command, CommandContext } from "./index";
 import { getHarness } from "../lib/harness";
 import { contextEngine } from "../lib/context";
 import { sessionTrust } from "../lib/security/sessionTrust";
+// Phase 81 §19 — the TUI is a CONSUMER of the canonical harness registry and
+// config owner. It implements no policy and never constructs a harness of its
+// own; selection uses the same API as `toolnet harness use`.
+import {
+  currentHarnessSettings,
+  harnessRegistry,
+  persistHarnessProfile,
+  summarizeHarnessProfile,
+} from "../core/harness";
 
 function getFormattedHarnessStatus(ctx: CommandContext): string {
   const harness = getHarness({
@@ -37,15 +46,55 @@ export const harnessCommand: Command = {
   name: "harness",
   aliases: ["kernel", "sys"],
   description: "Display Unified AgentHarness status, active subsystems, and runtime telemetry",
-  usage: "/harness [section]",
+  usage: "/harness [section] | /harness use <profile> | /harness profile",
   async handler(args: string[], ctx: CommandContext) {
-    if (args[0] === "--help" || args[0] === "help") {
+    const action = (args[0] ?? "").toLowerCase();
+
+    if (action === "--help" || action === "help") {
       ctx.addMessage(
         "assistant",
         "/harness — ToolNet Agent Harness status\n\n" +
-        "  /harness            Open the interactive Harness Panel\n" +
-        "  /harness <section>  Open one section directly (session, security, tools, ...)\n\n" +
-        "Sections: Session, Execution, Security, Context, Tools, Telemetry, Subagents."
+        "  /harness                 Open the interactive Harness Panel\n" +
+        "  /harness <section>       Open one section (profile, session, security, tools, ...)\n" +
+        "  /harness profile         Show the active harness policy profile\n" +
+        "  /harness use <profile>   Select a profile (same API as `toolnet harness use`)\n\n" +
+        "Sections: Profile, Session, Execution, Security, Context, Tools, Telemetry, Subagents."
+      );
+      return;
+    }
+
+    if (action === "use" || action === "set") {
+      const id = args[1]?.trim().toLowerCase();
+      if (!id) {
+        ctx.addMessage(
+          "assistant",
+          `Usage: /harness use <profile>\nProfiles: ${harnessRegistry.ids().join(", ")}`
+        );
+        return;
+      }
+      const result = persistHarnessProfile(id);
+      if (!result.ok) {
+        // Loud failure — never silently run a different contract.
+        ctx.addMessage("assistant", result.errors.join("\n"));
+        return;
+      }
+      ctx.addMessage("assistant", `Harness profile set to '${result.settings.profile}'.`);
+      return;
+    }
+
+    if (action === "profile" || action === "profiles") {
+      const settings = currentHarnessSettings();
+      const profile = harnessRegistry.get(settings.profile);
+      if (!profile) {
+        ctx.addMessage(
+          "assistant",
+          `Configured profile '${settings.profile}' is not registered. Known: ${harnessRegistry.ids().join(", ")}.`
+        );
+        return;
+      }
+      ctx.addMessage(
+        "assistant",
+        [`Harness profile: ${profile.id} (v${profile.version})`, ...summarizeHarnessProfile(profile)].join("\n")
       );
       return;
     }

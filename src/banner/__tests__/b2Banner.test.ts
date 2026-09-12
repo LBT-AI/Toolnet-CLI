@@ -53,11 +53,17 @@ describe("B2 Twin Portal elapsed-time banner", () => {
   it("recomputes the pose when terminal size changes during animation", async () => {
     const captured = capture(80, 24);
     let size = { cols: 80, rows: 24 };
+    // Phase 81 — the injected clock above advances by a fixed step PER CALL, so
+    // the frames this test renders are already fully deterministic. The frame
+    // interval only decided how long the test waited in real time: at frameMs
+    // 100 the timeline needs ~9 ticks (~900ms) inside a 3s budget, which starved
+    // under full-suite load and made this test flaky. A tight interval keeps the
+    // identical frame sequence while removing the wall-clock dependency.
     await playB2Banner({ ...captured.ctx, getSize: () => size }, {
       animate: true,
       noColor: true,
       inPlace: true,
-      frameMs: 100,
+      frameMs: 5,
       now: (() => {
         let elapsed = 0;
         return () => {

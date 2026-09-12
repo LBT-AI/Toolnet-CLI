@@ -34,6 +34,37 @@ import { AgentStateMachine } from "./agentState";
 import { ModelAdapter, type AgentModelResponse, type AgentToolCall } from "./modelAdapter";
 import { parseTaskRequirements, evaluateCompletionGate, recordEvidence, emptyEvidence } from "../../core/agent/completionGate";
 import type { CompletionEvidence, TaskRequirement } from "../../core/contracts";
+// Phase 81 — harness compatibility layer. POLICY ONLY: the profile shapes the
+// prompt, the exposed tool set, the loop bounds and the completion verdict. It
+// cannot change a permission decision, and it is never a second loop.
+import {
+  applyToolOrdering,
+  composeSystemPrompt,
+  computeVerdict,
+  defaultProfile,
+  emptyExecutionEvidence,
+  ensureDenialsRetained,
+  exceedsRepeatedToolCalls,
+  ExecutionEvidenceCollector,
+  exposedToolNames,
+  fingerprintResponse,
+  isMutationTool,
+  isPassthroughToolPolicy,
+  isShellTool,
+  isToolExposed,
+  looksLikeTestCommand,
+  looksLikeVerificationCommand,
+  maxTurnsError,
+  noProgressError,
+  prepareOptionsFor,
+  ProgressTracker,
+  repeatedToolCallError,
+  resolveHarnessProfile,
+  resolveMaxTurns,
+  toolGuidance as toolPolicyGuidance,
+  type ExecutionEvidence,
+  type HarnessProfile,
+} from "../../core/harness";
 // Import the subagent pieces surgically (not via the module barrel) so the
 // harness graph does not pull the manager + registry in eagerly.
 import { DEFAULT_SUBAGENT_MAX_DEPTH, decideTool, type ToolPermissionScope } from "../../core/agent/agents/types";
@@ -93,6 +124,31 @@ export class AgentHarness {
   private maxSubagentDepth = DEFAULT_SUBAGENT_MAX_DEPTH;
   /** Phase 75 — approval hook handed to child subagents. */
   private approvalHook?: (input: { name: string; args: any; reason?: string }) => Promise<boolean>;
+  /** Phase 81 — the resolved policy contract for this harness instance. */
+  private profile: HarnessProfile = defaultProfile;
+  /** Phase 81 — evidence collector for the active run (null outside a run). */
+  private evidenceCollector: ExecutionEvidenceCollector | null = null;
+  /** Phase 81 — set when a requested profile id could not be resolved. */
+  private profileError: string | null = null;
+  /**
+   * Phase 81 §11 — explicit terminal run state.
+   *
+   * Deliberately NOT derived from the error string: a loop abort message
+   * contains "Aborting loop.", so string-matching `abort` reported a stuck loop
+   * as a user cancellation. The verdict must reflect what actually ended the
+   * run.
+   */
+  private lastRunState: { cancelled: boolean; timedOut: boolean } = {
+    cancelled: false,
+    timedOut: false,
+  };
+  /** Phase 81 — requirements parsed for the active run, for the verdict. */
+  private lastRequirements: TaskRequirement = {
+    mutationRequired: false,
+    executionRequired: false,
+    verificationRequired: false,
+    testRequired: false,
+  };
 
   constructor(config: HarnessConfig = {}) {
     const stableRoot =
@@ -111,6 +167,20 @@ export class AgentHarness {
       timeoutMs: config.timeoutMs || 120000,
     };
 
+    // Phase 81 — resolve the configured harness profile at construction.
+    // A CONFIG-sourced id that the registry does not know falls back to
+    // `default` and reports itself in the init event rather than bricking the
+    // CLI; a PER-CALL id (below) is strict, because that is the one a user just
+    // typed.
+    if (config.harness) {
+      try {
+        this.profile = resolveHarnessProfile({ profile: config.harness }).profile;
+      } catch (error) {
+        this.profile = defaultProfile;
+        this.profileError = error instanceof Error ? error.message : String(error);
+      }
+    }
+
     if (config.sandboxMode) {
       setSandboxMode(config.sandboxMode);
     }
@@ -125,7 +195,35 @@ export class AgentHarness {
       workspaceRoot: this.config.workspaceRoot,
       sessionId: this.config.sessionId,
       model: this.config.model,
+      harness: this.profile.id,
+      harnessError: this.profileError ?? undefined,
     });
+  }
+
+  /**
+   * Phase 81 §5 — apply a per-call harness id.
+   *
+   * An explicit id is a contract: an unknown one is recorded as an error and
+   * the run fails loudly in `executeLoopInner` rather than silently running a
+   * different behavioural contract.
+   */
+  private applyRunProfile(options?: ExecutionOptions): void {
+    const requested = options?.harness;
+    if (!requested) {
+      this.profileError = null;
+      return;
+    }
+    try {
+      this.profile = resolveHarnessProfile({ profile: requested }).profile;
+      this.profileError = null;
+    } catch (error) {
+      this.profileError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /** Phase 81 §11 — reset the explicit terminal state for a new run. */
+  private resetRunState(): void {
+    this.lastRunState = { cancelled: false, timedOut: false };
   }
 
   // ── Workspace awareness (§8) ─────────────────────────────────────────────
@@ -141,6 +239,66 @@ export class AgentHarness {
   /** Verified side effects (mutations/executions/tests) from the last run. */
   getCompletionEvidence(): CompletionEvidence {
     return { ...this.lastCompletionEvidence };
+  }
+
+  /** Phase 81 — the policy contract this harness instance runs under. */
+  getProfile(): HarnessProfile {
+    return this.profile;
+  }
+
+  /** Phase 81 — observed evidence (files touched, commands, denials) for the last run. */
+  getExecutionEvidence(): ExecutionEvidence {
+    return this.evidenceCollector?.snapshot() ?? emptyExecutionEvidence();
+  }
+
+  /**
+   * Phase 81 §7 — tool EXPOSURE for this profile.
+   *
+   * Only shrinks (or reorders) the set offered to the model. Every executed
+   * call still goes securityEngine → ToolGateway, so this has no way to grant a
+   * capability that permission did not already allow.
+   */
+  private toolsForProfile() {
+    const policy = this.profile.toolPolicy;
+    if (isPassthroughToolPolicy(policy)) return toolRegistry.schemas();
+    const filtered = toolRegistry.schemasFiltered((tool) => isToolExposed(tool.name, policy));
+    return applyToolOrdering(filtered, policy);
+  }
+
+  /**
+   * Phase 81 §11 — compute the run verdict from evidence, then attach the
+   * harness identity so every consumer (UI, eval record, report) can say which
+   * policy contract produced the result.
+   */
+  private finalizeResult(result: HarnessResult): HarnessResult {
+    const { cancelled, timedOut } = this.lastRunState;
+    const evidence = this.getExecutionEvidence();
+    const verified = this.lastCompletionEvidence;
+
+    const { verdict, reasons } = computeVerdict({
+      policy: this.profile.completionPolicy,
+      requirements: this.lastRequirements,
+      verified: {
+        mutations: verified.successfulMutations,
+        executions: verified.successfulExecutions,
+        tests: verified.testsPassed,
+        verifications: verified.verificationsPassed,
+      },
+      evidence,
+      runSucceeded: result.success,
+      cancelled,
+      timedOut,
+      hasOutput: Boolean(result.output),
+    });
+
+    return {
+      ...result,
+      harnessId: this.profile.id,
+      harnessVersion: this.profile.version,
+      verdict,
+      completionReasons: reasons,
+      executionEvidence: evidence,
+    };
   }
 
   // ── Event Bus ─────────────────────────────────────────────────────────────
@@ -516,6 +674,11 @@ export class AgentHarness {
     const model = options.model || this.config.model || "";
     const hookMeta = { sessionId, signal: options.signal };
 
+    // Phase 81 — per-call harness selection wins over the configured one. Done
+    // before anything else so policy (and the prompt built by the caller's
+    // entry point) reflects the requested contract.
+    this.applyRunProfile(options);
+
     await this.fireSessionStart(sessionId, mode);
 
     await hookRegistry.run(
@@ -525,8 +688,22 @@ export class AgentHarness {
       hookMeta,
     );
 
+    // Phase 81 §12 — evidence is derived from this harness's own event stream.
+    // A nested run (a subagent spawned by a tool call) gets its own collector,
+    // and the parent's is restored on the way out so the parent's verdict is
+    // computed from the parent's evidence.
+    const previousCollector = this.evidenceCollector;
+    const previousRequirements = this.lastRequirements;
+    const previousEvidence = this.lastCompletionEvidence;
+    const previousRunState = this.lastRunState;
+    const collector = new ExecutionEvidenceCollector();
+    this.evidenceCollector = collector;
+    const unsubscribeEvidence = this.on((event) => collector.observe(event));
+
     try {
-      const result = await this.executeLoopInner(initialMessages, options, mode);
+      const inner = await this.executeLoopInner(initialMessages, options, mode);
+      // §11 — the verdict is computed from evidence, never from narration alone.
+      const result = this.finalizeResult(inner);
       await hookRegistry.run(
         "agent.end",
         { sessionId, model, mode, success: result.success },
@@ -548,6 +725,12 @@ export class AgentHarness {
         hookMeta,
       );
       throw error;
+    } finally {
+      unsubscribeEvidence();
+      this.evidenceCollector = previousCollector;
+      this.lastRequirements = previousRequirements;
+      this.lastCompletionEvidence = previousEvidence;
+      this.lastRunState = previousRunState;
     }
   }
 
@@ -596,9 +779,60 @@ export class AgentHarness {
     mode: ExecutionMode = "HEADLESS"
   ): Promise<HarnessResult> {
     const startTime = Date.now();
-    const maxTurns = options.maxTurns || this.config.maxTurns || 10;
+    // Phase 81 §8 — an explicit caller budget always wins, then the profile's.
+    const maxTurns = resolveMaxTurns(
+      options.maxTurns,
+      this.profile.continuationPolicy.maxTurns,
+      this.config.maxTurns,
+      10,
+    );
     const timeoutMs = options.timeoutMs || this.config.timeoutMs || 120000;
     const sessionId = options.sessionId || this.config.sessionId || "session";
+    this.resetRunState();
+    this.lastCompletionEvidence = emptyEvidence();
+
+    // A run started with an already-aborted signal is a cancellation, not a
+    // model failure — and it must not call the provider at all.
+    if (options.signal?.aborted) {
+      // No state transition: the run never entered thinking, and
+      // `idle → cancelled` is not a legal edge in the state machine.
+      this.lastRunState.cancelled = true;
+      this.emitEvent("agent:error", mode, { error: "Execution cancelled by user" });
+      return {
+        success: false,
+        output: "",
+        messages: initialMessages,
+        toolCallsCount: 0,
+        turnsUsed: 0,
+        tokensUsed: 0,
+        durationMs: Date.now() - startTime,
+        mode,
+        sessionId,
+        error: "Execution cancelled by user",
+      };
+    }
+
+    // Phase 81 §5 — a requested profile that does not exist fails the run with
+    // a structured error. Running a different contract than the caller asked
+    // for would make every result (and every eval) untrustworthy.
+    if (this.profileError) {
+      this.emitEvent("agent:error", mode, {
+        error: this.profileError,
+        code: "HARNESS_PROFILE_NOT_FOUND",
+      });
+      return {
+        success: false,
+        output: "",
+        messages: initialMessages,
+        toolCallsCount: 0,
+        turnsUsed: 0,
+        tokensUsed: 0,
+        durationMs: Date.now() - startTime,
+        mode,
+        sessionId,
+        error: this.profileError,
+      };
+    }
 
     // Phase 79.17 — the harness resolves provider + model through the canonical
     // ModelRouter (never its own provider map). `resolveRuntimeModel` degrades
@@ -642,6 +876,35 @@ export class AgentHarness {
     const evidence: CompletionEvidence =
       options.completionEvidence ?? emptyEvidence();
     this.lastCompletionEvidence = evidence;
+    this.lastRequirements = requirements;
+
+    // Phase 81 §9 — progress is bounded per profile. `0` disables the bound,
+    // which is what keeps the identity profile's loop unchanged.
+    const progress = new ProgressTracker(
+      this.profile.continuationPolicy.maxConsecutiveNoProgressTurns,
+    );
+    const snapshotEvidence = () =>
+      this.evidenceCollector?.snapshot() ?? emptyExecutionEvidence();
+
+    /**
+     * §9 — one progress sample per model turn. Returns a structured abort when
+     * the bound is reached, else null. Disabled for the identity profile.
+     */
+    const checkProgress = (responseText: string): { error: string } | null => {
+      if (!progress.enabled) return null;
+      const observed = snapshotEvidence();
+      const observation = progress.observe({
+        responseFingerprint: fingerprintResponse(responseText),
+        toolCalls: observed.toolCalls,
+        mutations: observed.filesChanged.length,
+        commands: observed.commandsRun,
+        diagnostics: observed.diagnostics,
+        finalResponse: false,
+        newFiles: observed.filesChanged.length,
+      });
+      if (!progress.exceeded()) return null;
+      return { error: noProgressError(observation.noProgressTurns) };
+    };
 
     this.lastToolSig = null;
     this.consecutiveToolRepeat = 0;
@@ -689,6 +952,7 @@ export class AgentHarness {
       }
 
       if (Date.now() - startTime > timeoutMs) {
+        this.lastRunState.timedOut = true;
         this.agentState.transition("error", "timeout");
         this.emitEvent("agent:error", mode, { error: `Execution timed out after ${timeoutMs}ms` });
         return {
@@ -705,9 +969,35 @@ export class AgentHarness {
         };
       }
 
-      const prep = contextEngine.prepareMessagesForApi(messages, { model, sessionId });
+      // Phase 81 §10 — the profile picks the compression strategy; token
+      // accounting stays the ContextEngine's (one estimator, not two).
+      const prep = contextEngine.prepareMessagesForApi(messages, {
+        model,
+        sessionId,
+        ...prepareOptionsFor(this.profile.contextPolicy),
+      });
       accumulatedTokens = prep.budget.currentEstimatedTokens;
       this.totalTokensUsed += accumulatedTokens;
+
+      // A narrowed window must never erase a permission decision: a model that
+      // "forgot" a DENY would simply issue the same call again, making a
+      // permission problem look like a stuck model.
+      const denials = this.evidenceCollector?.denials() ?? [];
+      const retention = ensureDenialsRetained(
+        prep.messages,
+        denials,
+        this.profile.contextPolicy,
+      );
+      if (retention.appended && (prep.compacted || prep.prunedCount > 0)) {
+        messages.push({ role: "user", content: retention.appended });
+        this.emitEvent("agent:thinking", mode, {
+          permissionDecisionsRetained: denials.length,
+        });
+      }
+      const preparedMessages =
+        retention.appended && (prep.compacted || prep.prunedCount > 0)
+          ? retention.messages
+          : prep.messages;
 
       if (prep.compacted) {
         this.emitEvent("agent:compact", mode, {
@@ -724,7 +1014,9 @@ export class AgentHarness {
       const toolsForRequest =
         caps?.tools === false
           ? undefined
-          : options.toolsOverride || toolRegistry.schemas();
+          : // Phase 81 §7 — toolsOverride wins (subagent scoping, plan mode),
+            // then the profile's EXPOSURE policy over the canonical registry.
+            options.toolsOverride || this.toolsForProfile();
 
       let modelRes: { response: AgentModelResponse; hadMessage: boolean };
       try {
@@ -732,7 +1024,7 @@ export class AgentHarness {
           provider,
           {
             model,
-            messages: prep.messages,
+            messages: preparedMessages,
             tools: toolsForRequest,
             toolChoice: toolsForRequest ? options.toolChoice || "auto" : undefined,
             headers: extraHeaders,
@@ -745,7 +1037,8 @@ export class AgentHarness {
           options.stream === true
         );
       } catch (netErr: any) {
-        if (abort.signal?.aborted) {
+        if (options.signal?.aborted || abort.signal?.aborted) {
+          this.lastRunState.cancelled = true;
           this.agentState.transition("cancelled");
           this.emitEvent("agent:error", mode, { error: "Execution cancelled by user" });
           return {
@@ -761,6 +1054,9 @@ export class AgentHarness {
             error: "Execution cancelled by user",
           };
         }
+        // A provider call aborted by the run's own timeout budget is a TIMEOUT,
+        // not a network failure.
+        if (timeoutSignal.aborted) this.lastRunState.timedOut = true;
         const errorMsg = `Gateway network error: Network/Gateway connection failed: ${netErr?.message || String(netErr)}`;
         this.agentState.transition("error", "network");
         this.emitEvent("agent:error", mode, { error: errorMsg });
@@ -863,6 +1159,24 @@ export class AgentHarness {
         });
 
         if (gate.decision === "continue") {
+          // §9 — a repeated non-answer that the gate rejects is not progress.
+          const stalledAtGate = checkProgress(finalOutput);
+          if (stalledAtGate) {
+            this.agentState.transition("error", "no-progress");
+            this.emitEvent("agent:error", mode, { error: stalledAtGate.error, gateReason: gate.reason });
+            return {
+              success: false,
+              output: finalOutput,
+              messages,
+              toolCallsCount,
+              turnsUsed,
+              tokensUsed: accumulatedTokens,
+              durationMs: Date.now() - startTime,
+              mode,
+              sessionId,
+              error: stalledAtGate.error,
+            };
+          }
           this.agentState.transition("thinking", "completion-gate");
           messages.push({
             role: "user",
@@ -948,12 +1262,13 @@ export class AgentHarness {
             this.lastToolSig = sig;
             this.consecutiveToolRepeat = 1;
           }
-          if (this.consecutiveToolRepeat >= 3) {
+          // §8 — the repeat bound comes from the profile, never a literal.
+          if (exceedsRepeatedToolCalls(this.profile.continuationPolicy, this.consecutiveToolRepeat)) {
             loopAborted = true;
             return {
               result: JSON.stringify({
                 stdout: "",
-                stderr: `Infinite loop detected: tool '${name}' was called ${this.consecutiveToolRepeat} times consecutively with identical arguments. Aborting loop.`,
+                stderr: repeatedToolCallError(name, this.consecutiveToolRepeat),
                 exitCode: 1,
               }),
               allowed: false,
@@ -1041,6 +1356,29 @@ export class AgentHarness {
         };
       }
 
+      // §9 — bound the loop on observable progress, not on optimism.
+      const stalled = checkProgress(assistantContent);
+      if (stalled) {
+        this.agentState.transition("error", "no-progress");
+        this.emitEvent("agent:error", mode, {
+          error: stalled.error,
+          turnsUsed,
+          toolCallsCount,
+        });
+        return {
+          success: false,
+          output: "",
+          messages,
+          toolCallsCount,
+          turnsUsed,
+          tokensUsed: accumulatedTokens,
+          durationMs: Date.now() - startTime,
+          mode,
+          sessionId,
+          error: stalled.error,
+        };
+      }
+
       this.emitEvent("agent:thinking", mode, { turnsUsed, toolCallsCount });
     }
 
@@ -1055,7 +1393,7 @@ export class AgentHarness {
       durationMs: Date.now() - startTime,
       mode,
       sessionId,
-      error: `Exceeded maximum turn count (${maxTurns})`,
+      error: maxTurnsError(maxTurns),
     };
   }
 
@@ -1066,24 +1404,32 @@ export class AgentHarness {
     const toolRules = contextEngine.getToolUsageRulesSnippet();
     const permissionContext = getPermissionContextPrompt(this.config.sandboxMode || getSandboxMode());
     const codingPolicy = getCodingAgentPolicy();
-    const toolGuidance = getCodingAgentToolUseGuidance();
+    const toolUseGuidance = getCodingAgentToolUseGuidance();
     const projectCtx = buildProjectContext(this.config.workspaceRoot || process.cwd(), this.config.currentCwd || this.config.workspaceRoot || process.cwd());
     const projectSummary = this.formatProjectContext(projectCtx);
     const taskBlock = taskSummary ? `\n${taskSummary}\n` : "";
-    const base = `${codingPolicy}
 
-${toolGuidance}
+    // Phase 81 §6 — the profile's PromptPolicy decides which blocks appear and
+    // how tightly they are joined. `assemblePromptBase` always emits the
+    // runtime permission context, so no profile can drop the security boundary.
+    const base = composeSystemPrompt({
+      profile: this.profile,
+      callerOverride: extra,
+      toolPolicyGuidance: toolPolicyGuidance(this.profile.toolPolicy),
+      availableTools: isPassthroughToolPolicy(this.profile.toolPolicy)
+        ? undefined
+        : exposedToolNames(toolRegistry.canonicalNames(), this.profile.toolPolicy),
+      blocks: {
+        codingPolicy,
+        toolUseGuidance,
+        projectContext: `${projectSummary}${taskBlock}`,
+        memoryAndToolRules: `${memoryPrompt}${toolRules}`,
+        permissionContext,
+        languageDirective: getLanguageDirective(getResponseLanguage()),
+      },
+    });
 
-${projectSummary}${taskBlock}
-
-${permissionContext}
-
-Your access is strictly limited to the policy described in [RUNTIME PERMISSION CONTEXT] above.
-
-${memoryPrompt}${toolRules}
-
-${getLanguageDirective(getResponseLanguage())}`;
-    return bypassEngine.getBypassSystemPrompt(extra || base);
+    return bypassEngine.getBypassSystemPrompt(base);
   }
 
   private formatProjectContext(ctx: ReturnType<typeof buildProjectContext>): string {
@@ -1351,25 +1697,12 @@ Your access is strictly limited to the policy described in [RUNTIME PERMISSION C
 }
 
 // ── Completion-evidence helpers (Phase 73.9) ────────────────────────────────
-
-const MUTATION_TOOLS = new Set([
-  "write_file",
-  "edit_file",
-  "replace_all",
-  "apply_patch",
-  "create_artifact",
-  "update_artifact",
-]);
-
-const SHELL_TOOLS = new Set(["shell", "bash", "run_command"]);
-
-function isMutationTool(name: string): boolean {
-  return MUTATION_TOOLS.has(name);
-}
-
-function isShellTool(name: string): boolean {
-  return SHELL_TOOLS.has(name);
-}
+//
+// Phase 81: the tool classification (what counts as a mutation / a shell run /
+// a test / a verification) MOVED to `core/harness/evidence.ts` and is imported
+// above. It has exactly one definition there, shared with the execution-evidence
+// collector, so the harness and the verdict can never disagree about whether a
+// file changed or a test ran.
 
 function parseResultJson(result: string): Record<string, unknown> | null {
   if (!result || typeof result !== "string") return null;
@@ -1408,21 +1741,6 @@ function safeParseJson(value: string | undefined): unknown {
   } catch {
     return {};
   }
-}
-
-function commandFromArgs(name: string, args: any): string {
-  if (!isShellTool(name)) return "";
-  return String(args?.command ?? args?.cmd ?? "");
-}
-
-function looksLikeTestCommand(name: string, args: any): boolean {
-  const cmd = commandFromArgs(name, args);
-  return /\b(bun test|npm test|yarn test|pnpm test|pytest|jest|vitest|go test|cargo test|mvn test|dotnet test|gradlew test|rspec|phpunit)\b/i.test(cmd);
-}
-
-function looksLikeVerificationCommand(name: string, args: any): boolean {
-  const cmd = commandFromArgs(name, args);
-  return /\b(typecheck|tsc --noEmit|tsc -b|lint|build|go vet|ruff check|mypy|shellcheck)\b/i.test(cmd);
 }
 
 // ── Singleton Instance ──────────────────────────────────────────────────────

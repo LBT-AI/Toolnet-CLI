@@ -59,6 +59,12 @@ export interface HarnessConfig {
   baseUrl?: string;
   maxTurns?: number;
   timeoutMs?: number;
+  /**
+   * Phase 81 — harness profile id. POLICY only: it shapes the prompt, the
+   * exposed tool set, the loop bounds and the completion verdict. It cannot
+   * change a permission decision, and it is never a second loop.
+   */
+  harness?: string;
 }
 
 export interface ExecutionOptions {
@@ -72,6 +78,8 @@ export interface ExecutionOptions {
   systemPrompt?: string;
   stream?: boolean;
   toolsOverride?: any[];
+  /** Phase 81 — harness profile id for this run (explicit wins over auto). */
+  harness?: string;
   toolChoice?: "auto" | "required" | "none";
   sandboxMode?: SandboxMode;
   mode?: ExecutionMode;
@@ -131,6 +139,15 @@ export interface HarnessResult {
   teamworkState?: SchedulerState;
   /** Phase 73.9 — verified side effects accumulated by the Completion Gate. */
   evidence?: CompletionEvidence;
+  /** Phase 81 — which policy contract produced this result. */
+  harnessId?: string;
+  harnessVersion?: string;
+  /** Phase 81 §11 — evidence-derived outcome, not "the model said it finished". */
+  verdict?: "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED" | "TIMEOUT";
+  /** Every unmet requirement behind a non-SUCCESS verdict. */
+  completionReasons?: string[];
+  /** Phase 81 §12 — observed side effects (files, commands, denials). */
+  executionEvidence?: import("../../core/harness/evidence").ExecutionEvidence;
 }
 
 export interface HarnessMetrics {

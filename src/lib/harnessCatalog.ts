@@ -4,6 +4,14 @@ import { sessionTrust } from "./security/sessionTrust";
 import { toolRegistry } from "./harness/toolRegistry";
 import type { HarnessMetrics } from "./harness/types";
 import type { ListItem } from "../tui/renderers/listPanelRenderer";
+// Phase 81 §19 — the panel READS the canonical harness registry and the
+// canonical config. It implements no policy: selection goes through the same
+// `persistHarnessProfile` API the CLI uses.
+import {
+  currentHarnessSettings,
+  harnessRegistry,
+  summarizeHarnessProfile,
+} from "../core/harness";
 
 export interface HarnessDetailRow {
   label: string;
@@ -19,6 +27,7 @@ export interface HarnessSectionDetail {
 
 export const HARNESS_SECTIONS: Array<{ id: string; title: string; description: string }> = [
   { id: "session", title: "Session", description: "Session ID, model, workspace and framework" },
+  { id: "profile", title: "Profile", description: "Active harness policy profile (prompt, tools, loops, completion)" },
   { id: "execution", title: "Execution", description: "Execution kernel, sandbox and strategies" },
   { id: "security", title: "Security", description: "Sandbox, trusted rules, SecretGuard and classifier" },
   { id: "context", title: "Context", description: "Context engine, compaction and tracked files" },
@@ -71,6 +80,28 @@ export function getHarnessSectionDetail(input: string): HarnessSectionDetail | n
           { label: "Detected Stack", value: snap.activeFramework, status: "active" },
         ],
       };
+    case "profile": {
+      const settings = currentHarnessSettings();
+      const active = harnessRegistry.get(settings.profile);
+      const rows: HarnessDetailRow[] = [
+        {
+          label: "Configured",
+          value: settings.profile,
+          status: active ? "active" : "disabled",
+        },
+        {
+          label: "Status",
+          value: active ? "registered" : "unknown — runs fall back to 'default'",
+          status: active ? "enabled" : "disabled",
+        },
+      ];
+      for (const line of active ? summarizeHarnessProfile(active) : []) {
+        const [label, ...rest] = line.split(":");
+        rows.push({ label: label.trim(), value: rest.join(":").trim() });
+      }
+      rows.push({ label: "Available", value: harnessRegistry.ids().join(", ") });
+      return { id, title: "Harness / Profile", rows };
+    }
     case "execution":
       return {
         id,

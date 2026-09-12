@@ -28,7 +28,7 @@ import { getToolnetConfigPath, getToolnetHome } from "./toolnetHome";
 import { BANNER_SETTINGS } from "../banner/types";
 import type { BannerSetting } from "../banner/types";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export type SandboxMode = "workspace" | "ask" | "full-access";
 export const SANDBOX_MODES: SandboxMode[] = ["workspace", "ask", "full-access"];
@@ -58,6 +58,22 @@ export const DEFAULT_ROUTING_SETTINGS: AppRoutingSettings = {
   excludedProviders: [],
 };
 
+/**
+ * Phase 81 — persisted harness profile selection. Stored in the canonical
+ * config file; no second config owner is introduced.
+ *
+ * Harness and routing are independent axes: `routing.profile` picks which model
+ * serves a request, `harness.profile` picks the policy contract that runs it.
+ */
+export interface AppHarnessSettings {
+  /** Default harness profile id (`default`, `minimal`, `coding`, ...). */
+  profile: string;
+}
+
+export const DEFAULT_HARNESS_SETTINGS: AppHarnessSettings = {
+  profile: "default",
+};
+
 export interface AppConfig {
   schemaVersion: number;
   /** Gateway URL, or null when not using ToolNet gateway. Default: null */
@@ -80,6 +96,8 @@ export interface AppConfig {
   banner: BannerSetting;
   /** Phase 80 — provider/model routing settings. */
   routing: AppRoutingSettings;
+  /** Phase 81 — harness profile (policy) settings. */
+  harness: AppHarnessSettings;
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
@@ -96,6 +114,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   updateCheckEnabled: true,
   banner: "once",
   routing: { ...DEFAULT_ROUTING_SETTINGS },
+  harness: { ...DEFAULT_HARNESS_SETTINGS },
 };
 
 /** Fields that may be carried over from the legacy ~/.toolnetapi/config.json. */
@@ -168,8 +187,28 @@ export function validateConfig(input: unknown): AppConfig {
   }
 
   cfg.routing = validateRoutingSettings(input.routing);
+  cfg.harness = validateHarnessSettings(input.harness);
 
   return cfg;
+}
+
+/**
+ * Coerce an unknown `harness` block into valid settings.
+ *
+ * The id is validated SYNTACTICALLY here, not against the registry: a
+ * hand-edited config must never brick the CLI, and silently rewriting a
+ * mistyped id would hide the mistake. The CLI (`toolnet harness use`) validates
+ * against the registry before persisting, and `toolnet harness current` reports
+ * an id the registry does not know.
+ */
+export function validateHarnessSettings(input: unknown): AppHarnessSettings {
+  const out: AppHarnessSettings = { ...DEFAULT_HARNESS_SETTINGS };
+  if (!isRecord(input)) return out;
+  if (typeof input.profile !== "string") return out;
+  const profile = input.profile.trim().toLowerCase();
+  if (!profile || /\s/.test(profile)) return out;
+  out.profile = profile;
+  return out;
 }
 
 /**
@@ -236,9 +275,15 @@ function migrateConfig(raw: Record<string, unknown>): AppConfig {
   }
 
   // v2 → v3 migration: add the routing block without touching anything else.
-  if (cfg.schemaVersion < CURRENT_SCHEMA_VERSION) {
+  if (cfg.schemaVersion < 3) {
     cfg.routing = validateRoutingSettings((raw as Record<string, unknown>).routing);
-    cfg.schemaVersion = CURRENT_SCHEMA_VERSION;
+    cfg.schemaVersion = 3;
+  }
+
+  // v3 → v4 migration (Phase 81): add the harness block.
+  if (cfg.schemaVersion < 4) {
+    cfg.harness = validateHarnessSettings((raw as Record<string, unknown>).harness);
+    cfg.schemaVersion = 4;
   }
 
   // Legacy flat config from ~/.toolnetapi/config.json (no schemaVersion).

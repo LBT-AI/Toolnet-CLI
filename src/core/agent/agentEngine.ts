@@ -63,6 +63,12 @@ export interface AgentEngineRunOptions {
   timeoutMs?: number;
   systemPrompt?: string;
   signal?: AbortSignal;
+  /**
+   * Phase 81 — harness profile id. Policy for the ONE harness (prompt blocks,
+   * tool exposure, loop bounds, completion verdict). It never selects a model
+   * and never changes a permission verdict.
+   */
+  harness?: string;
 
   /** Subagent role, used when mode === "subagent". */
   agentRole?: string;
@@ -292,6 +298,7 @@ export class AgentEngine {
       sandboxMode: options.sandboxMode,
       maxTurns: options.maxTurns,
       timeoutMs: options.timeoutMs,
+      harness: options.harness,
     });
 
     const emit = (event: AgentEvent) => options.onEvent?.(event);
@@ -348,6 +355,14 @@ export class AgentEngine {
       toolCalls: result.toolCallsCount,
       messages: result.messages as unknown as AgentResult["messages"],
       error: result.error,
+      // Phase 81 — the evidence-derived verdict and harness identity travel with
+      // the result, so a UI or an eval record can report which policy contract
+      // produced it without reaching into the harness.
+      verdict: result.verdict,
+      harnessId: result.harnessId,
+      harnessVersion: result.harnessVersion,
+      completionReasons: result.completionReasons,
+      executionEvidence: result.executionEvidence,
     };
   }
 
@@ -366,6 +381,8 @@ export class AgentEngine {
       timeoutMs: options.timeoutMs,
       systemPrompt: options.systemPrompt,
       signal: options.signal,
+      /** Phase 81 — forwarded so per-call selection beats the configured default. */
+      harness: options.harness,
       mode,
       agentRole: options.agentRole,
       agentDepth: options.agentDepth,

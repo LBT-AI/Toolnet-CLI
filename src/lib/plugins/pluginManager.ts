@@ -303,18 +303,27 @@ export class PluginManager {
     }
 
     // Isolation & Timeout wrapper
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       const timeoutMs = 30000;
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`Plugin tool '${toolName}' timed out after ${timeoutMs}ms`)), timeoutMs)
-      );
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutTimer = setTimeout(
+          () => reject(new Error(`Plugin tool '${toolName}' timed out after ${timeoutMs}ms`)),
+          timeoutMs
+        );
+      });
 
       const context = {
         cwd,
         hasCapability: (cap: PluginCapability) => plugin.grantedCapabilities.includes(cap),
       };
 
-      const execPromise = Promise.resolve(tool.execute(args, context));
+      // A *synchronous* throw from `execute` used to skip `Promise.race`
+      // entirely, orphaning `timeoutPromise`; its rejection then fired 30s later
+      // as an unhandled error attributed to an unrelated task. Deferring the call
+      // keeps the throw inside the race, and `finally` clears the timer once the
+      // call settles either way.
+      const execPromise = Promise.resolve().then(() => tool.execute(args, context));
       const res = await Promise.race([execPromise, timeoutPromise]);
 
       auditLogger.logEvent({
@@ -338,6 +347,8 @@ export class PluginManager {
         reason: `Plugin execution crashed: ${err.message}`,
       });
       return { error: `Plugin Error in '${pluginName}/${toolName}': ${err.message}` };
+    } finally {
+      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
     }
   }
 
