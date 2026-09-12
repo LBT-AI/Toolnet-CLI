@@ -55,13 +55,15 @@ describe("Slash Command Palette Redesign", () => {
     resetInputState();
   });
 
-  it("1. registry exposes exactly 38 commands (single source of truth)", () => {
-    expect(getAllCommands().length).toBe(38);
+  it("1. registry exposes exactly 39 commands (single source of truth)", () => {
+    expect(getAllCommands().length).toBe(39);
+    // Phase 80 — the model catalog view is registered in the one registry.
+    expect(getAllCommands().map((command) => command.name)).toContain("catalog");
   });
 
-  it("2. '/' lists all 38 commands; /m and /pro filter precisely", () => {
+  it("2. '/' lists all 39 commands; /m and /pro filter precisely", () => {
     const all = getSuggestions("/");
-    expect(all.length).toBe(38);
+    expect(all.length).toBe(39);
     expect(all[0].name).toBe("/help");
 
     const m = getSuggestions("/m");
@@ -84,7 +86,7 @@ describe("Slash Command Palette Redesign", () => {
 
   it("4. ↑↓ and Ctrl+P/Ctrl+N navigate with wrap-around", () => {
     setInputState("/");
-    expect(getSuggestions("/").length).toBe(38);
+    expect(getSuggestions("/").length).toBe(39);
 
     handleKey(Buffer.from("1b5b42", "hex"), callbacks); // Down
     expect(tuiState.cmdSuggestIdx).toBe(1);
@@ -95,9 +97,9 @@ describe("Slash Command Palette Redesign", () => {
     handleKey(Buffer.from("10", "hex"), callbacks); // Ctrl+P
     expect(tuiState.cmdSuggestIdx).toBe(0);
 
-    // Wrap around: Up at 0 -> last (37); Down at 37 -> 0
+    // Wrap around: Up at 0 -> last (38); Down at 38 -> 0
     handleKey(Buffer.from("1b5b41", "hex"), callbacks);
-    expect(tuiState.cmdSuggestIdx).toBe(37);
+    expect(tuiState.cmdSuggestIdx).toBe(38);
     handleKey(Buffer.from("1b5b42", "hex"), callbacks);
     expect(tuiState.cmdSuggestIdx).toBe(0);
   });
@@ -110,7 +112,7 @@ describe("Slash Command Palette Redesign", () => {
     expect(tuiState.cmdSuggestIdx).toBe(0);
 
     handleKey(Buffer.from("1b5b46", "hex"), callbacks); // End
-    expect(tuiState.cmdSuggestIdx).toBe(37);
+    expect(tuiState.cmdSuggestIdx).toBe(38);
     handleKey(Buffer.from("1b5b48", "hex"), callbacks); // Home
     expect(tuiState.cmdSuggestIdx).toBe(0);
   });
@@ -142,9 +144,9 @@ describe("Slash Command Palette Redesign", () => {
     expect(tuiState.cmdSuggestIdx).toBe(0);
     expect(getSuggestions(getInputState().buffer).map((s) => s.name)).toEqual(["/model", "/mcp"]);
 
-    // Backspace back to "/" -> all 38 again
+    // Backspace back to "/" -> all 39 again
     handleKey(Buffer.from("7f", "hex"), callbacks);
-    expect(getSuggestions(getInputState().buffer).length).toBe(38);
+    expect(getSuggestions(getInputState().buffer).length).toBe(39);
   });
 
   it("8. sheet geometry: full-width, 2-line rows, one hint line (no duplicate footer)", () => {
@@ -159,7 +161,7 @@ describe("Slash Command Palette Redesign", () => {
       expect(stripped).toContain("╭");
       expect(stripped).toContain("╰");
       expect(stripped).toContain("/help");
-      expect(stripped).toContain("1 / 38");
+      expect(stripped).toContain("1 / 39");
       // description sits on its own line under the command name
       // (border/padding chars between them are allowed; sizes vary)
       expect(stripped).toMatch(/\/help[\s│]*Show list of commands/);

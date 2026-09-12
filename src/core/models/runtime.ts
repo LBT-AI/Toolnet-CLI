@@ -23,10 +23,12 @@ import {
 } from "../../providers";
 import { setModelCapabilities } from "../../lib/reasoning";
 import { toLegacyCapabilities } from "./capabilities";
+import { hydrateCatalogFromCache } from "./cache";
 import { modelCatalog } from "./catalog";
 import { bootstrapProviderRegistry } from "./providers";
 import { providerRegistry, type ProviderRegistry } from "./registry";
 import { modelRouter } from "./router";
+import { loadRoutingConfig } from "./routingStore";
 import type { ResolvedModel } from "./types";
 
 export interface RuntimeModel {
@@ -41,13 +43,31 @@ export interface RuntimeModel {
 
 let bootstrapped = false;
 
-/** Populate the registry from existing config exactly once per process. */
+/**
+ * Populate the registry from existing config exactly once per process.
+ *
+ * Phase 80 adds two more one-time steps, both failure-tolerant:
+ *  - hydrate the catalog from the on-disk model cache (so `toolnet models`
+ *    does not need the network),
+ *  - load the persisted routing profile/policy into the router.
+ * Neither is allowed to prevent startup, and neither performs network I/O.
+ */
 export function ensureProviderRegistry(): ProviderRegistry {
   if (!bootstrapped) {
     try {
       bootstrapProviderRegistry();
     } catch {
       // A malformed providers.json must never prevent the agent from starting.
+    }
+    try {
+      hydrateCatalogFromCache();
+    } catch {
+      // A corrupt/unreadable cache must never prevent the agent from starting.
+    }
+    try {
+      loadRoutingConfig();
+    } catch {
+      // A malformed routing block must never prevent the agent from starting.
     }
     bootstrapped = true;
   }

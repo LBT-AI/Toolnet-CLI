@@ -74,9 +74,12 @@ describe("P0 — AppConfig defaults", () => {
   });
 
   it("loads sensible defaults when no config file exists", () => {
-    const { loadAppConfig } = require("../../lib/appConfig");
+    const { loadAppConfig, CURRENT_SCHEMA_VERSION } = require("../../lib/appConfig");
     const { config, created } = loadAppConfig();
-    expect(config.schemaVersion).toBe(2);
+    expect(config.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    // Phase 80 — routing settings default to auto/priority.
+    expect(config.routing.profile).toBe("auto");
+    expect(config.routing.fallback).toEqual([]);
     expect(config.sandboxMode).toBe("workspace");
     expect(config.theme).toBe("dark");
     expect(config.updateCheckEnabled).toBe(true);
@@ -134,9 +137,9 @@ describe("P0 — Config migration", () => {
     };
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(legacy));
 
-    const { loadAppConfig } = require("../../lib/appConfig");
+    const { loadAppConfig, CURRENT_SCHEMA_VERSION } = require("../../lib/appConfig");
     const { config } = loadAppConfig();
-    expect(config.schemaVersion).toBe(2);
+    expect(config.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(config.baseUrl).toBe("http://legacy:9999");
     expect(config.defaultModel).toBe("openai/gpt-4");
     expect(config.theme).toBe("light");

@@ -214,10 +214,22 @@ export interface RoutingRequest {
   preferredCapabilities?: CapabilityRequirement;
   excludedProviders?: string[];
   policy?: RoutingPolicy;
+  /**
+   * Phase 80 — named routing profile (`auto`, `quality`, `coding`, ...).
+   * A profile supplies the scorer weights and default policy; an explicit
+   * `policy` on the request still wins for ordering.
+   */
+  profile?: string;
   taskType?: string;
   sessionId?: string;
   /** Upper bound on the estimated blended price (USD per 1M tokens). */
   costLimit?: number;
+  /**
+   * Phase 80 — minimum acceptable context window. Models that DECLARE a
+   * smaller window are filtered; models that declare none are kept (unknown is
+   * not proof of insufficiency).
+   */
+  minContextWindow?: number;
   timeout?: number;
   signal?: AbortSignal;
 }
@@ -230,6 +242,10 @@ export interface ResolvedModel {
   routingReason: string;
   /** The full ordered candidate chain, resolved head first. */
   candidates: ModelDefinition[];
+  /** Phase 80 — the routing profile that produced this decision. */
+  profile?: string;
+  /** Phase 80 — scorer total for the head candidate, when score-ranked. */
+  score?: number;
 }
 
 // ── Usage / cost ────────────────────────────────────────────────────────────

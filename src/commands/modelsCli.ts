@@ -14,14 +14,23 @@
 
 import { getAppConfig, updateAppConfig } from "../lib/appConfig";
 import {
+  ROUTING_PROFILES,
+  ROUTING_PROFILE_NAMES,
+  addFallback,
   bootstrapProviderRegistry,
+  currentSettings,
+  describeProfile,
   getRoutingConfig,
   modelCatalog,
   modelRouter,
   parseModelRef,
+  persistRoutingConfig,
   providerRegistry,
   refreshAllProviders,
   refreshProvider,
+  removeFallback,
+  resetPersistedRouting,
+  setCachedProviderModels,
   type ModelDefinition,
   type ProviderDefinition,
 } from "../core/models";
@@ -52,7 +61,14 @@ USAGE:
   toolnet model <provider/model>    Validate a reference and show its resolution.
   toolnet model set <provider/model>
                                     Persist it as the default model.
-  toolnet routing [--json]          Show the active routing policy and fallbacks.
+  toolnet routing [show] [--json]   Show the active routing profile, policy and fallbacks.
+  toolnet routing profiles          List every routing profile with its weights.
+  toolnet routing profile <name>    Persist the default routing profile.
+  toolnet routing model <provider/model>
+                                    Persist the default model.
+  toolnet routing fallback add <provider/model>
+  toolnet routing fallback remove <provider/model>
+  toolnet routing reset             Restore default routing settings.
 
 NOTES:
   · Model references are 'provider/model'; the model part may itself contain
@@ -159,7 +175,7 @@ export async function runModelsCli(args: string[], deps: ModelsCliDeps = {}): Pr
     case "model":
       return handleModel(io, json, positional);
     case "routing":
-      return showRouting(io, json);
+      return handleRouting(io, json, positional);
     default:
       io.err(`Unknown models subcommand: ${group || "(none)"}`);
       io.err(MODELS_CLI_USAGE);
@@ -289,6 +305,18 @@ async function refresh(
     ? [await refreshProvider(target)]
     : await refreshAllProviders();
 
+  // Phase 80.6 — persist discovery so the next CLI invocation does not need the
+  // network. Provider-isolated: each success writes only its own entry, and a
+  // failure leaves every other provider's cached models intact.
+  for (const result of results) {
+    if (!result.ok) continue;
+    try {
+      setCachedProviderModels(result.providerId, modelCatalog.listByProvider(result.providerId));
+    } catch {
+      // A cache write failure must never fail the refresh itself.
+    }
+  }
+
   if (results.length === 0) {
     io.out("No enabled providers to refresh.");
     return 0;
@@ -402,25 +430,151 @@ function handleModel(io: ModelsCliIO, json: boolean, positional: string[]): numb
 // ── routing ─────────────────────────────────────────────────────────────────
 
 function showRouting(io: ModelsCliIO, json: boolean): number {
+  ensureRegistry();
   const config = getRoutingConfig();
-  const resolvedFallbacks = config.fallback
-    .map((reference) => {
-      try {
-        return parseModelRef(reference, { knownProviders: providerRegistry.ids() }).raw;
-      } catch {
-        return `${reference} (invalid)`;
-      }
-    });
+  const resolvedFallbacks = config.fallback.map((reference) => sanitizeReference(reference));
 
-  const payload = { ...config, fallback: resolvedFallbacks };
+  const payload = {
+    ...config,
+    fallback: resolvedFallbacks,
+    persisted: safeSettings(),
+  };
   if (json) {
     io.out(jsonPayload(payload));
     return 0;
   }
+  io.out(`Routing profile:    ${config.profile}`);
   io.out(`Routing policy:     ${config.policy}`);
   io.out(`Max attempts:       ${config.maxAttempts}`);
   io.out(`Fallback chain:     ${resolvedFallbacks.length > 0 ? resolvedFallbacks.join(" → ") : "(none)"}`);
   io.out(`Excluded providers: ${config.excludedProviders.length > 0 ? config.excludedProviders.join(", ") : "(none)"}`);
+  io.out("");
+  io.out("Profiles: " + ROUTING_PROFILE_NAMES.join(", "));
+  return 0;
+}
+
+function sanitizeReference(reference: string): string {
+  try {
+    return parseModelRef(reference, { knownProviders: providerRegistry.ids() }).raw;
+  } catch {
+    return `${reference} (invalid)`;
+  }
+}
+
+function safeSettings() {
+  try {
+    return currentSettings();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `toolnet routing …` — persist routing settings into the canonical config.
+ * Every mutation is validated before it is written; an invalid value never
+ * reaches the config file.
+ */
+function handleRouting(io: ModelsCliIO, json: boolean, positional: string[]): number {
+  const action = (positional[1] ?? "show").toLowerCase();
+
+  switch (action) {
+    case "show":
+      return showRouting(io, json);
+
+    case "profiles": {
+      const entries = ROUTING_PROFILE_NAMES.map((name) => {
+        const profile = ROUTING_PROFILES[name];
+        return { id: profile.id, label: profile.label, ranking: profile.ranking, policy: profile.policy, description: profile.description, weights: profile.weights };
+      });
+      if (json) {
+        io.out(jsonPayload(entries));
+        return 0;
+      }
+      for (const entry of entries) io.out(describeProfile(ROUTING_PROFILES[entry.id]));
+      return 0;
+    }
+
+    case "profile": {
+      const name = positional[2];
+      if (!name) {
+        io.err(`Usage: toolnet routing profile <name>`);
+        io.err(`Profiles: ${ROUTING_PROFILE_NAMES.join(", ")}`);
+        return 1;
+      }
+      const result = persistRoutingConfig({ profile: name });
+      return reportMutation(io, json, result, `Default routing profile set to '${name}'.`);
+    }
+
+    case "model": {
+      const reference = positional[2];
+      if (!reference) {
+        io.err("Usage: toolnet routing model <provider/model>");
+        return 1;
+      }
+      return setDefaultModel(io, json, reference);
+    }
+
+    case "fallback": {
+      const op = (positional[2] ?? "").toLowerCase();
+      const reference = positional[3];
+      if ((op !== "add" && op !== "remove") || !reference) {
+        io.err("Usage: toolnet routing fallback <add|remove> <provider/model>");
+        return 1;
+      }
+      const result = op === "add" ? addFallback(reference) : removeFallback(reference);
+      return reportMutation(io, json, result, `Fallback ${op === "add" ? "added" : "removed"}: ${reference}`);
+    }
+
+    case "reset": {
+      const settings = resetPersistedRouting();
+      if (json) {
+        io.out(jsonPayload(settings));
+        return 0;
+      }
+      io.out("Routing settings reset to defaults.");
+      return 0;
+    }
+
+    default:
+      io.err(`Unknown routing subcommand: ${action}`);
+      io.err(MODELS_CLI_USAGE);
+      return 1;
+  }
+}
+
+function setDefaultModel(io: ModelsCliIO, json: boolean, reference: string): number {
+  ensureRegistry();
+  let resolved;
+  try {
+    resolved = modelRouter.resolve({ model: reference, policy: "explicit" });
+  } catch (error) {
+    io.err(`Could not resolve '${reference}': ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  updateAppConfig({ defaultModel: resolved.model.id });
+  if (json) {
+    io.out(jsonPayload({ defaultModel: resolved.model.id }));
+    return 0;
+  }
+  io.out(`Default model set to '${resolved.model.id}'.`);
+  return 0;
+}
+
+function reportMutation(
+  io: ModelsCliIO,
+  json: boolean,
+  result: { ok: true; settings: unknown } | { ok: false; errors: string[] },
+  successMessage: string,
+): number {
+  if (!result.ok) {
+    for (const error of result.errors) io.err(error);
+    return 1;
+  }
+  if (json) {
+    io.out(jsonPayload(result.settings));
+    return 0;
+  }
+  io.out(successMessage);
   return 0;
 }
 

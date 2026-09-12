@@ -10,10 +10,15 @@
  * - secrets are NOT stored here — API keys live in the key manager
  *   (`src/lib/keys.ts`, file mode 0600)
  *
- * Schema v2 (current):
+ * Schema v2:
  * - gatewayUrl defaults to null (no mandatory localhost connection)
  * - provider field added (references src/providers/registry)
  * - No hardcoded gateway URLs
+ *
+ * Schema v3 (current):
+ * - `routing` block added (Phase 80): default profile, policy, fallback chain,
+ *   attempt bound and excluded providers. Backward compatible — a v2 config
+ *   migrates by gaining the defaults.
  */
 
 import fs from "node:fs";
@@ -23,10 +28,35 @@ import { getToolnetConfigPath, getToolnetHome } from "./toolnetHome";
 import { BANNER_SETTINGS } from "../banner/types";
 import type { BannerSetting } from "../banner/types";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export type SandboxMode = "workspace" | "ask" | "full-access";
 export const SANDBOX_MODES: SandboxMode[] = ["workspace", "ask", "full-access"];
+
+/**
+ * Phase 80 — persisted routing settings. Stored in the canonical config file;
+ * no second config owner is introduced.
+ */
+export interface AppRoutingSettings {
+  /** Default routing profile (`auto`, `quality`, `coding`, ...). */
+  profile: string;
+  /** Default ordering policy (`priority`, `cheapest`, `fastest`, ...). */
+  policy: string;
+  /** Ordered fallback model references. */
+  fallback: string[];
+  /** Attempts per routing decision, including the head. */
+  maxAttempts: number;
+  /** Providers never considered unless explicitly named. */
+  excludedProviders: string[];
+}
+
+export const DEFAULT_ROUTING_SETTINGS: AppRoutingSettings = {
+  profile: "auto",
+  policy: "priority",
+  fallback: [],
+  maxAttempts: 3,
+  excludedProviders: [],
+};
 
 export interface AppConfig {
   schemaVersion: number;
@@ -48,6 +78,8 @@ export interface AppConfig {
   updateCheckEnabled: boolean;
   /** Startup banner: "once" (default) | "always" | "never". */
   banner: BannerSetting;
+  /** Phase 80 — provider/model routing settings. */
+  routing: AppRoutingSettings;
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
@@ -63,6 +95,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   updateCheckIntervalHours: 24,
   updateCheckEnabled: true,
   banner: "once",
+  routing: { ...DEFAULT_ROUTING_SETTINGS },
 };
 
 /** Fields that may be carried over from the legacy ~/.toolnetapi/config.json. */
@@ -134,7 +167,47 @@ export function validateConfig(input: unknown): AppConfig {
     cfg.banner = input.banner as BannerSetting;
   }
 
+  cfg.routing = validateRoutingSettings(input.routing);
+
   return cfg;
+}
+
+/**
+ * Coerce an unknown `routing` block into valid settings. Invalid fields fall
+ * back to defaults rather than throwing — a hand-edited config must not brick
+ * the CLI. Model references are validated by the router, not here.
+ */
+export function validateRoutingSettings(input: unknown): AppRoutingSettings {
+  const out: AppRoutingSettings = { ...DEFAULT_ROUTING_SETTINGS };
+  if (!isRecord(input)) return out;
+
+  if (typeof input.profile === "string" && input.profile.trim()) {
+    out.profile = input.profile.trim().toLowerCase();
+  }
+  if (typeof input.policy === "string" && input.policy.trim()) {
+    out.policy = input.policy.trim().toLowerCase();
+  }
+  if (Array.isArray(input.fallback)) {
+    out.fallback = input.fallback
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0 && !/\s/.test(entry));
+  }
+  if (
+    typeof input.maxAttempts === "number" &&
+    Number.isFinite(input.maxAttempts) &&
+    input.maxAttempts >= 1 &&
+    input.maxAttempts <= 10
+  ) {
+    out.maxAttempts = Math.floor(input.maxAttempts);
+  }
+  if (Array.isArray(input.excludedProviders)) {
+    out.excludedProviders = input.excludedProviders
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => entry.length > 0);
+  }
+  return out;
 }
 
 /** Migrate older/legacy configs forward to the current schema version. */
@@ -159,6 +232,12 @@ function migrateConfig(raw: Record<string, unknown>): AppConfig {
     if (cfg.keyProvider && !cfg.provider) {
       cfg.provider = cfg.keyProvider;
     }
+    cfg.schemaVersion = CURRENT_SCHEMA_VERSION;
+  }
+
+  // v2 → v3 migration: add the routing block without touching anything else.
+  if (cfg.schemaVersion < CURRENT_SCHEMA_VERSION) {
+    cfg.routing = validateRoutingSettings((raw as Record<string, unknown>).routing);
     cfg.schemaVersion = CURRENT_SCHEMA_VERSION;
   }
 

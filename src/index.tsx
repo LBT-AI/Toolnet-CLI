@@ -115,6 +115,11 @@ SUBCOMMANDS:
   usage [--json]        Show token usage for current session
   budget [show|set|clr] Manage spending budget
   doctor [--json]       Run diagnostic checks
+  models [--provider <id>]          List catalog models with capabilities and price
+  model [set] <provider/model>      Show or persist the default model
+  providers                         List providers with status, models and health
+  routing [profile|model|fallback]  Inspect or persist routing profile/policy
+  eval <list|run|compare|results|show>  Deterministic model evaluation
   completion [bash|zsh|fish|install] Shell auto-completion scripts
   update [--check]      Check for and apply updates
   version [--json]      Version and build metadata
@@ -134,6 +139,14 @@ INTERACTIVE COMMANDS:
 if (subCmd === "models" || subCmd === "model" || subCmd === "providers" || subCmd === "routing") {
   const { runModelsCli } = await import("./commands/modelsCli");
   const code = await runModelsCli([subCmd, ...args.slice(1)]);
+  process.exit(code);
+}
+
+// ---- Eval subcommands (Phase 80.18) ----
+// `toolnet eval` measures models on the production AgentHarness path.
+if (subCmd === "eval") {
+  const { runEvalCli } = await import("./commands/evalCli");
+  const code = await runEvalCli(args.slice(1));
   process.exit(code);
 }
 

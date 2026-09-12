@@ -26,11 +26,21 @@ import { healthRank } from "./health";
 import { missingCapabilities } from "./capabilities";
 import { parseModelRef } from "./ref";
 import { providerRegistry, ProviderRegistry } from "./registry";
-import type { ModelDefinition, ModelRef, ProviderDefinition, ResolvedModel, RoutingPolicy, RoutingRequest } from "./types";
+import type { ModelDefinition, ModelRef, ProviderDefinition, ProviderHealth, ResolvedModel, RoutingPolicy, RoutingRequest } from "./types";
 import { blendedPrice, satisfiesCapabilities } from "./types";
+import { indexProfiles, type ModelPerformanceProfile } from "./performance";
+import {
+  DEFAULT_ROUTING_PROFILE,
+  resolveRoutingProfile,
+  type RoutingProfileDefinition,
+  type RoutingProfileName,
+} from "./profiles";
+import { latencyScore, scoreModel } from "./scoring";
 
 export interface RoutingConfig {
   policy: RoutingPolicy;
+  /** Phase 80 — default routing profile when a request names none. */
+  profile: RoutingProfileName;
   /** Ordered fallback references appended after the head candidate. */
   fallback: string[];
   /** Attempts per routing decision, including the head. */
@@ -41,6 +51,7 @@ export interface RoutingConfig {
 
 let routingConfig: RoutingConfig = {
   policy: "priority",
+  profile: DEFAULT_ROUTING_PROFILE,
   fallback: [],
   maxAttempts: 3,
   excludedProviders: [],
@@ -56,7 +67,13 @@ export function getRoutingConfig(): RoutingConfig {
 }
 
 export function resetRoutingConfig(): void {
-  routingConfig = { policy: "priority", fallback: [], maxAttempts: 3, excludedProviders: [] };
+  routingConfig = {
+    policy: "priority",
+    profile: DEFAULT_ROUTING_PROFILE,
+    fallback: [],
+    maxAttempts: 3,
+    excludedProviders: [],
+  };
 }
 
 interface Candidate {
@@ -64,6 +81,8 @@ interface Candidate {
   model: ModelDefinition;
   rank: number;
   reason: string;
+  /** Phase 80 — scorer total when a scoring profile ranked this candidate. */
+  score?: number;
 }
 
 export interface RouterOptions {
@@ -72,17 +91,25 @@ export interface RouterOptions {
   /** Active-provider lookup used to qualify bare references. Injectable so
    *  routing decisions are reproducible in tests. */
   activeProviderId?: () => string | null;
+  /**
+   * Phase 80 — OPTIONAL eval evidence. When absent (the default), routing works
+   * purely from capability/health/metadata; the eval component scores NEUTRAL.
+   * Never a hard dependency, so a fresh install routes the same as before.
+   */
+  performance?: () => ModelPerformanceProfile[] | Map<string, ModelPerformanceProfile>;
 }
 
 export class ModelRouter {
   private readonly registry: ProviderRegistry;
   private readonly catalog: ModelCatalog;
   private readonly activeProviderId: () => string | null;
+  private readonly performanceSource?: () => ModelPerformanceProfile[] | Map<string, ModelPerformanceProfile>;
 
   constructor(options: RouterOptions = {}) {
     this.registry = options.registry ?? providerRegistry;
     this.catalog = options.catalog ?? modelCatalog;
     this.activeProviderId = options.activeProviderId ?? activeProviderId;
+    this.performanceSource = options.performance;
   }
 
   // ── Resolution ────────────────────────────────────────────────────────────
@@ -92,7 +119,11 @@ export class ModelRouter {
       throw new ModelRoutingError("Routing cancelled by caller.", { retryable: false });
     }
 
-    const policy: RoutingPolicy = request.policy ?? routingConfig.policy;
+    // Phase 80 — resolve the profile first; it supplies default policy, weights
+    // and (optionally) required capabilities / context floor.
+    const profile = resolveRoutingProfile(request.profile ?? routingConfig.profile);
+    const policy: RoutingPolicy =
+      request.policy ?? (profile.ranking === "score" ? profile.policy : routingConfig.policy);
     const excluded = new Set(
       [...routingConfig.excludedProviders, ...(request.excludedProviders ?? [])].map((id) => id.toLowerCase()),
     );
@@ -104,7 +135,7 @@ export class ModelRouter {
       return this.buildResolved(pinned, [pinned], `explicit ${pinned.model.id}`);
     }
 
-    const candidates = this.rankCandidates(request, policy, excluded);
+    const candidates = this.rankCandidates(request, policy, excluded, profile);
 
     // The explicit pin always heads the chain, even when the policy would have
     // ranked another model first.
@@ -134,9 +165,9 @@ export class ModelRouter {
 
     const reason = pinned
       ? `explicit ${head.model.id}${appliedFallback ? " (fallback policy enabled)" : ""}`
-      : `${policy} → ${head.model.id} (${head.reason})`;
+      : `${profile.id}/${policy} → ${head.model.id} (${head.reason})`;
 
-    return this.buildResolved(head, chain, reason);
+    return this.buildResolved(head, chain, reason, profile.id, head.score);
   }
 
   /**
@@ -226,7 +257,17 @@ export class ModelRouter {
 
   // ── Candidate ranking ─────────────────────────────────────────────────────
 
-  private rankCandidates(request: RoutingRequest, policy: RoutingPolicy, excluded: Set<string>): Candidate[] {
+  private rankCandidates(
+    request: RoutingRequest,
+    policy: RoutingPolicy,
+    excluded: Set<string>,
+    profile: RoutingProfileDefinition,
+  ): Candidate[] {
+    // The profile may impose its own requirements (e.g. `coding` requires tools);
+    // an explicit request requirement always wins on conflict.
+    const required = { ...(profile.requiredCapabilities ?? {}), ...(request.requiredCapabilities ?? {}) };
+    const minContext = request.minContextWindow ?? profile.minContextWindow;
+
     const providers = new Map<string, ProviderDefinition>();
     for (const provider of this.registry.list()) {
       if (!provider.enabled || provider.status === "disabled") continue;
@@ -240,7 +281,8 @@ export class ModelRouter {
       if (request.provider && provider.id !== request.provider.toLowerCase()) continue;
       for (const model of this.catalog.listByProvider(provider.id)) {
         if (model.status === "disabled") continue;
-        if (!satisfiesCapabilities(model.capabilities, request.requiredCapabilities)) continue;
+        if (!satisfiesCapabilities(model.capabilities, required)) continue;
+        if (!this.meetsContext(model, minContext)) continue;
         if (!this.withinCostLimit(model, request.costLimit)) continue;
         pool.push({
           provider,
@@ -265,8 +307,52 @@ export class ModelRouter {
     const healthyPool = pool.filter((c) => this.registry.healthOf(c.provider.id).state !== "unavailable");
     if (healthyPool.length > 0) pool = healthyPool;
 
+    // A scoring profile ranks by the deterministic scorer UNLESS the caller
+    // explicitly asked for a policy (cheapest/fastest/...), which wins.
+    const useScore = profile.ranking === "score" && request.policy === undefined;
+    if (useScore) {
+      const performance = this.performanceIndex();
+      const scores = new Map<string, number>();
+      for (const candidate of pool) {
+        scores.set(
+          candidate.model.id,
+          scoreModel({
+            model: candidate.model,
+            provider: candidate.provider,
+            health: this.registry.healthOf(candidate.provider.id),
+            profile,
+            request,
+            performance: performance?.get(candidate.model.id),
+          }).total,
+        );
+      }
+      pool.sort((a, b) => {
+        const delta = (scores.get(b.model.id) ?? 0) - (scores.get(a.model.id) ?? 0);
+        return delta !== 0 ? delta : this.tieBreak(a, b);
+      });
+      return pool.map((candidate) =>
+        this.finalize(candidate, policy, request, profile, scores.get(candidate.model.id)),
+      );
+    }
+
     pool.sort((a, b) => this.compare(a, b, policy, request));
     return pool.map((candidate) => this.finalize(candidate, policy, request));
+  }
+
+  /** Merge the optional eval profiles into a lookup, once per resolve. */
+  private performanceIndex(): Map<string, ModelPerformanceProfile> | undefined {
+    const source = this.performanceSource?.();
+    if (!source) return undefined;
+    if (source instanceof Map) return source;
+    return indexProfiles(source);
+  }
+
+  /** Unknown context is NOT proof of insufficiency, so it is kept. */
+  private meetsContext(model: ModelDefinition, minContext: number | undefined): boolean {
+    if (!minContext || minContext <= 0) return true;
+    const context = model.contextWindow ?? model.limits?.contextWindow;
+    if (typeof context !== "number" || !Number.isFinite(context)) return true;
+    return context >= minContext;
   }
 
   private compare(a: Candidate, b: Candidate, policy: RoutingPolicy, request: RoutingRequest): number {
@@ -304,6 +390,11 @@ export class ModelRouter {
     }
 
     // Common tie-breakers: health, then declared priority, then stable id.
+    return this.tieBreak(a, b);
+  }
+
+  /** Deterministic, profile-independent tie-breakers. */
+  private tieBreak(a: Candidate, b: Candidate): number {
     const healthDelta = healthRank(this.registry.healthOf(a.provider.id).state) -
       healthRank(this.registry.healthOf(b.provider.id).state);
     if (healthDelta !== 0) return healthDelta;
@@ -311,13 +402,19 @@ export class ModelRouter {
     return a.model.id.localeCompare(b.model.id);
   }
 
-  private finalize(candidate: Candidate, policy: RoutingPolicy, request: RoutingRequest): Candidate {
+  private finalize(
+    candidate: Candidate,
+    policy: RoutingPolicy,
+    request: RoutingRequest,
+    profile?: RoutingProfileDefinition,
+    score?: number,
+  ): Candidate {
     const preferred = preferredScore(candidate.model, request.preferredCapabilities);
-    return {
-      ...candidate,
-      rank: preferred,
-      reason: `selected by '${policy}' across '${candidate.provider.id}'`,
-    };
+    const reason =
+      profile && score !== undefined
+        ? `scored ${score.toFixed(3)} by profile '${profile.id}'`
+        : `selected by '${policy}' across '${candidate.provider.id}'`;
+    return { ...candidate, rank: preferred, reason, ...(score !== undefined ? { score } : {}) };
   }
 
   private describe(pair: { provider: ProviderDefinition; model: ModelDefinition }, reason: string): Candidate {
@@ -334,13 +431,21 @@ export class ModelRouter {
 
   // ── Output ────────────────────────────────────────────────────────────────
 
-  private buildResolved(head: Candidate, chain: Candidate[], reason: string): ResolvedModel {
+  private buildResolved(
+    head: Candidate,
+    chain: Candidate[],
+    reason: string,
+    profile?: string,
+    score?: number,
+  ): ResolvedModel {
     return {
       provider: head.provider,
       model: head.model,
       capabilities: head.model.capabilities,
       routingReason: reason,
       candidates: dedupeById(chain).map((candidate) => candidate.model),
+      ...(profile ? { profile } : {}),
+      ...(score !== undefined ? { score } : {}),
     };
   }
 }
@@ -363,6 +468,24 @@ function preferredScore(model: ModelDefinition, preferred: RoutingRequest["prefe
     if (value === true && model.capabilities[key as keyof typeof model.capabilities] === true) score += 1;
   }
   return score;
+}
+
+/**
+ * Phase 80 §5 — observed provider speed. `sufficient: false` means there are
+ * not enough successful samples to judge, so `fastest` routing must fall back to
+ * health/priority rather than inventing a latency.
+ */
+export function providerSpeed(
+  registry: ProviderRegistry,
+  providerId: string,
+): { sufficient: boolean; latencyMs?: number; samples: number } {
+  const health: ProviderHealth = registry.healthOf(providerId);
+  const latency = latencyScore(health);
+  return {
+    sufficient: latency.sufficient,
+    latencyMs: latency.sufficient ? health.latencyMs : undefined,
+    samples: health.successCount,
+  };
 }
 
 function activeProviderId(): string | null {

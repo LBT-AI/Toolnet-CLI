@@ -38,6 +38,7 @@ import { searchCommand } from "./search";
 import { policyCommand } from "./policy";
 import { queueCommand } from "./queue";
 import { permissionsCommand } from "./permissions";
+import { catalogCommand } from "./catalog";
 
 export interface CommandContext {
   gateway?: GatewayClient | null;
@@ -81,6 +82,7 @@ const builtinCommands: Command[] = [
   helpCommand,
   statusCommand,
   modelCommand,
+  catalogCommand,
   exitCommand,
   toolsCommand,
   mcpCommand,

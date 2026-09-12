@@ -85,10 +85,13 @@ describe("Provider Architecture — Fresh Install", () => {
   });
 
   it("fresh install config has provider=null and gatewayUrl=null", () => {
-    const { resetAppConfigCache, loadAppConfig } = require("../../lib/appConfig");
+    const { resetAppConfigCache, loadAppConfig, CURRENT_SCHEMA_VERSION } = require("../../lib/appConfig");
     resetAppConfigCache();
     const { config } = loadAppConfig();
-    expect(config.schemaVersion).toBe(2);
+    expect(config.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    // Phase 80 — routing defaults ship with the config.
+    expect(config.routing.profile).toBe("auto");
+    expect(config.routing.policy).toBe("priority");
     expect(config.gatewayUrl).toBeNull();
   });
 
@@ -731,7 +734,8 @@ describe("Provider Architecture — Registry & Adapter", () => {
 
     // Reload appConfig
     const { config } = loadAppConfig();
-    expect(config.schemaVersion).toBe(2);
+    const { CURRENT_SCHEMA_VERSION } = require("../../lib/appConfig");
+    expect(config.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(config.sandboxMode).toBe("workspace");
     expect(config.baseUrl).toBe("https://api.openai.com/v1");
   });

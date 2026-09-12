@@ -110,8 +110,14 @@ export async function discoverProviderModels(
 
   if (definition.kind === "openrouter") {
     const instance = instanceFor(definition);
-    if (instance instanceof OpenRouterProvider) {
-      const records = await instance.discoverModels({
+    // Duck-type the capability instead of `instanceof`: the provider factory
+    // constructs adapters through `require`, while this module imports the class
+    // through ESM, so the two class identities can differ and an `instanceof`
+    // check would silently skip OpenRouter's raw discovery (returning an empty
+    // catalog instead of an error).
+    const discover = (instance as { discoverModels?: unknown } | null)?.discoverModels;
+    if (typeof discover === "function") {
+      const records = await (instance as OpenRouterProvider).discoverModels({
         signal: options.signal,
         timeoutMs: options.timeoutMs,
       });

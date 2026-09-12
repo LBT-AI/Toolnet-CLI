@@ -13,7 +13,7 @@
  *   model keeps settings)
  * - renderReasoningPanel (expanded box, collapsed line, CJK safety, no panel
  *   when there is no content)
- * - palette still has exactly 38 commands (single registry)
+ * - palette still has exactly 39 commands (single registry)
  */
 
 import { describe, it, expect, beforeEach } from "bun:test";
@@ -271,9 +271,9 @@ describe("Reasoning UX — thinking panel renderer", () => {
 });
 
 describe("Reasoning UX — registry integration", () => {
-  it("palette exposes exactly 38 commands including /reasoning", () => {
+  it("palette exposes exactly 39 commands including /reasoning", () => {
     const all = getAllCommands();
-    expect(all.length).toBe(38);
+    expect(all.length).toBe(39);
     expect(all.some((c) => c.name === "reasoning")).toBe(true);
     const r = all.find((c) => c.name === "reasoning")!;
     expect(r.aliases).toContain("reason");
