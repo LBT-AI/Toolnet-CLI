@@ -20,6 +20,7 @@ const KNOWN_SUBCMDS = new Set([
   "issue",
   "plugin",
   "plugins",
+  "mcp",
   "audit",
   "telemetry",
   "config",
@@ -87,6 +88,12 @@ SUBCOMMANDS:
   plugin install <pkg>  Install a plugin from directory or package
   plugin remove <name>  Uninstall a plugin
   plugin info <name>    Show details of an installed plugin
+  mcp list              List configured MCP servers and their status
+  mcp status [name]     Show MCP diagnostics (transport, tools, auth)
+  mcp connect <name>    Connect an MCP server and register its tools
+  mcp disconnect <name> Disconnect an MCP server and withdraw its tools
+  mcp auth <name>       Run the OAuth flow for a remote MCP server
+  mcp logout <name>     Remove stored MCP credentials
   audit verify [--json] Verify tamper-resistant security audit log chain
   telemetry [enable|disable|status] Manage crash reporting telemetry
   config init           Run the first-run setup wizard
@@ -254,6 +261,13 @@ SUBCOMMANDS:
 
   console.error("Usage: toolnet plugin [list|install <dir>|remove <name>|info <name>]");
   process.exit(1);
+}
+
+// ---- MCP subcommand (Phase 78.32) ----
+if (subCmd === "mcp") {
+  const { runMcpCli } = await import("./commands/mcpCli");
+  const code = await runMcpCli(args.slice(1));
+  process.exit(code);
 }
 
 // ---- Audit subcommand ----

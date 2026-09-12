@@ -1,17 +1,37 @@
 /**
  * Phase 77.13/77.14 — Canonical MCP manager types.
+ * Phase 78.4/78.31 — Remote status machine + extension diagnostics.
  */
 
 import type { McpConfigSourceKind } from "../../lib/mcpRunner";
 import type { NormalizedMcpTool } from "./schema";
 
+/**
+ * Canonical status machine (Phase 78.4).
+ *
+ * `connected: boolean` is deliberately NOT the source of truth: a remote server
+ * can be reachable but unauthenticated (`needs_auth`), registered-but-unknown
+ * (`needs_client_registration`), or simply not attempted (`disabled`). The
+ * legacy stdio states (`untrusted`, `not-installed`, `unavailable`) are kept so
+ * the Phase 77 surface stays source-compatible.
+ */
 export type McpServerStatus =
   | "connected"
+  | "connecting"
   | "disabled"
+  | "failed"
+  | "needs_auth"
+  | "needs_client_registration"
+  | "disconnected"
   | "untrusted"
   | "not-installed"
-  | "failed"
   | "unavailable";
+
+/** Transport actually in use for a server. */
+export type McpTransportKind = "stdio" | "streamable-http" | "sse";
+
+/** How the server is reached. */
+export type McpServerKind = "stdio" | "remote";
 
 export interface McpServerInfo {
   serverId: string;
@@ -19,7 +39,15 @@ export interface McpServerInfo {
   status: McpServerStatus;
   sourceKind: McpConfigSourceKind;
   sourceFile: string;
+  /** Empty string for remote servers (they have a URL instead). */
   command: string;
+  /** Present for remote servers only. Never includes header values. */
+  url?: string;
+  kind: McpServerKind;
+  /** Transport in use once connected (or the last attempted one). */
+  transport?: McpTransportKind;
+  /** True when an access token is stored and bound to this server's URL. */
+  authenticated?: boolean;
   error?: string;
   toolCount: number;
   connectedAt?: number;
@@ -44,7 +72,7 @@ export interface McpSyncReport {
   /** Servers whose tools are now in the canonical registry. */
   connected: McpServerInfo[];
   skipped: Array<{ serverId: string; name: string; status: McpServerStatus; reason: string }>;
-  failed: Array<{ serverId: string; name: string; error: string }>;
+  failed: Array<{ serverId: string; name: string; error: string; status: McpServerStatus }>;
   registeredToolCount: number;
   rejectedToolNames: string[];
 }
@@ -69,3 +97,30 @@ export interface DiscoveredMcpTool {
   tool: NormalizedMcpTool;
   warnings: string[];
 }
+
+// ── Phase 78.31 — extension diagnostics ─────────────────────────────────────
+
+/**
+ * Canonical diagnostic model surfaced by `toolnet mcp status` / the TUI.
+ * Intentionally narrow: it can never carry a token, header value, or verifier.
+ */
+export interface ExtensionStatus {
+  id: string;
+  type: "plugin" | "mcp";
+  status: "connected" | "disabled" | "failed" | "needs_auth" | "needs_client_registration" | "disconnected";
+  transport?: McpTransportKind;
+  toolCount?: number;
+  error?: string;
+  authenticated?: boolean;
+}
+
+/** Structured MCP lifecycle event emitted by the manager (Phase 78.6). */
+export interface McpServerEvent {
+  type: "tools-changed" | "status-changed";
+  serverId: string;
+  name: string;
+  status: McpServerStatus;
+  toolCount?: number;
+}
+
+export type McpServerEventListener = (event: McpServerEvent) => void;

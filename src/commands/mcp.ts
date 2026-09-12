@@ -6,6 +6,24 @@ import {
   getLocalMcpServers,
   mcpTrustManager,
 } from "../lib/mcpRunner";
+import { runMcpCli } from "./mcpCli";
+
+/**
+ * Phase 78.34 — the TUI is a CONSUMER of the canonical MCP manager. These
+ * subcommands delegate to the same headless CLI so the TUI never connects or
+ * authenticates a transport itself.
+ */
+async function delegateToCli(subArgs: string[], ctx: CommandContext) {
+  const lines: string[] = [];
+  const code = await runMcpCli(subArgs, {
+    io: {
+      out: (line) => lines.push(line),
+      err: (line) => lines.push(`\u001b[31m${line}\u001b[0m`),
+    },
+  });
+  if (lines.length === 0) lines.push(code === 0 ? "Done." : "Command failed.");
+  ctx.addMessage("assistant", lines.join("\n"));
+}
 
 async function showMcpStatus(ctx: CommandContext) {
   const { gateway, addMessage } = ctx;
@@ -87,6 +105,12 @@ async function showMcpStatus(ctx: CommandContext) {
   lines.push("  /mcp remove <name>      Remove a local MCP server");
   lines.push("  /mcp enable <name>      Trust + enable a discovered server");
   lines.push("  /mcp disable <name>     Revoke trust for a server");
+  lines.push("  /mcp list               List configured servers and status");
+  lines.push("  /mcp show [name]        Diagnostics (transport, tools, auth)");
+  lines.push("  /mcp connect <name>     Connect a server and register its tools");
+  lines.push("  /mcp disconnect <name>  Disconnect and withdraw its tools");
+  lines.push("  /mcp auth <name>        OAuth flow for a remote server");
+  lines.push("  /mcp logout <name>      Remove stored credentials");
 
   addMessage("assistant", lines.join("\n"));
 }
@@ -227,7 +251,7 @@ export const mcpCommand: Command = {
   name: "mcp",
   aliases: [],
   description: "Manage MCP (Model Context Protocol) plugins and registry",
-  usage: "/mcp [registry|tools|add|remove|enable|disable|status] ...",
+  usage: "/mcp [list|show|connect|disconnect|auth|logout|registry|tools|add|remove|enable|disable|status] ...",
   async handler(args: string[], ctx: CommandContext) {
     if (args.length === 0) {
       await showMcpStatus(ctx);
@@ -243,7 +267,14 @@ export const mcpCommand: Command = {
       case "remove":    await removeMcp(subArgs, ctx); break;
       case "enable":    await enableMcp(subArgs, ctx); break;
       case "disable":   await disableMcp(subArgs, ctx); break;
-      default:          ctx.addMessage("assistant", `Unknown: ${sub}\nTry: /mcp, /mcp registry, /mcp tools <url>, /mcp add, /mcp enable, /mcp disable`); break;
+      // Phase 78 — remote MCP + auth, delegated to the one manager via the CLI.
+      case "list":      await delegateToCli(["list", ...subArgs], ctx); break;
+      case "show":      await delegateToCli(["status", ...subArgs], ctx); break;
+      case "connect":   await delegateToCli(["connect", ...subArgs], ctx); break;
+      case "disconnect":await delegateToCli(["disconnect", ...subArgs], ctx); break;
+      case "auth":      await delegateToCli(["auth", ...subArgs], ctx); break;
+      case "logout":    await delegateToCli(["logout", ...subArgs], ctx); break;
+      default:          ctx.addMessage("assistant", `Unknown: ${sub}\nTry: /mcp, /mcp list, /mcp show, /mcp connect <name>, /mcp auth <name>, /mcp logout <name>, /mcp enable <name>`); break;
     }
   },
 };

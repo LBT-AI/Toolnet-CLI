@@ -16,22 +16,20 @@
  *  - Every model-callable MCP tool still executes through ToolGateway →
  *    SecurityEngine (mcp__ prefix NEVER auto-allows).
  *
- * Remote MCP transport review (Layer 4 Phase 4):
- *  - This module currently ONLY uses StdioClientTransport. There is NO
- *    HTTP / SSE / StreamableHTTP transport in production code paths.
- *  - If a future PR adds StreamableHTTP or HTTP+SSE transport, it MUST
- *    route every outbound call through `safeFetch` (src/lib/security/safeFetch.ts)
- *    so the URL-scheme guard (http:/https: only, file:/javascript:/data:/ftp:
- *    rejected), localhost policy, redirect hop limit (≤3), per-hop revalidation,
- *    cross-origin header strip (no Authorization/Cookie forwarded), and
- *    auth-header redaction in errors are enforced.
- *  - Direct `fetch()` to an MCP remote endpoint is FORBIDDEN; any such
- *    occurrence will be flagged by the audit grep in t9.
- *  - No implicit OAuth flow is wired. If a remote MCP server requires
- *    OAuth/bearer auth, the auth header MUST be passed via the explicit
- *    `auth` config field and routed through the safeFetch allow-list;
- *    it MUST never be read from a global env var and MUST be redacted
- *    in tool output, logs, and audit.
+ * Remote MCP transports (Phase 78):
+ *  - This module is the STDIO executor only. Every remote (HTTP/SSE) server is
+ *    reached through `src/core/mcp/remoteTransport.ts`, which is the sole place
+ *    a remote transport is constructed (enforced by an architecture test).
+ *  - Remote requests are issued through `src/core/mcp/remoteFetch.ts`, which
+ *    enforces the same guardrails this comment used to reserve for a future PR:
+ *    http:/https: only, loopback only when the config targets loopback, manual
+ *    redirects with per-hop revalidation (≤3 hops), credential headers dropped
+ *    on an origin change, a hard timeout, and redacted error text.
+ *  - Direct `fetch()` to an MCP remote endpoint from anywhere but
+ *    `src/core/mcp/**` is FORBIDDEN and flagged by an architecture test.
+ *  - OAuth credentials live in `<toolnetHome>/mcp-auth.json` (mode 0600,
+ *    URL-bound). They are never read from a global env var and never appear in
+ *    tool output, diagnostics, logs, or audit payloads.
  */
 
 import fs from "node:fs";
@@ -59,12 +57,43 @@ function numEnv(name: string, def: number): number {
 
 // ── Config types ───────────────────────────────────────────────────────────
 
+/**
+ * One MCP server entry. Stdio entries carry `command`; remote entries
+ * (Phase 78.2) carry `url` and are reached over Streamable HTTP / SSE.
+ * Discovery accepts both, so remote servers are first-class config citizens
+ * and flow through the same canonical McpManager.
+ */
 export interface McpServerConfig {
-  command: string;
+  /** Present for stdio servers. */
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
   disabled?: boolean;
+  /** Explicit kind. Inferred from `command` / `url` when absent. */
+  type?: "stdio" | "remote";
+  /** Present for remote servers. */
+  url?: string;
+  enabled?: boolean;
+  /** Connect timeout (ms) for remote servers. */
+  timeout?: number;
+  /** Custom HTTP headers for remote servers. Values are never logged. */
+  headers?: Record<string, string>;
+  /** OAuth configuration for protected remote servers. */
+  oauth?: {
+    clientId?: string;
+    clientSecret?: string;
+    scope?: string;
+    redirectUri?: string;
+    callbackPort?: number;
+  };
+}
+
+/** True when the entry describes a remote (HTTP/SSE) server. */
+export function isRemoteMcpConfig(config: McpServerConfig): boolean {
+  if (config.type === "remote") return true;
+  if (config.type === "stdio") return false;
+  return typeof config.url === "string" && !config.command;
 }
 
 export type McpConfigSourceKind =
@@ -163,9 +192,12 @@ export interface McpTrustRecord {
 
 export function computeServerFingerprint(config: McpServerConfig): string {
   const payload = JSON.stringify({
-    command: config.command,
+    command: config.command ?? "",
     args: [...(config.args || [])].sort(),
     cwd: config.cwd || "",
+    // A remote server pointed at a different URL is a different server: trust
+    // must be re-confirmed, and credentials must not carry over (Phase 78.8).
+    url: config.url ?? "",
   });
   // FNV-1a 32-bit — short, deterministic, not security-critical (we only need
   // change detection, not tamper resistance; the file itself is user-local).
@@ -266,7 +298,10 @@ function readMcpConfigFile(filePath: string): Record<string, McpServerConfig> {
     if (!servers || typeof servers !== "object") return {};
     const out: Record<string, McpServerConfig> = {};
     for (const [name, cfg] of Object.entries(servers)) {
-      if (cfg && typeof cfg === "object" && typeof (cfg as any).command === "string") {
+      if (!cfg || typeof cfg !== "object") continue;
+      const record = cfg as Record<string, unknown>;
+      // Accept stdio (command) and remote (url) entries alike.
+      if (typeof record.command === "string" || typeof record.url === "string") {
         out[name] = cfg as McpServerConfig;
       }
     }
@@ -374,6 +409,9 @@ export function mcpChildEnvNames(config: McpServerConfig): string[] {
  * spawn is used by /mcp status checks and tests.
  */
 export function spawnMcpServer(name: string, config: McpServerConfig, baseDir: string = process.cwd()): ChildProcess {
+  if (!config.command) {
+    throw new Error(`MCP server '${name}' is remote (url) and has no local command to spawn.`);
+  }
   const env = buildMcpChildEnv(config);
   const cwd = config.cwd ? path.resolve(baseDir, config.cwd) : baseDir;
   return spawn(config.command, config.args || [], {
@@ -448,6 +486,10 @@ export async function connectServer(server: LocalMcpServer): Promise<boolean> {
     const envRecord: Record<string, string> = {};
     for (const [k, v] of Object.entries(buildMcpChildEnv(server.config))) {
       if (typeof v === "string") envRecord[k] = v;
+    }
+
+    if (!server.config.command) {
+      throw new Error(`MCP server '${server.name}' has no command; remote servers use connectRemoteServer.`);
     }
 
     const transport = new StdioClientTransport({
@@ -549,6 +591,13 @@ export async function initMcpClients(baseDir: string = process.cwd()): Promise<M
   let totalTools = 0;
 
   for (const server of servers) {
+    // Remote servers are connected by the canonical McpManager, which owns the
+    // HTTP/SSE transports. This legacy stdio initializer never dials out.
+    if (isRemoteMcpConfig(server.config)) {
+      skippedServers.push({ name: server.name, reason: "remote server — connected by the canonical MCP manager" });
+      continue;
+    }
+
     const trust = mcpTrustManager.getTrustState(
       server.serverId,
       server.config,
