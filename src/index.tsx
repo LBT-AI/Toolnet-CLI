@@ -16,6 +16,9 @@ const subCmd = args[0] ?? "";
 const KNOWN_SUBCMDS = new Set([
   "provider",
   "providers",
+  "models",
+  "model",
+  "routing",
   "pr",
   "issue",
   "plugin",
@@ -84,6 +87,12 @@ SUBCOMMANDS:
   provider use <id>     Set the active provider
   provider current      Show active provider configuration
   provider remove <id>  Remove a configured provider
+  providers [list]      Registered providers with status/models/health
+  models [--provider]   Catalog models with capabilities/context/price
+  models refresh [id]   Refresh model metadata from providers
+  model <provider/model> Validate a model reference
+  model set <ref>       Persist the default model
+  routing               Show the active routing policy
   plugin list           List installed plugins
   plugin install <pkg>  Install a plugin from directory or package
   plugin remove <name>  Uninstall a plugin
@@ -119,8 +128,17 @@ INTERACTIVE COMMANDS:
   }
 }
 
+// ---- Model layer subcommands (Phase 79.15) ----
+// `toolnet providers|models|model|routing` are the canonical registry/catalog/
+// router inspection surface. `toolnet provider` below stays the config command.
+if (subCmd === "models" || subCmd === "model" || subCmd === "providers" || subCmd === "routing") {
+  const { runModelsCli } = await import("./commands/modelsCli");
+  const code = await runModelsCli([subCmd, ...args.slice(1)]);
+  process.exit(code);
+}
+
 // ---- Provider subcommand ----
-if (subCmd === "provider" || subCmd === "providers") {
+if (subCmd === "provider") {
   const { providerCommand } = await import("./commands/provider");
   const subArgs = args.slice(1);
   const outLines: string[] = [];

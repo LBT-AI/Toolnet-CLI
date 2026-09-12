@@ -23,6 +23,12 @@ export { OpenAICompatibleProvider, normalizeOpenAiBaseUrl } from "./openaiCompat
 export { ToolNetProvider, normalizeToolNetBaseUrl, TOOLNET_DEFAULT_MODELS } from "./toolnet";
 export { AnthropicProvider, normalizeAnthropicBaseUrl, ANTHROPIC_DEFAULT_MODELS } from "./anthropic";
 export { GeminiProvider, normalizeGeminiBaseUrl, GEMINI_DEFAULT_MODELS } from "./gemini";
+export {
+  OpenRouterProvider,
+  OPENROUTER_DEFAULT_BASE_URL,
+  OPENROUTER_DISCOVERY_TIMEOUT_MS,
+  type OpenRouterModelRecord,
+} from "./openrouter";
 
 export {
   loadProvidersConfig,

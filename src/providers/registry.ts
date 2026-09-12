@@ -388,6 +388,14 @@ export function createProviderInstance(config: ProviderConfig): Provider {
     return new ToolNetProvider(config);
   }
 
+  // Phase 79.7 — OpenRouter gets its own adapter (OpenAI-compatible transport
+  // plus raw model discovery). It must be checked before the generic
+  // OpenAI-compatible fallthrough.
+  if (providerType === "openrouter") {
+    const { OpenRouterProvider } = require("./openrouter") as typeof import("./openrouter");
+    return new OpenRouterProvider(config);
+  }
+
   if (providerType === "anthropic" || config.id === "anthropic") {
     const { AnthropicProvider } = require("./anthropic") as typeof import("./anthropic");
     return new AnthropicProvider(config);

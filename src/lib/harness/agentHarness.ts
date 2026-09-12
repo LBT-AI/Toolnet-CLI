@@ -5,7 +5,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { getActiveProvider, getActiveBaseUrl, getActiveDefaultModel, OpenAICompatibleProvider, type Provider } from "../../providers";
+import { getActiveDefaultModel, type Provider } from "../../providers";
+import {
+  noteModelFailure,
+  noteModelSuccess,
+  resolveRuntimeModel,
+} from "../../core/models";
 import { workspaceRoot, currentCwd } from "../codingAgent";
 import { contextEngine, type ContextMessage } from "../context";
 import { securityEngine, type SandboxMode, getPermissionContextPrompt, clampSandboxMode } from "../security";
@@ -184,6 +189,35 @@ export class AgentHarness {
       onContentDelta?: (text: string) => void;
       reasoningEffort?: "low" | "medium" | "high";
       /** Phase 77.11 — forwarded to the model hooks as session metadata. */
+      sessionId?: string;
+    },
+    mode: ExecutionMode,
+    wantStream: boolean
+  ): Promise<{ response: AgentModelResponse; hadMessage: boolean }> {
+    const startedAt = Date.now();
+    try {
+      const result = await this.completeModelOnce(provider, req, mode, wantStream);
+      // Phase 79.12 — health derives from observed outcomes only.
+      noteModelSuccess(provider.id, Date.now() - startedAt);
+      return result;
+    } catch (error) {
+      noteModelFailure(provider.id, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+
+  /** One provider call without health bookkeeping, so success/failure is exact. */
+  private async completeModelOnce(
+    provider: Provider,
+    req: {
+      model: string;
+      messages: any[];
+      tools?: any[];
+      toolChoice?: "auto" | "required" | "none";
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+      onContentDelta?: (text: string) => void;
+      reasoningEffort?: "low" | "medium" | "high";
       sessionId?: string;
     },
     mode: ExecutionMode,
@@ -562,13 +596,19 @@ export class AgentHarness {
     mode: ExecutionMode = "HEADLESS"
   ): Promise<HarnessResult> {
     const startTime = Date.now();
-    const model = options.model || this.config.model || getActiveDefaultModel() || "default";
     const maxTurns = options.maxTurns || this.config.maxTurns || 10;
     const timeoutMs = options.timeoutMs || this.config.timeoutMs || 120000;
     const sessionId = options.sessionId || this.config.sessionId || "session";
 
-    const fallbackUrl = options.gatewayUrl || this.config.gatewayUrl || getActiveBaseUrl() || "http://localhost:8080";
-    const provider = getActiveProvider() ?? new OpenAICompatibleProvider({ id: "default", name: "Default", baseUrl: fallbackUrl });
+    // Phase 79.17 — the harness resolves provider + model through the canonical
+    // ModelRouter (never its own provider map). `resolveRuntimeModel` degrades
+    // to the legacy active-provider path when the catalog cannot satisfy the
+    // reference, so no existing configuration changes behaviour.
+    const modelResolution = resolveRuntimeModel(options.model || this.config.model, {
+      gatewayUrl: options.gatewayUrl || this.config.gatewayUrl,
+    });
+    const model = modelResolution.model;
+    const provider = modelResolution.provider;
 
     if (!provider) {
       const errorMsg = "No active AI provider configured.";
