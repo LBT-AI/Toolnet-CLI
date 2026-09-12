@@ -22,6 +22,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentHarness } from "../../lib/harness/agentHarness";
+import { externalHarnessRunner, HarnessNotFoundError, HarnessUnavailableError } from "../externalHarness";
 import type { HarnessConfig } from "../../lib/harness/types";
 import { hookRegistry } from "../hooks";
 import type { HookInvocation } from "../hooks/types";
@@ -36,6 +37,7 @@ import type {
   EvalFailureClass,
   EvalObservation,
   EvalRunRecord,
+  GraderResult,
   ObservedToolCall,
   EvalSuite,
 } from "./types";
@@ -79,6 +81,13 @@ export interface EvalRunnerOptions {
    * model. Defaults to the configured profile, then `default`.
    */
   harness?: string;
+  /**
+   * Phase 83 §17 — execution target for every case in the run (`native` or an
+   * external harness id). A case's own `executionTarget` wins. External cases
+   * run through the ExternalHarnessRunner in the SAME isolated workspace;
+   * grading reuses the deterministic graders unchanged.
+   */
+  executionTarget?: string;
 }
 
 interface UsageTotals {
@@ -139,7 +148,7 @@ export class EvalRunner {
   async runSuite(
     suite: EvalSuite,
     model: string,
-    runOptions: { harness?: string } = {},
+    runOptions: { harness?: string; executionTarget?: string } = {},
   ): Promise<EvalRunRecord> {
     const runId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const startedAt = new Date();
@@ -150,9 +159,10 @@ export class EvalRunner {
     );
 
     const cases: EvalCaseResult[] = [];
+    const executionTarget = runOptions.executionTarget ?? this.options.executionTarget;
     for (const entry of suite.cases) {
       if (this.options.signal?.aborted) break;
-      const result = await this.runCase(entry, { model, runId, harness });
+      const result = await this.runCase(entry, { model, runId, harness, executionTarget });
       cases.push(result);
       this.options.onCaseResult?.(result);
     }
@@ -167,6 +177,7 @@ export class EvalRunner {
       provider: identity.provider,
       harnessId: harness,
       harnessVersion: harnessVersionOf(harness),
+      executionTarget: executionTarget?.trim().toLowerCase() || "native",
       startedAt: startedAt.toISOString(),
       finishedAt: new Date().toISOString(),
       durationMs: Date.now() - startedMs,
@@ -184,8 +195,12 @@ export class EvalRunner {
   /** Run one case in an isolated workspace. */
   async runCase(
     entry: EvalCase,
-    context: { model: string; runId: string; harness?: string },
+    context: { model: string; runId: string; harness?: string; executionTarget?: string },
   ): Promise<EvalCaseResult> {
+    const executionTarget = (entry.executionTarget ?? context.executionTarget ?? "native").trim().toLowerCase();
+    if (executionTarget !== "native") {
+      return this.runExternalCase(entry, context, executionTarget);
+    }
     const startedMs = Date.now();
     const workspace = this.createWorkspace(entry);
     const usage: UsageTotals = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -341,6 +356,147 @@ export class EvalRunner {
       } catch {}
     }
 
+    return caseResult;
+  }
+
+  /**
+   * Phase 83 §17/§18 — run one case on an EXTERNAL harness through the
+   * production ExternalHarnessRunner, in the SAME disposable workspace, then
+   * grade with the SAME deterministic graders. The only differences from the
+   * native path are the executor and the observation source (normalized
+   * external events instead of native tool events).
+   *
+   * §18 honesty rule: harness availability problems are recorded as
+   * HARNESS_UNAVAILABLE/CORE_RUNTIME failures — never counted as model
+   * quality — and a missing binary skips the case as ENVIRONMENT.
+   */
+  private async runExternalCase(
+    entry: EvalCase,
+    context: { model: string; runId: string; harness?: string; executionTarget?: string },
+    executionTarget: string,
+  ): Promise<EvalCaseResult> {
+    const startedMs = Date.now();
+    const workspace = this.createWorkspace(entry);
+    const observation: EvalObservation = {
+      output: "",
+      toolCalls: [],
+      workspaceRoot: workspace,
+      filesRead: [],
+      filesWritten: [],
+      exitCodes: [],
+      postCommandOutput: [],
+      cancelled: false,
+      durationMs: 0,
+    };
+
+    try {
+      const controller = new AbortController();
+      const timeoutMs = entry.timeoutMs ?? DEFAULT_CASE_TIMEOUT_MS;
+      const timer = setTimeout(() => controller.abort(), entry.cancelAfterMs ?? timeoutMs);
+      timer.unref?.();
+      this.options.signal?.addEventListener("abort", () => controller.abort(), { once: true });
+
+      const modelSelection = this.identify(context.model);
+      const result = await externalHarnessRunner.run({
+        harnessId: executionTarget,
+        prompt: entry.prompt,
+        cwd: workspace,
+        ...(modelSelection.provider !== "unknown"
+          ? { model: { logicalModel: context.model, provider: modelSelection.provider, apiModelId: modelSelection.model } }
+          : {}),
+        ...(controller.signal ? { signal: controller.signal } : {}),
+        timeoutMs,
+      });
+      clearTimeout(timer);
+
+      // Map normalized external events onto the observation the graders read.
+      observation.output = result.finalText ?? "";
+      observation.durationMs = result.durationMs;
+      for (const event of result.events) {
+        if (event.kind === "file_changed" && event.path) {
+          observation.filesWritten.push(event.path);
+        }
+        if (event.kind === "tool_started" || event.kind === "tool_completed") {
+          observation.toolCalls.push({
+            id: `${observation.toolCalls.length}`,
+            name: event.tool ?? "external",
+            arguments: event.command ?? undefined,
+            ok: event.kind === "tool_completed",
+          });
+        }
+      }
+      if (result.status === "CANCELLED" || result.status === "TIMEOUT") {
+        observation.cancelled = result.status === "CANCELLED";
+        if (result.status === "TIMEOUT") observation.runtimeError = `timed out after ${timeoutMs}ms`;
+      } else if (result.status === "FAILED") {
+        observation.runtimeError = result.stderr?.slice(0, 200) ?? result.failureClass ?? "harness failed";
+      }
+
+      const graded = gradeCase(entry, observation);
+      const failureClass: EvalFailureClass | undefined =
+        result.status === "TIMEOUT" ? "TIMEOUT" : observation.cancelled ? "CANCELLED" : graded.pass ? undefined : "MODEL_COMPLIANCE";
+      return this.finishExternalCase(entry, workspace, observation, {
+        graded,
+        failureClass,
+        executionTarget,
+        externalStatus: result.status,
+        exitCode: result.exitCode,
+      });
+    } catch (error) {
+      // Availability/capability problems are environment/runtime facts — they
+      // must not be graded as model failures (§18). An unknown harness id is
+      // a configuration error on the eval's side, so ENVIRONMENT fits it too.
+      const environment =
+        error instanceof HarnessUnavailableError || error instanceof HarnessNotFoundError;
+      const failureClass: EvalFailureClass = environment ? "ENVIRONMENT" : "CORE_RUNTIME";
+      const graded: GraderResult = { pass: false, score: 0, detail: error instanceof Error ? error.message : String(error) };
+      return this.finishExternalCase(entry, workspace, observation, {
+        graded,
+        failureClass,
+        executionTarget,
+        externalStatus: "FAILED",
+      });
+    }
+  }
+
+  /** Shared finish path for external cases: grade → record → cleanup. */
+  private finishExternalCase(
+    entry: EvalCase,
+    workspace: string,
+    observation: EvalObservation,
+    info: {
+      graded: GraderResult;
+      failureClass?: EvalFailureClass;
+      executionTarget: string;
+      externalStatus: string;
+      exitCode?: number;
+    },
+  ): EvalCaseResult {
+    const caseResult: EvalCaseResult = {
+      caseId: entry.id,
+      name: entry.name,
+      type: entry.type,
+      pass: info.graded.pass,
+      score: info.graded.score,
+      detail: `${info.graded.detail} [target=${info.executionTarget} status=${info.externalStatus}]`,
+      durationMs: observation.durationMs,
+      inputTokens: 0,
+      outputTokens: 0,
+      toolCalls: observation.toolCalls.length,
+      failedToolCalls: observation.toolCalls.filter((call) => !call.ok).length,
+      duplicateToolCalls: 0,
+      retries: 0,
+      ...(info.graded.pass ? {} : { failureClass: info.failureClass }),
+      output: observation.output.slice(0, 2000),
+      harnessId: resolveHarnessId(entry.harness),
+      executionTarget: info.executionTarget,
+      ...(info.exitCode !== undefined ? { turns: undefined } : {}),
+    };
+    if (!this.options.keepWorkspaces) {
+      try {
+        fs.rmSync(workspace, { recursive: true, force: true });
+      } catch {}
+    }
     return caseResult;
   }
 

@@ -126,6 +126,14 @@ export interface EvalCase {
    * measures, so the profile is part of the case, not a global setting.
    */
   harness?: string;
+  /**
+   * Phase 83 §17 — execution target for this case: `native` (ToolNet's own
+   * AgentHarness) or an external harness id (`opencode`, `codex`, …).
+   * Deliberately a DIFFERENT dimension from `harness`: a native `coding`
+   * profile is not the same thing as the external `codex` harness, and the
+   * stored record must never conflate them.
+   */
+  executionTarget?: string;
 }
 
 export interface EvalSuite {
@@ -199,6 +207,8 @@ export interface EvalCaseResult {
   output?: string;
   /** Phase 81 — the harness profile actually used for this case. */
   harnessId?: string;
+  /** Phase 83 §17 — execution target actually used (`native` | external id). */
+  executionTarget?: string;
   /** Phase 81 §11 — evidence-derived verdict, when the harness reported one. */
   verdict?: "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED" | "TIMEOUT";
   /** Phase 81 — model turns consumed by the case. */
@@ -243,6 +253,8 @@ export interface EvalRunRecord {
    */
   harnessId?: string;
   harnessVersion?: string;
+  /** Phase 83 §17 — execution target of the run (`native` by definition). */
+  executionTarget?: string;
   toolnetVersion?: string;
   commit?: string;
   /** Never contains prompts judged secret; prompts are eval fixtures only. */

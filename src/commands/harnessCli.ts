@@ -19,6 +19,12 @@ import {
   AUTO_HARNESS_BY_TASK,
   type HarnessProfile,
 } from "../core/harness";
+import {
+  externalHarnessRegistry,
+  externalHarnessRunner,
+  HarnessNotFoundError,
+  parseNamespacedSession,
+} from "../core/externalHarness";
 
 export interface HarnessCliIO {
   out: (line: string) => void;
@@ -38,6 +44,12 @@ USAGE:
   toolnet harness current           Show the configured profile.
   toolnet harness use <id>          Persist a profile for future runs.
   toolnet harness reset             Restore the default profile.
+  toolnet harness external list     List external harnesses and availability.
+  toolnet harness external status   Detailed status for every external harness.
+  toolnet harness external show <id>  Show one external harness's capabilities.
+  toolnet harness external run <id> --prompt "..." [--model p/m] [--cwd dir]
+                                    [--session external:harness:id] [--fork]
+                                    [--timeout ms] [-- extra args...]
 
 NOTES:
   · A harness profile is POLICY: prompt strategy, tool EXPOSURE, loop bounds and
@@ -45,10 +57,17 @@ NOTES:
   · A profile can only narrow the exposed tool set. Permission, sandbox, the
     ToolGateway and hook policy are unchanged by any profile.
   · Harness selection and model routing are independent:
-    'toolnet routing' chooses the model, 'toolnet harness' chooses the policy.`;
+    'toolnet routing' chooses the model, 'toolnet harness' chooses the policy.
+  · EXTERNAL harnesses (opencode, codex, …) are independent executables whose
+    tools are OUTSIDE ToolNet's permission system. They never run implicitly:
+    invoking one is always an explicit user action.`;
 
 export interface HarnessCliDeps {
   io?: HarnessCliIO;
+  /** Phase 83 — external run injection seam (tests); defaults to the canonical runner. */
+  externalRun?: typeof externalHarnessRunner.run;
+  /** Cancellation source for an external run. */
+  signal?: AbortSignal;
 }
 
 function pad(value: string, width: number): string {
@@ -101,10 +120,187 @@ export async function runHarnessCli(
       return useProfile(io, json, positional[1]);
     case "reset":
       return resetProfile(io, json);
+    case "external":
+      return runExternalSubcommand(io, json, positional.slice(1), args, deps);
     default:
       io.err(`Unknown harness subcommand: ${action}`);
       io.err(HARNESS_CLI_USAGE);
       return 1;
+  }
+}
+
+// ── external ────────────────────────────────────────────────────────────────────
+
+/**
+ * Phase 83 §20 — external harness subcommands. Args after `--` are forwarded
+ * verbatim as argv elements (never joined into a shell string).
+ */
+async function runExternalSubcommand(
+  io: HarnessCliIO,
+  json: boolean,
+  rest: string[],
+  allArgs: string[],
+  deps: HarnessCliDeps,
+): Promise<number> {
+  const sub = (rest[0] ?? "status").toLowerCase();
+
+  switch (sub) {
+    case "list":
+    case "status":
+      return externalStatus(io, json, sub === "list");
+    case "show":
+      return externalShow(io, json, rest[1]);
+    case "run":
+      return externalRun(io, json, rest.slice(1), allArgs, deps);
+    default:
+      io.err(`Unknown harness external subcommand: ${sub}`);
+      io.err(HARNESS_CLI_USAGE);
+      return 1;
+  }
+}
+
+async function externalStatus(io: HarnessCliIO, json: boolean, listMode: boolean): Promise<number> {
+  const ids = externalHarnessRegistry.ids();
+  const statuses = await Promise.all(
+    ids.map(async (id) => {
+      try {
+        return await externalHarnessRegistry.statusOf(id);
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const rows = statuses.filter((row): row is NonNullable<typeof row> => row !== null);
+
+  if (json) {
+    io.out(JSON.stringify(rows, null, 2));
+    return 0;
+  }
+
+  io.out(`External harnesses (${rows.length})${listMode ? "" : "   trust: external_managed — ToolNet permissions do NOT apply"}`);
+  io.out("─".repeat(78));
+  for (const row of rows) {
+    const availability = row.detection.available ? row.detection.version ?? "installed" : "unavailable";
+    io.out(
+      `${pad(row.id, 12)}${pad(availability, 16)}${pad(`json:${row.capabilities.structuredOutput ? "yes" : "no"}`, 9)}` +
+        `${pad(`model:${row.capabilities.modelOverride ? "yes" : "no"}`, 10)}` +
+        `${row.displayName}`,
+    );
+    if (!row.detection.available && row.detection.detail) io.out(`${pad("", 12)}↳ ${row.detection.detail}`);
+  }
+  return 0;
+}
+
+async function externalShow(io: HarnessCliIO, json: boolean, id: string | undefined): Promise<number> {
+  if (!id) {
+    io.err("Usage: toolnet harness external show <id>");
+    io.err(`External: ${externalHarnessRegistry.ids().join(", ")}`);
+    return 1;
+  }
+  let definition;
+  try {
+    definition = externalHarnessRegistry.resolve(id);
+  } catch (error) {
+    if (error instanceof HarnessNotFoundError) {
+      io.err(error.message);
+      return 1;
+    }
+    throw error;
+  }
+  const detection = await externalHarnessRegistry.detect(definition.id);
+
+  if (json) {
+    io.out(JSON.stringify({ ...definition, detection, detect: undefined, buildInvocation: undefined, parseEvent: undefined, normalizeResult: undefined, isFrameComplete: undefined }, null, 2));
+    return 0;
+  }
+
+  io.out(`${definition.displayName} (${definition.id})   executable: ${definition.executable}`);
+  io.out("─".repeat(78));
+  io.out(`available: ${detection.available ? detection.version ?? "yes" : `no${detection.detail ? ` (${detection.detail})` : ""}`}`);
+  io.out(`execution trust: ${definition.executionTrust} — tools run OUTSIDE ToolNet's permission system`);
+  io.out("");
+  io.out("Capabilities:");
+  for (const [key, value] of Object.entries(definition.capabilities)) {
+    io.out(`  ${pad(key, 20)}${typeof value === "boolean" ? (value ? "yes" : "no") : String(value)}`);
+  }
+  io.out("");
+  io.out(`Env passthrough (names only): ${definition.envAllowlist.join(", ")}`);
+  return 0;
+}
+
+async function externalRun(
+  io: HarnessCliIO,
+  json: boolean,
+  rest: string[],
+  allArgs: string[],
+  deps: HarnessCliDeps,
+): Promise<number> {
+  const id = rest[0];
+  if (!id) {
+    io.err("Usage: toolnet harness external run <id> --prompt \"...\" [-- extra args...]");
+    return 1;
+  }
+
+  // Split forwarded args at `--`; everything after goes to the harness verbatim.
+  const separator = allArgs.indexOf("--");
+  const forwarded = separator >= 0 ? allArgs.slice(separator + 1) : [];
+  const flagOf = (name: string): string | undefined => {
+    const index = allArgs.indexOf(name);
+    return index >= 0 ? allArgs[index + 1] : undefined;
+  };
+  const prompt = flagOf("--prompt");
+  if (!prompt) {
+    io.err("Usage: toolnet harness external run <id> --prompt \"...\" [-- extra args...]");
+    return 1;
+  }
+  const model = flagOf("--model");
+  const cwd = flagOf("--cwd");
+  const session = flagOf("--session");
+  const timeoutFlag = flagOf("--timeout");
+  const fork = allArgs.includes("--fork");
+
+  // §15 — resume identity must carry the same harness namespace.
+  let resume: { harnessId: string; externalSessionId: string } | undefined;
+  if (session) {
+    const parsed = parseNamespacedSession(session);
+    if (!parsed) {
+      io.err(`Invalid external session id '${session}'. Expected external:<harness>:<id>.`);
+      return 1;
+    }
+    resume = parsed;
+  }
+
+  const signal = deps.signal;
+  try {
+    const runner = deps.externalRun ?? ((request: Parameters<typeof externalHarnessRunner.run>[0]) => externalHarnessRunner.run(request));
+    const outcome = await runner({
+      harnessId: id.trim().toLowerCase(),
+      prompt,
+      ...(cwd ? { cwd } : {}),
+      ...(model ? { model: { logicalModel: model } } : {}),
+      ...(resume ? { resume } : {}),
+      ...(fork ? { forkSession: true } : {}),
+      ...(forwarded.length > 0 ? { extraArgs: forwarded } : {}),
+      ...(timeoutFlag !== undefined && Number.isFinite(Number(timeoutFlag)) ? { timeoutMs: Number(timeoutFlag) } : {}),
+      ...(signal ? { signal } : {}),
+    });
+
+    if (json) {
+      io.out(JSON.stringify(outcome, null, 2));
+    } else {
+      io.out(`harness: ${outcome.harnessId}   status: ${outcome.status}   exit: ${outcome.exitCode ?? "signal"}   ${outcome.durationMs}ms`);
+      if (outcome.finalText) {
+        io.out("");
+        io.out(outcome.finalText);
+      }
+      if (outcome.sessionId) io.out("");
+      if (outcome.sessionId) io.out(`session: ${outcome.sessionId}`);
+      if (outcome.stderr) io.out(`stderr: ${outcome.stderr}`);
+    }
+    return outcome.status === "SUCCESS" ? 0 : 1;
+  } catch (error) {
+    io.err(error instanceof Error ? error.message : String(error));
+    return 1;
   }
 }
 

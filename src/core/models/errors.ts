@@ -143,7 +143,9 @@ export class InvalidModelReferenceError extends ProviderError {
 
 /** Credential-looking material that must never reach a log line. */
 const SECRET_PATTERNS: RegExp[] = [
-  /\b(?:sk|pk|rk|or)-[A-Za-z0-9_-]{12,}\b/g,
+  // Key prefixes; `*` masked forms (e.g. "sk-tQAfv****...ZY5s" printed by
+  // provider error messages) are also credential-shaped and must be redacted.
+  /\b(?:sk|pk|rk|or)-[A-Za-z0-9*_-]{8,}\b/g,
   /\b[A-Za-z0-9_-]{32,}\b/g,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
 ];

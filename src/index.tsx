@@ -120,6 +120,7 @@ SUBCOMMANDS:
   providers                         List providers with status, models and health
   routing [profile|model|fallback]  Inspect or persist routing profile/policy
   harness <list|show|current|use|reset>  Harness policy profiles (prompt/tools/loops)
+  harness external <list|status|show|run>  Run external coding harnesses (opencode, codex)
   eval <list|run|compare|results|show>  Deterministic model evaluation
   completion [bash|zsh|fish|install] Shell auto-completion scripts
   update [--check]      Check for and apply updates

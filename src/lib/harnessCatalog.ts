@@ -12,6 +12,9 @@ import {
   harnessRegistry,
   summarizeHarnessProfile,
 } from "../core/harness";
+// Phase 83 §21 — external harness status is read-only diagnostic data from the
+// canonical registry. The TUI never spawns an external harness.
+import { externalHarnessRegistry } from "../core/externalHarness";
 
 export interface HarnessDetailRow {
   label: string;
@@ -34,6 +37,7 @@ export const HARNESS_SECTIONS: Array<{ id: string; title: string; description: s
   { id: "tools", title: "Tools", description: "Registered tool registry and cache statistics" },
   { id: "telemetry", title: "Telemetry", description: "Tokens, tool calls, uptime and output metrics" },
   { id: "subagents", title: "Subagents", description: "Subagent runtime and delegation roles" },
+  { id: "external", title: "External Harnesses", description: "Installed external coding harnesses (opencode, codex)" },
 ];
 
 export function normalizeSectionId(input: string): string | null {
@@ -183,6 +187,20 @@ export function getHarnessSectionDetail(input: string): HarnessSectionDetail | n
           { label: "Isolation", value: "per-subagent context memory" },
         ],
       };
+    case "external": {
+      const ids = externalHarnessRegistry.ids();
+      const rows: HarnessDetailRow[] = ids.map((externalId) => {
+        const cached = externalHarnessRegistry.peekDetection(externalId);
+        const state = cached ?? { available: false, detail: "not probed yet" };
+        return {
+          label: externalId,
+          value: state.available ? state.version ?? "installed" : state.detail ?? "unavailable",
+          status: state.available ? ("enabled" as const) : ("disabled" as const),
+        };
+      });
+      rows.push({ label: "Trust", value: "external_managed — ToolNet permissions do NOT apply" });
+      return { id, title: "Harness / External", rows };
+    }
     default:
       return null;
   }
