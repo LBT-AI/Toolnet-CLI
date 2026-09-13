@@ -68,16 +68,20 @@ export class ExternalHarnessRunner {
    */
   async run(request: ExternalRunRequest): Promise<ExternalHarnessResult> {
     const definition = this.registry.resolve(request.harnessId);
+
+    // Pure request validation runs BEFORE any environment probing. A cross-harness
+    // resume is invalid regardless of what happens to be installed, so checking it
+    // first keeps the error deterministic (and avoids probing for a doomed request).
+    if (request.resume) {
+      this.assertSameHarness(definition, request.resume.harnessId);
+    }
+
     const detection = await this.registry.detect(definition.id);
     if (!detection.available) {
       throw new HarnessUnavailableError(definition.id, detection.detail);
     }
 
     const cwd = normalizeCwd(request.cwd ?? process.cwd());
-
-    if (request.resume) {
-      this.assertSameHarness(definition, request.resume.harnessId);
-    }
 
     const context = {
       prompt: request.prompt,

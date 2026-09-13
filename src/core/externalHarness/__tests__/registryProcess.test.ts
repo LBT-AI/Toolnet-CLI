@@ -116,6 +116,35 @@ describe("Phase 83 §12 — detection against missing binaries", () => {
     const runner = new ExternalHarnessRunner(registry);
     await expect(runner.run({ harnessId: "ghost-harness", prompt: "hi" })).rejects.toThrow(HarnessUnavailableError);
   });
+
+  it("an invalid resume is rejected before availability is probed", async () => {
+    // Request validation must not depend on which binaries happen to be installed:
+    // a cross-harness resume is invalid either way, so it reports the protocol
+    // error rather than "unavailable" on a machine without the binary.
+    const registry = new ExternalHarnessRegistry();
+    registry.register(fakeDefinition("ghost-target"));
+    const { ExternalHarnessRunner } = await import("../runner");
+    const runner = new ExternalHarnessRunner(registry);
+    await expect(
+      runner.run({
+        harnessId: "ghost-target",
+        prompt: "hi",
+        resume: { harnessId: "some-other-harness", externalSessionId: "s1" },
+      }),
+    ).rejects.toThrow(/different harness/);
+  });
+
+  it("an unsupported capability is rejected before availability is probed", async () => {
+    const { HarnessExecutionService } = await import("../service");
+    const registry = new ExternalHarnessRegistry();
+    // sessionFork is false on this adapter: the request is unsupported regardless
+    // of whether the executable exists.
+    registry.register(fakeDefinition("ghost-forker"));
+    const service = new HarnessExecutionService({ registry });
+    await expect(
+      service.run({ target: "external:ghost-forker", prompt: "hi", forkSession: true }),
+    ).rejects.toThrow(/session fork/);
+  });
 });
 
 describe("Phase 83 §5 — safe process execution", () => {

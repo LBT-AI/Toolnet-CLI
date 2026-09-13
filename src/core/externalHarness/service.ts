@@ -101,12 +101,10 @@ export class HarnessExecutionService {
     }
 
     const definition = this.registry.resolve(target.harnessId);
-    const detection = await this.registry.detect(definition.id);
-    if (!detection.available) {
-      throw new HarnessUnavailableError(definition.id, detection.detail);
-    }
 
-    // Capability gate — explicit errors instead of silent behavior changes.
+    // Capability gate — explicit errors instead of silent behavior changes. These
+    // are static declarations, so they are checked before probing the environment:
+    // an unsupported request fails the same way whether or not the binary exists.
     if (request.resume && definition.capabilities.sessionResume !== true) {
       throw new HarnessCapabilityError(definition.id, "session resume");
     }
@@ -115,6 +113,11 @@ export class HarnessExecutionService {
     }
     if (request.model && definition.capabilities.modelOverride !== true) {
       throw new HarnessCapabilityError(definition.id, "model override");
+    }
+
+    const detection = await this.registry.detect(definition.id);
+    if (!detection.available) {
+      throw new HarnessUnavailableError(definition.id, detection.detail);
     }
 
     const result = await this.runner.run({
