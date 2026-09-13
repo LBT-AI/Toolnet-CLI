@@ -360,19 +360,40 @@ Phase 86 (Context Intelligence) may **not** add a second session store. It shoul
 - keep `SessionRecord.context` as the opaque carrier for the compaction snapshot
   (it is already persisted, capped and restored through `loadSessionContext`).
 
-## 24. Final commit
+## 24. Commits
 
 ```
-commit  5d63ee347ee88a60afccce1220ae2aa97c31a613
+5d63ee347ee88a60afccce1220ae2aa97c31a613   feat(session): durable checkpoints resume and crash recovery
+c3e90bd...                                 docs(session): record the Phase 85 commit hash
+cd3825ade9d094c0f24c3a61f0c08cb9f4d6eff1   fix(harness): validate external run requests before probing the environment
 branch  main
 push    origin/main
 ```
 
-Gate summary on this exact revision:
+Gate summary on the final revision:
 
 ```
 bun run typecheck     PASS
-bun test              2308 pass / 3 skip / 0 fail   (3 consecutive clean full runs)
+bun test              2310 pass / 3 skip / 0 fail   (3 consecutive clean full runs)
 bun run build         PASS
 npm pack --dry-run    PASS
+GitHub Actions CI     PASS  (run 34759348907, all steps incl. Node 20/22 smoke tests)
 ```
+
+## 25. CI defect found and fixed (pre-existing, from Phase 83)
+
+The first push was red in CI while the same suite was green locally. Root cause:
+`ExternalHarnessRunner.run` and `HarnessExecutionService.run` probed the
+**executable** before validating the **request**, so a cross-harness resume (or an
+unsupported capability) surfaced as `HarnessUnavailableError` on a machine
+without `opencode`/`codex` — exactly the CI environment — instead of the real
+protocol/capability error. Phase 83 and Phase 84 pushes had failed for the same
+reason.
+
+Fixed by validating pure request invariants first and probing second, which also
+removes a pointless probe for a request that is invalid regardless. Two
+regression tests pin the ordering using an adapter that reports unavailable, so
+the assertion holds whether or not any external harness is installed. The
+originally failing test was re-run locally with `opencode` removed from `PATH`
+(the CI condition) and now passes.
+
