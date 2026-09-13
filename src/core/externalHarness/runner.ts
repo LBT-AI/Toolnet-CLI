@@ -15,6 +15,7 @@ import { ExternalHarnessRegistry, externalHarnessRegistry } from "./registry";
 import { normalizeCwd, safeSpawn, spawnErrorOf } from "./process";
 import {
   HarnessCancelledError,
+  HarnessCapabilityError,
   HarnessProtocolError,
   HarnessTimeoutError,
   HarnessUnavailableError,
@@ -34,6 +35,18 @@ export interface ExternalRunRequest {
   extraArgs?: string[];
   signal?: AbortSignal;
   timeoutMs?: number;
+  /**
+   * Phase 84 §18 — EXPLICIT credential injection.
+   *
+   * The caller resolves an auth profile through the CredentialResolver and
+   * passes the resulting `ENV_NAME -> secret` map here. Keys MUST be declared
+   * in the adapter's `credentialEnvAllowlist`, so a harness can never receive
+   * a credential it did not declare it reads. Secrets never reach argv, are
+   * never logged, and the harness' own config is never modified.
+   *
+   * Omitted = the external harness uses its own auth (the default).
+   */
+  credentialEnv?: Record<string, string>;
   /** Registry override for tests. */
   registry?: ExternalHarnessRegistry;
 }
@@ -77,6 +90,7 @@ export class ExternalHarnessRunner {
       ...(request.signal ? { signal: request.signal } : {}),
     };
     const invocation = definition.buildInvocation(context);
+    const credentialEnv = this.validateCredentialEnv(definition, request.credentialEnv);
 
     const timeoutMs = request.timeoutMs ?? DEFAULT_EXTERNAL_TIMEOUT_MS;
     const outcome = await safeSpawn({
@@ -85,6 +99,7 @@ export class ExternalHarnessRunner {
       cwd,
       envAllowlist: definition.envAllowlist,
       ...(invocation.env ? { env: invocation.env } : {}),
+      ...(credentialEnv ? { credentialEnv } : {}),
       ...(invocation.stdin !== undefined ? { stdin: invocation.stdin } : {}),
       ...(request.signal ? { signal: request.signal } : {}),
       timeoutMs,
@@ -147,6 +162,34 @@ export class ExternalHarnessRunner {
     };
 
     return result;
+  }
+
+  /**
+   * §18/§31 — credential injection is impossible unless the adapter declared
+   * the name, and is refused outright for harnesses with no declaration. This
+   * is the single gate that keeps secrets out of unauthorized env names.
+   */
+  validateCredentialEnv(
+    definition: ExternalHarnessDefinition,
+    requested?: Record<string, string>,
+  ): Record<string, string> | undefined {
+    if (!requested) return undefined;
+    const names = Object.keys(requested).filter((name) => name.trim().length > 0);
+    if (names.length === 0) return undefined;
+    const declared = new Set((definition.credentialEnvAllowlist ?? []).map((name) => name.trim()));
+    const undeclared = names.filter((name) => !declared.has(name.trim()));
+    if (undeclared.length > 0) {
+      throw new HarnessCapabilityError(
+        definition.id,
+        `harness '${definition.id}' does not declare credential env var(s): ${undeclared.join(", ")}`,
+      );
+    }
+    const out: Record<string, string> = {};
+    for (const name of names) {
+      const value = requested[name];
+      if (typeof value === "string" && value.length > 0) out[name.trim()] = value;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
   }
 
   /** §15 — resume must target the same harness it came from. */

@@ -121,6 +121,7 @@ SUBCOMMANDS:
   routing [profile|model|fallback]  Inspect or persist routing profile/policy
   harness <list|show|current|use|reset>  Harness policy profiles (prompt/tools/loops)
   harness external <list|status|show|run>  Run external coding harnesses (opencode, codex)
+  auth <list|status|login|add|use|logout|remove|doctor>  Provider credentials/profiles
   eval <list|run|compare|results|show>  Deterministic model evaluation
   completion [bash|zsh|fish|install] Shell auto-completion scripts
   update [--check]      Check for and apply updates
@@ -158,6 +159,15 @@ if (subCmd === "eval") {
 if (subCmd === "harness") {
   const { runHarnessCli } = await import("./commands/harnessCli");
   const code = await runHarnessCli(args.slice(1));
+  process.exit(code);
+}
+
+// ---- Auth subcommands (Phase 84.20) ----
+// Provider credential profiles. Secret-free output only; writes go through the
+// canonical AuthProfileRegistry / CredentialStore.
+if (subCmd === "auth") {
+  const { runAuthCli } = await import("./commands/authCli");
+  const code = await runAuthCli(args.slice(1));
   process.exit(code);
 }
 

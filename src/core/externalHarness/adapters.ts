@@ -99,10 +99,12 @@ export function createOpenCodeAdapter(): ExternalHarnessDefinition {
     displayName: "OpenCode",
     executable: "opencode",
     executionTrust: "external_managed",
-    // §14 — operational env only. Deliberately NO credential-bearing names
-    // (Phase 84 owns a safe credential profile mechanism); the runner's
-    // secret deny-list would filter them anyway.
+    // §14 — operational env only. Credential-bearing names are NOT part of the
+    // pass-through allowlist; Phase 84 injects them explicitly (below) and
+    // only when the user asked for a profile.
     envAllowlist: ["NO_COLOR", "CI"],
+    // Phase 84 §18 — names OpenCode itself reads for provider credentials.
+    credentialEnvAllowlist: ["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
     capabilities: {
       structuredOutput: true,
       streaming: true,
@@ -252,6 +254,8 @@ export function createCodexAdapter(): ExternalHarnessDefinition {
     executable: "codex",
     executionTrust: "external_managed",
     envAllowlist: ["NO_COLOR", "CI", "CODEX_HOME"],
+    // Phase 84 §18 — Codex authenticates with an OpenAI key.
+    credentialEnvAllowlist: ["OPENAI_API_KEY"],
     capabilities: {
       structuredOutput: true,
       streaming: true,
@@ -425,6 +429,8 @@ export function createClaudeAdapter(): ExternalHarnessDefinition {
     executable: "claude",
     executionTrust: "external_managed",
     envAllowlist: ["NO_COLOR", "CI"],
+    // Phase 84 §18 — Claude Code reads an Anthropic key from the environment.
+    credentialEnvAllowlist: ["ANTHROPIC_API_KEY"],
     capabilities: {
       structuredOutput: "unknown",
       streaming: "unknown",
@@ -482,6 +488,9 @@ export function createHermesAdapter(): ExternalHarnessDefinition {
     executable: "hermes",
     executionTrust: "external_managed",
     envAllowlist: ["NO_COLOR", "CI"],
+    // §11/§18 — no verified credential env contract: injection is impossible
+    // for Hermes rather than guessed.
+    credentialEnvAllowlist: [],
     capabilities: {
       structuredOutput: false,
       streaming: false,

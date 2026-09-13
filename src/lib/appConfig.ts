@@ -83,6 +83,24 @@ export const DEFAULT_HARNESS_SETTINGS: AppHarnessSettings = {
   profile: "default",
 };
 
+/**
+ * Phase 84 — provider auth settings (CONFIG ONLY — secrets never live here).
+ * Profile metadata and per-provider active pointers. Raw credentials live in
+ * the CredentialStore (auth-credentials.json, 0600). This block survives
+ * validation generically so a hand-edited profile entry can't brick the CLI;
+ * semantic validation (existing credential, valid ids) is the
+ * AuthProfileRegistry's job at write time.
+ */
+export interface AppAuthSettings {
+  profiles: Record<string, import("../core/auth/types").AuthProfile>;
+  active: Record<string, string>;
+}
+
+export const DEFAULT_AUTH_SETTINGS: AppAuthSettings = {
+  profiles: {},
+  active: {},
+};
+
 export interface AppConfig {
   schemaVersion: number;
   /** Gateway URL, or null when not using ToolNet gateway. Default: null */
@@ -107,6 +125,8 @@ export interface AppConfig {
   routing: AppRoutingSettings;
   /** Phase 81 — harness profile (policy) settings. */
   harness: AppHarnessSettings;
+  /** Phase 84 — provider auth profile metadata + active pointers (no secrets). */
+  auth: AppAuthSettings;
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
@@ -124,6 +144,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   banner: "once",
   routing: { ...DEFAULT_ROUTING_SETTINGS },
   harness: { ...DEFAULT_HARNESS_SETTINGS },
+  auth: { ...DEFAULT_AUTH_SETTINGS },
 };
 
 /** Fields that may be carried over from the legacy ~/.toolnetapi/config.json. */
@@ -197,8 +218,48 @@ export function validateConfig(input: unknown): AppConfig {
 
   cfg.routing = validateRoutingSettings(input.routing);
   cfg.harness = validateHarnessSettings(input.harness);
+  cfg.auth = validateAuthSettings(input.auth);
 
   return cfg;
+}
+
+/**
+ * Phase 84 — coerce an unknown `auth` block into valid settings. Generic
+ * (shape-level) validation only: profile objects must carry an id/type and
+ * pointers must be strings. Semantic checks (credential exists, ids well
+ * formed) happen in AuthProfileRegistry at write time; a hand-edited config
+ * must never brick the CLI.
+ */
+function validateAuthSettings(input: unknown): AppAuthSettings {
+  const out: AppAuthSettings = { profiles: {}, active: {} };
+  if (!isRecord(input)) return out;
+  const profiles = input.profiles;
+  if (isRecord(profiles)) {
+    for (const [id, value] of Object.entries(profiles)) {
+      if (!isRecord(value)) continue;
+      if (typeof value.id !== "string" || typeof value.providerId !== "string" || typeof value.type !== "string") continue;
+      out.profiles[id] = {
+        id: value.id,
+        providerId: value.providerId,
+        displayName: typeof value.displayName === "string" ? value.displayName : id,
+        type: value.type as import("../core/auth/types").CredentialType,
+        ...(isRecord(value.metadata)
+          ? { metadata: Object.fromEntries(Object.entries(value.metadata).filter(([, v]) => typeof v === "string")) as Record<string, string> }
+          : {}),
+        createdAt: typeof value.createdAt === "number" ? value.createdAt : Date.now(),
+        updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : Date.now(),
+      };
+    }
+  }
+  const active = input.active;
+  if (isRecord(active)) {
+    for (const [provider, profileId] of Object.entries(active)) {
+      if (typeof provider === "string" && provider.trim() && typeof profileId === "string" && profileId.trim()) {
+        out.active[provider] = profileId;
+      }
+    }
+  }
+  return out;
 }
 
 /**

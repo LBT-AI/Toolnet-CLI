@@ -33,6 +33,11 @@ export interface SafeSpawnSpec {
   envAllowlist: string[];
   /** Extra operational env vars (values never logged). */
   env?: Record<string, string>;
+  /**
+   * Phase 84 §18 — explicitly requested credential env vars, applied after
+   * scrubbing. Name-validated by the runner against the adapter declaration.
+   */
+  credentialEnv?: Record<string, string>;
   stdin?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -76,14 +81,35 @@ export function normalizeCwd(cwd: string): string {
   return real;
 }
 
-/** Build the child environment: allowlist + adapter names, secret-filtered. */
+/**
+ * Build the child environment: allowlist + adapter names, secret-filtered.
+ *
+ * Phase 84 §18 — `credentialEnv` is the explicit credential-injection input.
+ * `scrubChildEnv` deliberately DENIES secret-shaped variable names, so
+ * injection cannot ride the normal allowlist: it is a deliberate second step,
+ * applied only after scrubbing and only for names the adapter itself declared
+ * (`credentialEnvAllowlist`, enforced by the runner). Values come from the
+ * CredentialResolver and are never logged, never placed in argv, and never
+ * persisted.
+ */
 export function harnessChildEnv(
   parentEnv: NodeJS.ProcessEnv,
   allowlist: string[],
   extra?: Record<string, string>,
+  credentialEnv?: Record<string, string>,
 ): NodeJS.ProcessEnv {
   const wanted = new Set(allowlist.map((name) => name.trim()).filter(Boolean));
-  return scrubChildEnv(parentEnv, Object.fromEntries([...wanted].map((name) => [name, parentEnv[name] ?? extra?.[name] ?? ""])));
+  const base = scrubChildEnv(
+    parentEnv,
+    Object.fromEntries([...wanted].map((name) => [name, parentEnv[name] ?? extra?.[name] ?? ""])),
+  );
+  if (!credentialEnv) return base;
+  for (const [name, value] of Object.entries(credentialEnv)) {
+    const key = name.trim();
+    if (!key || typeof value !== "string" || value.length === 0) continue;
+    base[key] = value;
+  }
+  return base;
 }
 
 /**
@@ -146,7 +172,7 @@ export function safeSpawn(spec: SafeSpawnSpec): Promise<SafeSpawnOutcome> {
     try {
       child = spawn(spec.executable, spec.args, {
         cwd: spec.cwd,
-        env: harnessChildEnv(process.env, spec.envAllowlist, spec.env),
+        env: harnessChildEnv(process.env, spec.envAllowlist, spec.env, spec.credentialEnv),
         stdio: ["pipe", "pipe", "pipe"],
         // Own process group so the tree-kill reaches grandchildren.
         detached: process.platform !== "win32",

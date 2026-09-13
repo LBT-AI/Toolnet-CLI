@@ -155,10 +155,47 @@ const SECRET_PATTERNS: RegExp[] = [
  * log, an event, or a status line. Provider adapters already redact their own
  * key; this is the last line of defence for provider-supplied error text.
  */
+/**
+ * Phase 84 §19 — dynamic resolved-secret set.
+ *
+ * Pattern-based redaction cannot know user-typed API keys. Every credential
+ * the CredentialResolver hands out (or the CredentialStore persists) is
+ * registered here, and redactSecret scrubs exact matches everywhere text
+ * flows: errors, headers, bodies, logs, TUI, eval reports. Bounded so a long
+ * session cannot grow it without limit; the secret VALUE is never stored
+ * anywhere else and the set is process memory only.
+ */
+const resolvedSecrets = new Set<string>();
+const MAX_RESOLVED_SECRETS = 256;
+
+export function registerResolvedSecret(secret: string): void {
+  const value = secret.trim();
+  if (value.length < 8) return; // too short to redact reliably; skip
+  if (resolvedSecrets.has(value)) return;
+  if (resolvedSecrets.size >= MAX_RESOLVED_SECRETS) {
+    const oldest = resolvedSecrets.values().next().value;
+    if (oldest !== undefined) resolvedSecrets.delete(oldest);
+  }
+  resolvedSecrets.add(value);
+}
+
+/** Forget one secret (logout/remove) so it stops being tracked. */
+export function clearResolvedSecret(secret: string): void {
+  resolvedSecrets.delete(secret.trim());
+}
+
+/** Test/diagnostic count only — never exposes members. */
+export function resolvedSecretCount(): number {
+  return resolvedSecrets.size;
+}
+
 export function redactSecret(text: string): string {
   let out = text;
   for (const pattern of SECRET_PATTERNS) {
     out = out.replace(pattern, "[REDACTED]");
+  }
+  for (const secret of resolvedSecrets) {
+    if (out.includes(secret)) out = out.replaceAll(secret, "[REDACTED]");
   }
   return out;
 }

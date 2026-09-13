@@ -190,6 +190,16 @@ export interface ExternalHarnessDefinition {
    */
   envAllowlist: string[];
   /**
+   * Phase 84 §18 — env var names this harness reads for PROVIDER CREDENTIALS.
+   *
+   * ToolNet injects a resolved secret into one of these names ONLY when the
+   * user explicitly asked for a profile (`--auth-profile`). The list is never
+   * extended implicitly: a name absent here can never receive a secret, which
+   * keeps credential injection from becoming a generic environment-planting
+   * mechanism. Omitted means "no credential injection is possible".
+   */
+  credentialEnvAllowlist?: string[];
+  /**
    * §12 — verify availability. Bounded, offline, side-effect-free; may be
    * cached by the registry. Returns the version string when determinable.
    */

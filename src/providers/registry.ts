@@ -12,6 +12,8 @@ import { getToolnetHome } from "../lib/toolnetHome";
 import type { Provider, ProviderConfig } from "./types";
 import { OpenAICompatibleProvider } from "./openaiCompatible";
 import { getCliKey, loadCliKeys } from "../lib/keys";
+// Phase 84 §9 — provider keys resolve through the canonical auth layer.
+import { credentialResolver } from "../core/auth/resolver";
 
 export function getProvidersConfigDir(): string {
   // Phase 3: canonical home module (single TOOLNETCLI_CONFIG_DIR-aware source).
@@ -236,17 +238,35 @@ export function getDefaultProviderConfig(id: string): ProviderConfig {
 
 /**
  * Resolve the API key for a provider config.
- * Priority: apiKeyEnv (env var) > apiKey (inline) > CLI stored key > null
+ *
+ * Phase 84 §9 — this is now a thin delegation to the canonical
+ * CredentialResolver; the provider layer never reads credential files itself.
+ * Deterministic precedence (documented in src/core/auth/resolver.ts):
+ *
+ *   explicit profile > session profile > active profile >
+ *   standard env var > legacy keys.json / inline config
+ *
+ * Backward compatible: with no profiles configured the behaviour is exactly
+ * the previous `apiKeyEnv > apiKey (inline) > CLI stored key` order.
  */
-export function resolveApiKey(config: ProviderConfig): string | null {
-  if (config.apiKeyEnv) {
-    const val = process.env[config.apiKeyEnv];
-    if (val) return val.trim();
+export function resolveApiKey(
+  config: ProviderConfig,
+  options: { explicitProfile?: string | null; sessionProfile?: string | null } = {},
+): string | null {
+  try {
+    const lookup = credentialResolver.lookup({
+      providerId: config.id,
+      explicitProfile: options.explicitProfile ?? null,
+      sessionProfile: options.sessionProfile ?? null,
+      envName: config.apiKeyEnv ?? null,
+      legacyApiKey: config.apiKey ?? null,
+      legacyProviderId: config.id,
+    });
+    return lookup.credential?.secret ?? null;
+  } catch {
+    // A malformed profile id must never take the whole provider down.
+    return null;
   }
-  if (config.apiKey) return config.apiKey;
-  const cliKey = getCliKey(config.id);
-  if (cliKey) return cliKey.trim();
-  return null;
 }
 
 /**

@@ -25,6 +25,7 @@ import {
   HarnessNotFoundError,
   parseNamespacedSession,
 } from "../core/externalHarness";
+import { resolveExternalCredentialEnv } from "../core/auth/harnessInjection";
 
 export interface HarnessCliIO {
   out: (line: string) => void;
@@ -49,6 +50,7 @@ USAGE:
   toolnet harness external show <id>  Show one external harness's capabilities.
   toolnet harness external run <id> --prompt "..." [--model p/m] [--cwd dir]
                                     [--session external:harness:id] [--fork]
+                                    [--auth-profile provider/profile]  (explicit credential injection)
                                     [--timeout ms] [-- extra args...]
 
 NOTES:
@@ -258,6 +260,9 @@ async function externalRun(
   const session = flagOf("--session");
   const timeoutFlag = flagOf("--timeout");
   const fork = allArgs.includes("--fork");
+  // Phase 84 §18 — explicit credential injection. Absent by default: the
+  // external harness then uses its OWN auth (never ToolNet credentials).
+  const authProfile = flagOf("--auth-profile");
 
   // §15 — resume identity must carry the same harness namespace.
   let resume: { harnessId: string; externalSessionId: string } | undefined;
@@ -272,11 +277,26 @@ async function externalRun(
 
   const signal = deps.signal;
   try {
+    const harnessId = id.trim().toLowerCase();
+
+    // §18 — inject only when the user named a profile, and only into an env
+    // name the adapter declares. The secret never enters argv or the output.
+    let credentialEnv: Record<string, string> | undefined;
+    if (authProfile) {
+      const definition = externalHarnessRegistry.resolve(harnessId);
+      credentialEnv = resolveExternalCredentialEnv({
+        harnessId,
+        credentialEnvAllowlist: definition.credentialEnvAllowlist,
+        profileId: authProfile,
+      });
+    }
+
     const runner = deps.externalRun ?? ((request: Parameters<typeof externalHarnessRunner.run>[0]) => externalHarnessRunner.run(request));
     const outcome = await runner({
-      harnessId: id.trim().toLowerCase(),
+      harnessId,
       prompt,
       ...(cwd ? { cwd } : {}),
+      ...(credentialEnv ? { credentialEnv } : {}),
       ...(model ? { model: { logicalModel: model } } : {}),
       ...(resume ? { resume } : {}),
       ...(fork ? { forkSession: true } : {}),

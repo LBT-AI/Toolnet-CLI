@@ -15,6 +15,8 @@ import {
 // Phase 83 §21 — external harness status is read-only diagnostic data from the
 // canonical registry. The TUI never spawns an external harness.
 import { externalHarnessRegistry } from "../core/externalHarness";
+// Phase 84 §21 — the auth panel reads the canonical operations facade only.
+import { authOperations } from "../core/auth";
 
 export interface HarnessDetailRow {
   label: string;
@@ -38,6 +40,9 @@ export const HARNESS_SECTIONS: Array<{ id: string; title: string; description: s
   { id: "telemetry", title: "Telemetry", description: "Tokens, tool calls, uptime and output metrics" },
   { id: "subagents", title: "Subagents", description: "Subagent runtime and delegation roles" },
   { id: "external", title: "External Harnesses", description: "Installed external coding harnesses (opencode, codex)" },
+  // Phase 84 §21 — read-only provider auth panel. Shows ids, sources and
+  // status only: never a secret, never a secret fragment.
+  { id: "auth", title: "Auth Profiles", description: "Provider credential profiles, source and status" },
 ];
 
 export function normalizeSectionId(input: string): string | null {
@@ -200,6 +205,23 @@ export function getHarnessSectionDetail(input: string): HarnessSectionDetail | n
       });
       rows.push({ label: "Trust", value: "external_managed — ToolNet permissions do NOT apply" });
       return { id, title: "Harness / External", rows };
+    }
+    case "auth": {
+      // Read-only view over the canonical registry — the TUI never resolves a
+      // credential and never sees key material.
+      const rows: HarnessDetailRow[] = [];
+      for (const view of authOperations.list()) {
+        rows.push({
+          label: view.providerId,
+          value: `${view.source}${view.activeProfileId ? ` · ${view.activeProfileId}` : ""}`,
+          status: view.configured ? "enabled" : "disabled",
+        });
+      }
+      if (rows.length === 0) {
+        rows.push({ label: "Providers", value: "none configured", status: "disabled" });
+      }
+      rows.push({ label: "Secret display", value: "never — ids and sources only" });
+      return { id, title: "Harness / Auth Profiles", rows };
     }
     default:
       return null;

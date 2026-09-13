@@ -225,6 +225,9 @@ const SENSITIVE_FILE_NAMES = new Set([
   "auth_token",
   "cli-secret",
   "credentials.json",
+  // Phase 84 — provider credential store (the auth module writes it 0600 too;
+  // this is defense-in-depth for files created before hardening ran).
+  "auth-credentials.json",
 ]);
 
 function hardenPermissions(home: string): void {

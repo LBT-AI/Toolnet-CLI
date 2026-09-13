@@ -8,6 +8,7 @@ import {
   getLastSessionId,
   SavedSession,
 } from "./sessionPersistence";
+import { setSessionAuthBridge } from "../core/auth/context";
 
 export interface Message {
   role: "user" | "assistant" | "system";
@@ -161,6 +162,55 @@ export function toggleAgentMode(): void {
   }
 }
 
+/**
+ * Phase 84 §15 — session auth pinning.
+ *
+ * A session records ONLY ids (`providerId -> authProfileId`) in its metadata.
+ * Secrets never touch session state: the credential is resolved from the store
+ * at call time, so a session cannot replay a key that was since rotated.
+ *
+ * Pinning also means a later global `toolnet auth use` cannot silently change
+ * the account a running session spends from — the session keeps its identity
+ * until the user pins another profile into it.
+ */
+export function getSessionAuthProfiles(): Record<string, string> {
+  const curr = loadSession(activeSessionId);
+  const pinned = curr?.metadata?.authProfiles;
+  if (!pinned || typeof pinned !== "object" || Array.isArray(pinned)) return {};
+  const out: Record<string, string> = {};
+  for (const [providerId, profileId] of Object.entries(pinned as Record<string, unknown>)) {
+    if (typeof providerId === "string" && typeof profileId === "string") out[providerId] = profileId;
+  }
+  return out;
+}
+
+/** The profile id a session currently pins for a provider, if any. */
+export function getSessionAuthProfile(providerId: string): string | null {
+  const provider = providerId.trim().toLowerCase();
+  return getSessionAuthProfiles()[provider] ?? null;
+}
+
+/** Pin (or clear, by passing null) the auth profile a session spends from. */
+export function setSessionAuthProfile(providerId: string, profileId: string | null): void {
+  const provider = providerId.trim().toLowerCase();
+  const curr = loadSession(activeSessionId);
+  if (!curr) return;
+  curr.metadata = curr.metadata || {};
+  const pinned: Record<string, string> = { ...(curr.metadata.authProfiles || {}) };
+  if (profileId) pinned[provider] = profileId;
+  else delete pinned[provider];
+  curr.metadata.authProfiles = pinned;
+  saveSession(curr.sessionId, curr.messages, curr.metadata);
+  notify();
+}
+
 export function getSessionCount(): number {
   return listAllSessions().length;
 }
+
+// §15 — expose session pinning to the auth layer without importing it at
+// module scope from core/auth (the lazy `require` lives on the other side).
+setSessionAuthBridge({
+  load: getSessionAuthProfiles,
+  pin: (providerId, profileId) => setSessionAuthProfile(providerId, profileId),
+});
