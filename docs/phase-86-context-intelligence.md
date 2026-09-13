@@ -286,4 +286,7 @@ transcript. Any new context feature belongs behind `ContextManager.prepare`.
 
 ## 23. Final commit
 
-Recorded in the commit that follows this document.
+`10b64610dd2fba23cc7cf4833eda974459bc055e` —
+`feat(context): add token budgeting compaction and context intelligence`
+
+Pushed to `main` only after every deterministic gate above was green.
