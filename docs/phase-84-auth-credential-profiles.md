@@ -12,7 +12,7 @@ external-harness credential injection.
 | Phase 83 commit | `119569f0b468756a9c7369c092c47dc6f27e2d9b` — *feat(harness): add external harness interoperability* |
 | Phase 82 commit | `52bc32e` — *feat(models): add provider routing intelligence and bounded multi-upstream fallback* |
 | Baseline gates | typecheck PASS · `bun test` 2121 pass / 3 skip / 0 fail · build PASS · `npm pack --dry-run` PASS |
-| Phase 84 commit | see §14 (recorded after the gates pass) |
+| Phase 84 commit | `7c51b458882cc25d3e39163d315a5703c8faf051` — *feat(auth): add credential profiles and provider authentication* |
 
 ## 2. Source references actually inspected
 
@@ -290,6 +290,7 @@ Classification: all skips are **ENVIRONMENT**, none is reported as a pass.
 
 ## 17. Commit
 
+`7c51b458882cc25d3e39163d315a5703c8faf051`
 `feat(auth): add credential profiles and provider authentication`
 
-Exact hash and push status are recorded in the final report for this phase.
+Pushed to `origin/main` (`119569f..7c51b45`); worktree clean.
