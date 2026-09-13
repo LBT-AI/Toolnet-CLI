@@ -1,4 +1,11 @@
-import { saveSession, loadSession, listAllSessions, deleteSessionFile, createNewSession } from "../lib/sessionPersistence";
+import {
+  saveSession,
+  loadSession,
+  listAllSessions,
+  listSessionSummaries,
+  deleteSessionFile,
+  createNewSession,
+} from "../lib/sessionPersistence";
 import { bypassEngine } from "../lib/bypass";
 import type { Msg, PendingConfirmation, Overlay } from "./types";
 import { updateCrashGoal } from "../lib/crashRecovery";
@@ -516,19 +523,21 @@ export class TuiState {
 
   openSessionPicker(): void {
     this.overlay = { type: "none" };
-    const rawSessions = listAllSessions();
+    // Index metadata only: populating the picker must not load every transcript.
+    const summaries = listSessionSummaries();
     const currCwd = process.cwd();
-    this.availableSessions = rawSessions.map((s) => ({
-      sessionId: s.sessionId,
-      name: s.metadata?.name,
-      model: s.metadata?.model,
-      provider: s.metadata?.provider,
-      messagesCount: Array.isArray(s.messages) ? s.messages.length : 0,
+    this.availableSessions = summaries.map((s) => ({
+      sessionId: s.id,
+      name: s.title,
+      model: s.model,
+      provider: s.provider,
+      messagesCount: s.messageCount,
       updatedAt: s.updatedAt,
-      createdAt: s.metadata?.createdAt || s.updatedAt,
-      workspace: s.metadata?.workspace || currCwd,
-      queuedCount: Array.isArray(s.metadata?.queuedMessages) ? s.metadata.queuedMessages.length : 0,
-      isCurrent: s.sessionId === this.currentSessionId,
+      createdAt: s.createdAt,
+      workspace: s.workspacePath || currCwd,
+      isCurrent: s.id === this.currentSessionId,
+      status: s.status,
+      harness: s.harness,
     }));
     this.sessionPickerIdx = 0;
     this.sessionSearchQuery = "";

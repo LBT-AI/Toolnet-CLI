@@ -13,6 +13,9 @@ export interface SessionItem {
   workspace?: string;
   queuedCount?: number;
   isCurrent: boolean;
+  /** Durable status from the session index (idle/running/interrupted/...). */
+  status?: string;
+  harness?: string;
 }
 
 export interface SessionPickerModalState {
@@ -69,13 +72,22 @@ export function renderSessionPickerBox(
   const countLabel = ` (${filteredSessions.length} session${filteredSessions.length === 1 ? "" : "s"})`;
   const title = "Sessions" + countLabel;
 
+  const statusTag = (status?: string): string => {
+    if (!status || status === "idle" || status === "completed") return "";
+    const label = status === "waiting_permission" ? "waiting" : status;
+    const color = status === "running" ? A.fgCyan : status === "interrupted" ? A.fgYellow : A.fgRed;
+    return " " + color + label + A.reset;
+  };
+
   const meta = (s: SessionItem): string => {
     const wsLen = s.workspace ? s.workspace.length + 1 : 0;
     const comboMax = Math.max(10, contentMax - 4 - wsLen - 19);
     const combo = [s.provider, s.model].filter(Boolean).join("/") || "no model";
+    const harness = s.harness && s.harness !== "default" ? `${s.harness} · ` : "";
     const ws = s.workspace ? " " + A.fgMuted + truncate(s.workspace, Math.max(10, contentMax - 4 - comboMax - 20)) + A.reset : "";
     return A.fgSubtext + truncate(combo, comboMax) + A.reset +
-      A.fgMuted + " · " + s.messagesCount + " msgs · " + formatRelativeTime(s.updatedAt) + A.reset + ws;
+      A.fgMuted + " · " + harness + s.messagesCount + " msgs · " + formatRelativeTime(s.updatedAt) + A.reset +
+      statusTag(s.status) + ws;
   };
 
   if (filteredSessions.length === 0) {

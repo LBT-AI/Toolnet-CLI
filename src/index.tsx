@@ -456,35 +456,9 @@ if (subCmd === "completion") {
 }
 
 if (subCmd === "session" || subCmd === "sessions") {
-  if (args.includes("--help") || args.includes("-h")) {
-    console.log(`ToolNet Session — Session Persistence & Recovery
-
-USAGE:
-  toolnet session [subcommand]
-
-SUBCOMMANDS:
-  current       Display detailed metadata of the active session
-  list          List all saved sessions sorted newest-first
-  resume <id>   Resume a specific saved session
-  delete <id>   Delete a saved session from disk`);
-    process.exit(0);
-  }
-  const { sessionCommand } = await import("./commands/session");
-  const subArgs = args.slice(1);
-  const outLines: string[] = [];
-  const ctx: any = {
-    getCurrentSessionId: () => "",
-    currentModel: () => "",
-    provider: { name: "" },
-    addMessage: (_role: string, content: string) => {
-      outLines.push(content);
-    },
-  };
-  await sessionCommand.handler(subArgs, ctx);
-  if (outLines.length > 0) {
-    console.log(outLines.join("\n"));
-  }
-  process.exit(0);
+  const { runSessionCli } = await import("./commands/sessionCli");
+  const code = await runSessionCli(args.slice(1));
+  process.exit(code);
 }
 
 if (subCmd === "resume") {

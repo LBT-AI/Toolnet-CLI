@@ -1,13 +1,16 @@
 import {
   listAllSessions,
+  listSessionSummaries,
   loadSession,
   saveSession,
   deleteSessionFile,
   renameSessionFile,
   createNewSession,
   getLastSessionId,
+  sessionStore,
   SavedSession,
 } from "./sessionPersistence";
+import { normalizeWorkspaceIdentity, type ResumedSession, type SessionIndexEntry } from "../core/session";
 import { setSessionAuthBridge } from "../core/auth/context";
 
 export interface Message {
@@ -206,6 +209,24 @@ export function setSessionAuthProfile(providerId: string, profileId: string | nu
 
 export function getSessionCount(): number {
   return listAllSessions().length;
+}
+
+/** Cheap index metadata for pickers and status views (no transcript load). */
+export function getSessionSummaries(): SessionIndexEntry[] {
+  return listSessionSummaries();
+}
+
+/**
+ * Reconstruct a session for continuation. Replay is state-only, so a caller
+ * gets the transcript, evidence and identities without any tool being re-run.
+ */
+export function resumeSession(sessionId: string): ResumedSession {
+  return sessionStore.resume(sessionId);
+}
+
+/** Most recent session belonging to the current workspace, if any. */
+export function getLatestSessionForWorkspace(): SessionIndexEntry | null {
+  return sessionStore.continueForWorkspace(normalizeWorkspaceIdentity(process.cwd()));
 }
 
 // §15 — expose session pinning to the auth layer without importing it at

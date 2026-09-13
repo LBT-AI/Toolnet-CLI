@@ -1,24 +1,24 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import crypto from "node:crypto";
 import { getToolnetSessionsDir } from "./toolnetHome";
 import { getVersion } from "./version";
+import {
+  resolveSessionsDir,
+  sessionStore,
+  normalizeSessionId,
+  isValidSessionId,
+  type SessionMessage,
+  type SessionRecord,
+  type SessionStatus,
+} from "../core/session";
 
-export interface SessionMessage {
-  role: string;
-  content: string;
-  tool_calls?: any[];
-  tool_call_id?: string;
-  name?: string;
-  [key: string]: any;
-}
+export type { SessionMessage };
 
 /**
- * Layer 4 — Phase 4: optional per-session SessionContext snapshot.
- * Persisted alongside messages; restored on load. Transient fields
- * (running worker handles, abort controllers, active spinners) are
- * NEVER persisted.
+ * Optional per-session SessionContext snapshot. Persisted alongside messages;
+ * restored on load. Transient fields (running worker handles, abort controllers,
+ * active spinners) are NEVER persisted.
  */
 export interface PersistedSessionContext {
   summary: string;
@@ -48,22 +48,23 @@ export interface SavedSession {
   messages: SessionMessage[];
   metadata?: Record<string, any>;
   updatedAt: string;
-  /** Phase 4: per-session SessionContext snapshot (optional for legacy files). */
   context?: PersistedSessionContext;
+  /** Durable-layer fields; absent on legacy snapshots. */
+  version?: number;
+  title?: string;
+  status?: SessionStatus;
+  workspace?: string;
+  parentSessionId?: string;
+  forkedFromCheckpointId?: string;
 }
 
+/**
+ * Canonical sessions directory. The durable session layer owns this decision, so
+ * a test override redirects both the legacy facade and the store together.
+ */
 export function getSessionsDir(): string {
-  if (process.env.TOOLNETCLI_SESSIONS_DIR) {
-    return process.env.TOOLNETCLI_SESSIONS_DIR;
-  }
-  if (process.env.TOOLNETAPI_SESSIONS_DIR) {
-    return process.env.TOOLNETAPI_SESSIONS_DIR;
-  }
-  if (process.env.DATA_DIR) {
-    return path.join(process.env.DATA_DIR, "sessions");
-  }
-  // Phase 3: canonical home module (TOOLNETCLI_CONFIG_DIR-aware).
-  return getToolnetSessionsDir();
+  const dir = resolveSessionsDir();
+  return dir || getToolnetSessionsDir();
 }
 
 export function formatExitMessage(sessionId?: string, hasContent = false): string {
@@ -75,12 +76,12 @@ export function formatExitMessage(sessionId?: string, hasContent = false): strin
 }
 
 /**
- * Layer 4 — Phase 4: persist a SessionContext snapshot to disk. The
- * snapshot is OPTIONAL — pass `null` or `undefined` for legacy callers.
+ * Persist a SessionContext snapshot to disk. The snapshot is OPTIONAL — pass
+ * `null` or `undefined` for legacy callers.
  *
- * Transient fields (running worker handles, abort controllers, active
- * spinners, transient approval modals) are NEVER read from the live
- * SessionContext and therefore never reach disk.
+ * Transient fields (running worker handles, abort controllers, active spinners,
+ * transient approval modals) are NEVER read from the live SessionContext and
+ * therefore never reach disk.
  */
 function buildPersistedContext(snapshot: any): PersistedSessionContext | undefined {
   if (!snapshot) return undefined;
@@ -112,19 +113,24 @@ function buildPersistedContext(snapshot: any): PersistedSessionContext | undefin
   };
 }
 
-export function saveSession(
-  sessionId: string,
-  messages: any[],
-  metadata?: any,
-  options?: { context?: any }
-): void {
-  if (!sessionId) return;
-  const sessionsDir = getSessionsDir();
-  if (!fs.existsSync(sessionsDir)) {
-    fs.mkdirSync(sessionsDir, { recursive: true });
-  }
+function toSavedSession(record: SessionRecord): SavedSession {
+  return {
+    sessionId: record.id,
+    messages: record.messages,
+    metadata: record.metadata,
+    updatedAt: record.updatedAt,
+    context: record.context as PersistedSessionContext | undefined,
+    version: record.version,
+    ...(record.title ? { title: record.title } : {}),
+    status: record.status,
+    workspace: record.workspace.path,
+    ...(record.parentSessionId ? { parentSessionId: record.parentSessionId } : {}),
+    ...(record.forkedFromCheckpointId ? { forkedFromCheckpointId: record.forkedFromCheckpointId } : {}),
+  };
+}
 
-  const formattedMessages: SessionMessage[] = (messages || []).map(msg => {
+function formatMessages(messages: any[]): SessionMessage[] {
+  return (messages || []).map((msg) => {
     const item: SessionMessage = {
       role: msg.role || "user",
       content: msg.content ?? "",
@@ -134,6 +140,19 @@ export function saveSession(
     if (msg.name !== undefined) item.name = msg.name;
     return item;
   });
+}
+
+export function saveSession(
+  sessionId: string,
+  messages: any[],
+  metadata?: any,
+  options?: { context?: any }
+): void {
+  if (!sessionId) return;
+  if (!isValidSessionId(sessionId)) {
+    // Never let an unsafe id become a path segment.
+    return;
+  }
 
   const existing = loadSession(sessionId);
   const now = new Date().toISOString();
@@ -158,58 +177,46 @@ export function saveSession(
     // contextRegistry unavailable — fall back to no-op
   }
 
-  const sessionData: SavedSession = {
-    sessionId,
-    messages: formattedMessages,
-    metadata: sessionMetadata,
-    updatedAt: now,
+  sessionStore.save(sessionId, formatMessages(messages), sessionMetadata, {
     context: persistedContext,
-  };
-
-  const filePath = path.join(sessionsDir, `${sessionId}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(sessionData, null, 2), "utf8");
-
-  if (!sessionId.startsWith("turbo-") && !sessionId.startsWith("temp-")) {
-    const lastSessionFile = path.join(sessionsDir, "last_session.txt");
-    fs.writeFileSync(lastSessionFile, sessionId.trim(), "utf8");
-  }
+  });
 }
 
-export function loadSession(sessionId: string): SavedSession | null {
-  if (!sessionId) return null;
-  const cleanId = sessionId.endsWith(".json") ? sessionId.slice(0, -5) : sessionId;
-  const sessionsDir = getSessionsDir();
-  let filePath = path.join(sessionsDir, `${cleanId}.json`);
-
-  if (!fs.existsSync(filePath)) {
-    // Check legacy ~/.toolnetapi/sessions fallback
-    const legacyPath = path.join(os.homedir(), ".toolnetapi", "sessions", `${cleanId}.json`);
-    if (fs.existsSync(legacyPath)) {
-      filePath = legacyPath;
-    } else {
-      return null;
-    }
-  }
-
+/** Legacy `~/.toolnetapi/sessions` fallback for pre-migration installs. */
+function loadLegacySessionFile(cleanId: string): SavedSession | null {
   try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    const data = JSON.parse(raw);
+    const legacyPath = path.join(os.homedir(), ".toolnetapi", "sessions", `${cleanId}.json`);
+    if (!fs.existsSync(legacyPath)) return null;
+    const data = JSON.parse(fs.readFileSync(legacyPath, "utf8"));
     return {
       sessionId: data.sessionId || cleanId,
       messages: Array.isArray(data.messages) ? data.messages : [],
       metadata: data.metadata || {},
       updatedAt: data.updatedAt || new Date().toISOString(),
-      context: data.context, // Phase 4: pass through persisted context snapshot
+      context: data.context,
     };
   } catch {
     return null;
   }
 }
 
+export function loadSession(sessionId: string): SavedSession | null {
+  if (!sessionId) return null;
+  let cleanId: string;
+  try {
+    cleanId = normalizeSessionId(sessionId);
+  } catch {
+    return null;
+  }
+  const record = sessionStore.load(cleanId);
+  if (record) return toSavedSession(record);
+  return loadLegacySessionFile(cleanId);
+}
+
 /**
- * Phase 4: hydrate a ContextRegistry entry from a persisted snapshot.
- * Replaces whatever the registry currently holds for this sessionId
- * (e.g. a fresh active state from `loadSession`).
+ * Hydrate a ContextRegistry entry from a persisted snapshot. Replaces whatever
+ * the registry currently holds for this sessionId (e.g. a fresh active state
+ * from `loadSession`).
  *
  * Validates:
  *  - tool-call pair integrity in the message history
@@ -281,9 +288,8 @@ export function loadSessionContext(
 }
 
 /**
- * Phase 4: a session-keyed cache for prepared messages / summary /
- * token estimates. Cache key includes sessionId + model + provider +
- * message revision, so:
+ * A session-keyed cache for prepared messages / summary / token estimates.
+ * Cache key includes sessionId + model + provider + message revision, so:
  *  - mutating one session does not invalidate another
  *  - the same session is invalidated when its message history changes
  *  - deleting a session clears its cache entry
@@ -332,26 +338,17 @@ export function clearSessionCache(sessionId: string): void {
 }
 
 export function getLastSessionId(): string | null {
+  const storeLast = sessionStore.lastSessionId();
+  if (storeLast) return storeLast;
+
   const sessionsDir = getSessionsDir();
-  const lastSessionFile = path.join(sessionsDir, "last_session.txt");
-
-  if (fs.existsSync(lastSessionFile)) {
-    try {
-      const id = fs.readFileSync(lastSessionFile, "utf8").trim();
-      if (id) {
-        const sessionPath = path.join(sessionsDir, `${id}.json`);
-        if (fs.existsSync(sessionPath)) {
-          return id;
-        }
-      }
-    } catch {}
-  }
-
   if (!fs.existsSync(sessionsDir)) return null;
 
   try {
     const files = fs.readdirSync(sessionsDir);
-    const sessionFiles = files.filter(f => f.endsWith(".json"));
+    const sessionFiles = files.filter(
+      (f) => f.endsWith(".json") && !f.startsWith(".") && !f.startsWith("turbo-") && !f.startsWith("temp-")
+    );
     if (sessionFiles.length === 0) return null;
 
     let newestId: string | null = null;
@@ -397,74 +394,69 @@ export function parseSessionArgs(argv: string[]): { resume: boolean; sessionId?:
   return { resume, sessionId };
 }
 
+/**
+ * Full records — used by callers that need message content. Sorted by the
+ * record's own `updatedAt` (not the cached index), so a session touched outside
+ * the store still lists in the right place.
+ */
 export function listAllSessions(): SavedSession[] {
-  const sessionsDir = getSessionsDir();
-  if (!fs.existsSync(sessionsDir)) return [];
-  try {
-    const files = fs.readdirSync(sessionsDir).filter(
-      f => f.endsWith(".json") && !f.startsWith("turbo-") && !f.startsWith("temp-")
-    );
-    const list: SavedSession[] = [];
-    for (const file of files) {
-      const loaded = loadSession(file);
-      if (loaded && !loaded.sessionId.startsWith("turbo-") && !loaded.sessionId.startsWith("temp-")) {
-        list.push(loaded);
-      }
-    }
-    list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    return list;
-  } catch {
-    return [];
+  const list: SavedSession[] = [];
+  for (const entry of sessionStore.list()) {
+    if (entry.id.startsWith("turbo-") || entry.id.startsWith("temp-")) continue;
+    const record = sessionStore.load(entry.id);
+    if (record) list.push(toSavedSession(record));
   }
+  list.sort((a, b) => {
+    const diff = new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    if (diff !== 0 && !Number.isNaN(diff)) return diff;
+    return b.sessionId.localeCompare(a.sessionId);
+  });
+  return list;
+}
+
+/** Cheap metadata listing — no transcript load. */
+export function listSessionSummaries() {
+  return sessionStore.list().filter((entry) => !entry.id.startsWith("turbo-") && !entry.id.startsWith("temp-"));
 }
 
 export function deleteSessionFile(sessionId: string): boolean {
   if (!sessionId) return false;
-  const cleanId = sessionId.endsWith(".json") ? sessionId.slice(0, -5) : sessionId;
-  const sessionsDir = getSessionsDir();
-  const filePath = path.join(sessionsDir, `${cleanId}.json`);
-  if (fs.existsSync(filePath)) {
-    try {
-      fs.unlinkSync(filePath);
-      const lastSessionFile = path.join(sessionsDir, "last_session.txt");
-      if (fs.existsSync(lastSessionFile)) {
-        const lastId = fs.readFileSync(lastSessionFile, "utf8").trim();
-        if (lastId === cleanId) {
-          try { fs.unlinkSync(lastSessionFile); } catch {}
-        }
-      }
-      try {
-        const { deleteSessionContext } = require("./context/contextRegistry");
-        deleteSessionContext(cleanId);
-      } catch {}
-      clearSessionCache(cleanId);
-      return true;
-    } catch {
-      return false;
-    }
+  let cleanId: string;
+  try {
+    cleanId = normalizeSessionId(sessionId);
+  } catch {
+    return false;
   }
-  return false;
+  try {
+    sessionStore.removeSingle(cleanId);
+  } catch {
+    return false;
+  }
+  try {
+    const { deleteSessionContext } = require("./context/contextRegistry");
+    deleteSessionContext(cleanId);
+  } catch {}
+  clearSessionCache(cleanId);
+  return true;
 }
 
 export function renameSessionFile(sessionId: string, newName: string): boolean {
   const loaded = loadSession(sessionId);
   if (!loaded) return false;
-  loaded.metadata = loaded.metadata || {};
-  loaded.metadata.name = newName;
-  saveSession(loaded.sessionId, loaded.messages, loaded.metadata);
-  return true;
+  try {
+    sessionStore.rename(loaded.sessionId, newName);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function createNewSession(name?: string): SavedSession {
-  const randomSuffix = crypto.randomBytes(4).toString("hex");
-  const sessionId = `sess_${Date.now()}_${randomSuffix}`;
-  const metadata: Record<string, any> = {};
-  if (name) metadata.name = name;
-  saveSession(sessionId, [], metadata);
-  return {
-    sessionId,
-    messages: [],
-    metadata,
-    updatedAt: new Date().toISOString()
-  };
+  const record = sessionStore.create({
+    ...(name ? { title: name, metadata: { name } } : {}),
+  });
+  return toSavedSession(record);
 }
+
+/** Durable-layer access for callers that need resume/fork/doctor. */
+export { sessionStore };
