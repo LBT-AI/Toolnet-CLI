@@ -362,10 +362,17 @@ Phase 86 (Context Intelligence) may **not** add a second session store. It shoul
 
 ## 24. Final commit
 
-Populated after the gate run and commit:
-
 ```
-commit  <see the commit that follows this document>
+commit  5d63ee347ee88a60afccce1220ae2aa97c31a613
 branch  main
 push    origin/main
+```
+
+Gate summary on this exact revision:
+
+```
+bun run typecheck     PASS
+bun test              2308 pass / 3 skip / 0 fail   (3 consecutive clean full runs)
+bun run build         PASS
+npm pack --dry-run    PASS
 ```
