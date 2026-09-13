@@ -409,7 +409,7 @@ export class AgentEngine {
     // Resume from a caller-owned transcript (TUI) or start a fresh turn.
     if (options.messages && options.messages.length > 0) {
       const messages = options.prependSystemPrompt
-        ? harness.buildResumeMessages(options.messages, base)
+        ? await harness.buildResumeMessages(options.messages, base)
         : options.messages;
       return harness.resume(messages, { ...base, toolsOverride: options.toolsOverride });
     }

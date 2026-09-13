@@ -39,6 +39,8 @@ const KNOWN_SUBCMDS = new Set([
   "tools",
   "queue",
   "version",
+  "repo",
+  "verify",
 ]);
 
 // ---- Top-level --version / --help (only when not dispatching a known subcommand) ----
@@ -147,6 +149,18 @@ if (subCmd === "models" || subCmd === "model" || subCmd === "providers" || subCm
 
 // ---- Eval subcommands (Phase 80.18) ----
 // `toolnet eval` measures models on the production AgentHarness path.
+if (subCmd === "repo") {
+  const { runRepoCommand } = await import("./commands/repo");
+  await runRepoCommand(args.slice(1));
+  process.exit(0);
+}
+
+if (subCmd === "verify") {
+  const { runVerifyCommand } = await import("./commands/verify");
+  await runVerifyCommand(args.slice(1));
+  process.exit(0);
+}
+
 if (subCmd === "eval") {
   const { runEvalCli } = await import("./commands/evalCli");
   const code = await runEvalCli(args.slice(1));

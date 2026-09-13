@@ -1491,14 +1491,33 @@ export class AgentHarness {
 
   // ── AgentLoop entry point ─────────────────────────────────────────────────
 
-  private buildSystemPrompt(extra?: string, taskSummary?: string): string {
+  private async buildSystemPrompt(extra?: string, taskSummary?: string, prompt?: string): Promise<string> {
     const memoryPrompt = contextEngine.getMemoryPromptSnippet(this.config.sessionId);
     const toolRules = contextEngine.getToolUsageRulesSnippet();
     const permissionContext = getPermissionContextPrompt(this.config.sandboxMode || getSandboxMode());
     const codingPolicy = getCodingAgentPolicy();
     const toolUseGuidance = getCodingAgentToolUseGuidance();
     const projectCtx = buildProjectContext(this.config.workspaceRoot || process.cwd(), this.config.currentCwd || this.config.workspaceRoot || process.cwd());
-    const projectSummary = this.formatProjectContext(projectCtx);
+    let projectSummary = this.formatProjectContext(projectCtx);
+    
+    // Phase 87 - Inject Repository Intelligence
+    try {
+      const { repositoryIntelligence } = await import("../../core/repo");
+      const repoContext = await repositoryIntelligence.getCompactContext(this.config.currentCwd || this.config.workspaceRoot || process.cwd());
+      
+      const instructionsText = repoContext.instructions.map(i => `\nRules from ${i.path}:\n${i.content}`).join("\n");
+      const mapText = repoContext.mapNodes.map(n => `- ${n.filePath} (${n.language}, ${n.size} bytes) - Symbols: ${n.symbols.join(", ")}`).join("\n");
+      
+      projectSummary += `\n\n[REPOSITORY INSTRUCTIONS]${instructionsText}\n\n[REPOSITORY MAP]\n${mapText}`;
+
+      if (prompt) {
+        const changeImpact = await repositoryIntelligence.determineChangeImpact(prompt, repoContext.profile);
+        projectSummary += `\n\n[CHANGE IMPACT ANALYSIS]\nRisk: ${changeImpact.risk}\nPrimary Files: ${changeImpact.primaryFiles.join(", ")}\nTests to run: ${changeImpact.tests.join(", ")}`;
+      }
+    } catch (err) {
+      // Degrade gracefully
+    }
+
     const taskBlock = taskSummary ? `\n${taskSummary}\n` : "";
 
     // Phase 81 §6 — the profile's PromptPolicy decides which blocks appear and
@@ -1585,7 +1604,7 @@ export class AgentHarness {
     this.agentState.transition("gathering-context");
     const activeCtx = this.taskContextManager.getContext();
     const taskSummary = this.formatActiveTaskContext(activeCtx, task);
-    const systemPrompt = this.buildSystemPrompt(options.systemPrompt, taskSummary);
+    const systemPrompt = await this.buildSystemPrompt(options.systemPrompt, taskSummary, prompt);
 
     const messages: ContextMessage[] = [
       { role: "system", content: systemPrompt },
@@ -1609,7 +1628,7 @@ export class AgentHarness {
 
   async run(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
     const mode = options.mode || "HEADLESS";
-    const systemPrompt = this.buildSystemPrompt(options.systemPrompt);
+    const systemPrompt = await this.buildSystemPrompt(options.systemPrompt, undefined, prompt);
 
     const messages: ContextMessage[] = [
       { role: "system", content: systemPrompt },
@@ -1632,15 +1651,16 @@ export class AgentHarness {
    * prompt) is regenerated instead of trusting a stale copy. Stored child
    * transcripts deliberately exclude the system message for exactly this reason.
    */
-  buildResumeMessages(
+  async buildResumeMessages(
     transcript: ContextMessage[],
     options: ExecutionOptions = {}
-  ): ContextMessage[] {
-    return [{ role: "system", content: this.buildSystemPrompt(options.systemPrompt) }, ...transcript];
+  ): Promise<ContextMessage[]> {
+    const sysPrompt = await this.buildSystemPrompt(options.systemPrompt);
+    return [{ role: "system", content: sysPrompt }, ...transcript];
   }
 
   async runHeadless(prompt: string, options: ExecutionOptions = {}): Promise<HarnessResult> {
-    const systemPrompt = this.buildSystemPrompt(options.systemPrompt);
+    const systemPrompt = await this.buildSystemPrompt(options.systemPrompt, undefined, prompt);
 
     const messages: ContextMessage[] = [
       { role: "system", content: systemPrompt },
@@ -1656,7 +1676,7 @@ export class AgentHarness {
 ${getCodingAgentPolicy()}
 
 ${getCodingAgentToolUseGuidance()}`;
-    const systemPrompt = this.buildSystemPrompt(options.systemPrompt || turboPrompt);
+    const systemPrompt = await this.buildSystemPrompt(options.systemPrompt || turboPrompt, undefined, prompt);
     const messages: ContextMessage[] = [
       { role: "system", content: systemPrompt },
       { role: "user", content: prompt },

@@ -89,6 +89,16 @@ export interface ExecutionEvidence {
   verificationResults: number;
   /** Turns observed from `agent:thinking` boundaries. */
   turns: number;
+  // Phase 87 — verification pipeline
+  changedFiles: string[];
+  verifiedMutations: number;
+  diagnosticsBefore: number;
+  diagnosticsAfter: number;
+  testsPassed: number;
+  testsFailed: number;
+  builds: number;
+  formatters: number;
+  verificationFailures: number;
 }
 
 export function emptyExecutionEvidence(): ExecutionEvidence {
@@ -103,6 +113,15 @@ export function emptyExecutionEvidence(): ExecutionEvidence {
     diagnostics: 0,
     verificationResults: 0,
     turns: 0,
+    changedFiles: [],
+    verifiedMutations: 0,
+    diagnosticsBefore: 0,
+    diagnosticsAfter: 0,
+    testsPassed: 0,
+    testsFailed: 0,
+    builds: 0,
+    formatters: 0,
+    verificationFailures: 0,
   };
 }
 
@@ -217,8 +236,25 @@ export class ExecutionEvidenceCollector {
       if (this.seenOutcomeIds.has(id)) return;
       this.seenOutcomeIds.add(id);
     }
-    if (!resultIndicatesFailure(payload.result)) return;
-    this.evidence.failedToolCalls += 1;
+    
+    const isFailure = resultIndicatesFailure(payload.result);
+    if (isFailure) {
+      this.evidence.failedToolCalls += 1;
+    }
+
+    const name = String(payload.toolName ?? "");
+    if (isShellTool(name) && looksLikeTestCommand(name, payload.toolArgs)) {
+      if (isFailure) {
+        this.evidence.testsFailed += 1;
+      } else {
+        this.evidence.testsPassed += 1;
+      }
+    }
+    
+    // Also track Phase 87 verification results
+    if (isMutationTool(name) && !isFailure) {
+      this.evidence.verifiedMutations += 1;
+    }
   }
 
   private recordFileChange(event: ObservableEvent, ok: boolean): void {
@@ -229,6 +265,7 @@ export class ExecutionEvidenceCollector {
     const target = toolFileTarget(payload.toolArgs);
     if (target && !this.evidence.filesChanged.includes(target)) {
       this.evidence.filesChanged.push(target);
+      this.evidence.changedFiles.push(target);
     }
   }
 

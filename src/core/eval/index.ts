@@ -75,4 +75,5 @@ export {
   suiteIds,
   textSuite,
   toolSuite,
+  phase87Suite,
 } from "./suites";

@@ -154,7 +154,7 @@ describe("Tools / Harness Panel Overlay Regression", () => {
     if (tuiState.overlay.type === "tools") {
       expect(tuiState.overlay.selected).toBeGreaterThan(3);
     }
-    handleKey(Buffer.from("1b5b4f46", "hex"), { renderAll: () => {} }); // End
+    handleKey(Buffer.from("1b5b46", "hex"), { renderAll: () => {} }); // End
     if (tuiState.overlay.type === "tools") {
       expect(tuiState.overlay.selected).toBe(Math.max(0, getToolListItems().length - 1));
     }

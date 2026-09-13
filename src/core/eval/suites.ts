@@ -226,7 +226,8 @@ export const structuredSuite: EvalSuite = {
   ],
 };
 
-export const BUILTIN_SUITES: EvalSuite[] = [textSuite, reasoningSuite, structuredSuite, toolSuite, codingSuite];
+import { phase87Suite } from "./phase87Suite";
+export const BUILTIN_SUITES: EvalSuite[] = [textSuite, reasoningSuite, structuredSuite, toolSuite, codingSuite, phase87Suite];
 
 export function findSuite(id: string): EvalSuite | undefined {
   return BUILTIN_SUITES.find((suite) => suite.id === id.toLowerCase());
@@ -235,3 +236,5 @@ export function findSuite(id: string): EvalSuite | undefined {
 export function suiteIds(): string[] {
   return BUILTIN_SUITES.map((suite) => suite.id);
 }
+
+export { phase87Suite } from "./phase87Suite";
