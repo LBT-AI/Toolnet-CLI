@@ -23,7 +23,7 @@ export interface CrashReportPayload {
 }
 
 function getTelemetryDir(): string {
-  // Phase 3: canonical home telemetry dir.
+ // : canonical home telemetry dir.
   return getToolnetTelemetryDir();
 }
 

@@ -1,5 +1,5 @@
 /**
- * Phase 75.4 — Subagent Permission Derivation
+ * Subagent Permission Derivation
  *
  * The security invariant of the whole subagent feature:
  *

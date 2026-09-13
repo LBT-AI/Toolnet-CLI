@@ -1,5 +1,5 @@
 /**
- * Phase 74.7 — LSP core unit tests.
+ * LSP core unit tests.
  *
  * Everything here is deterministic: no language-server binary, no network. The
  * in-memory transport drives the production client/manager code paths.

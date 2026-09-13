@@ -166,7 +166,7 @@ export function toggleAgentMode(): void {
 }
 
 /**
- * Phase 84 §15 — session auth pinning.
+ * — session auth pinning.
  *
  * A session records ONLY ids (`providerId -> authProfileId`) in its metadata.
  * Secrets never touch session state: the credential is resolved from the store
@@ -229,7 +229,7 @@ export function getLatestSessionForWorkspace(): SessionIndexEntry | null {
   return sessionStore.continueForWorkspace(normalizeWorkspaceIdentity(process.cwd()));
 }
 
-// §15 — expose session pinning to the auth layer without importing it at
+// — expose session pinning to the auth layer without importing it at
 // module scope from core/auth (the lazy `require` lives on the other side).
 setSessionAuthBridge({
   load: getSessionAuthProfiles,

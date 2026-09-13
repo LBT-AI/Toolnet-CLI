@@ -1,5 +1,5 @@
 /**
- * Phase 81 §14/§15 — `toolnet eval harnesses|compare-harness|matrix`.
+ * — `toolnet eval harnesses|compare-harness|matrix`.
  *
  * Reporting is over STORED runs by default; executing cells is opt-in via
  * `--run`, so a comparison is never a surprise spend.
@@ -114,7 +114,7 @@ afterEach(() => {
   } catch {}
 });
 
-describe("Phase 81 §14 — toolnet eval harnesses", () => {
+describe(" — toolnet eval harnesses", () => {
   it("lists every profile with its stored run count", async () => {
     const c = capture();
     const code = await runEvalCli(["harnesses"], { io: c.io, store });
@@ -141,7 +141,7 @@ describe("Phase 81 §14 — toolnet eval harnesses", () => {
   });
 });
 
-describe("Phase 81 §14 — toolnet eval compare-harness", () => {
+describe(" — toolnet eval compare-harness", () => {
   it("compares profiles for one model with sample counts", async () => {
     const c = capture();
     const code = await runEvalCli(
@@ -196,7 +196,7 @@ describe("Phase 81 §14 — toolnet eval compare-harness", () => {
   });
 });
 
-describe("Phase 81 §15 — toolnet eval matrix", () => {
+describe(" — toolnet eval matrix", () => {
   it("prints a model x harness grid from stored runs", async () => {
     const c = capture();
     const code = await runEvalCli(["matrix", "coding"], { io: c.io, store });

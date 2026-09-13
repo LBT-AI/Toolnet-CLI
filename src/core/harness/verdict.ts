@@ -1,5 +1,5 @@
 /**
- * Phase 81 §11 — completion contract.
+ * — completion contract.
  *
  * A run's outcome is NOT "the model emitted final text". It is a verdict
  * computed from what actually happened:
@@ -41,7 +41,7 @@ export interface RequiredWork {
   testRequired: boolean;
 }
 
-/** Verified side effects (Phase 73.9 gate counters). */
+/** Verified side effects ( gate counters). */
 export interface VerifiedWork {
   mutations: number;
   executions: number;

@@ -3,8 +3,8 @@ import { contextEngine } from "./context";
 import { sessionTrust } from "./security/sessionTrust";
 import { toolRegistry } from "./harness/toolRegistry";
 import type { HarnessMetrics } from "./harness/types";
-import type { ListItem } from "../tui/renderers/listPanelRenderer";
-// Phase 81 §19 — the panel READS the canonical harness registry and the
+import type { ListItem } from "./text";
+// — the panel READS the canonical harness registry and the
 // canonical config. It implements no policy: selection goes through the same
 // `persistHarnessProfile` API the CLI uses.
 import {
@@ -12,10 +12,10 @@ import {
   harnessRegistry,
   summarizeHarnessProfile,
 } from "../core/harness";
-// Phase 83 §21 — external harness status is read-only diagnostic data from the
+// — external harness status is read-only diagnostic data from the
 // canonical registry. The TUI never spawns an external harness.
 import { externalHarnessRegistry } from "../core/externalHarness";
-// Phase 84 §21 — the auth panel reads the canonical operations facade only.
+// — the auth panel reads the canonical operations facade only.
 import { authOperations } from "../core/auth";
 
 export interface HarnessDetailRow {
@@ -40,7 +40,7 @@ export const HARNESS_SECTIONS: Array<{ id: string; title: string; description: s
   { id: "telemetry", title: "Telemetry", description: "Tokens, tool calls, uptime and output metrics" },
   { id: "subagents", title: "Subagents", description: "Subagent runtime and delegation roles" },
   { id: "external", title: "External Harnesses", description: "Installed external coding harnesses (opencode, codex)" },
-  // Phase 84 §21 — read-only provider auth panel. Shows ids, sources and
+ // — read-only provider auth panel. Shows ids, sources and
   // status only: never a secret, never a secret fragment.
   { id: "auth", title: "Auth Profiles", description: "Provider credential profiles, source and status" },
 ];

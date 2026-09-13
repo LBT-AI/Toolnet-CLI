@@ -9,7 +9,7 @@ import { getToolnetAuditDir } from "../toolnetHome";
 export const GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 
 function getDefaultAuditDir(): string {
-  // Phase 3: canonical home (~/.toolnetcli/audit), legacy dir migrated by toolnetHome.
+ // : canonical home (~/.toolnetcli/audit), legacy dir migrated by toolnetHome.
   return getToolnetAuditDir();
 }
 

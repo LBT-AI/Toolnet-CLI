@@ -20,7 +20,7 @@ import {
 import { McpManager, filterServerTools, readServerPolicy } from "../../core/mcp/manager";
 
 /**
- * Phase 77.12–77.22 — MCP treated as untrusted input + one canonical registry.
+ * 77.22 — MCP treated as untrusted input + one canonical registry.
  */
 
 let workspace: string;

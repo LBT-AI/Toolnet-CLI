@@ -1,8 +1,8 @@
 /**
- * Phase 84 §14/§20/§22 — shared auth operations.
+ * — shared auth operations.
  *
  * CLI and TUI both call these; neither reaches into the store or the registry
- * directly (§31 architecture guard). Every function returns secret-free data —
+ * directly ( architecture guard). Every function returns secret-free data —
  * status objects carry `source`, `configured` and ids, never key material.
  */
 
@@ -12,7 +12,7 @@ import { credentialResolver, type CredentialResolver } from "./resolver";
 import { AuthProfileValidationError, makeProfileId, parseProfileId } from "./errors";
 import { providerCredentialEnv, type AuthProfile, type AuthStatusKind } from "./types";
 
-/** §22 — status is derived, never asserted from the mere existence of a value. */
+/** — status is derived, never asserted from the mere existence of a value. */
 export function statusKindFor(input: {
   configured: boolean;
   source: string;
@@ -54,7 +54,7 @@ export class AuthOperations {
     this.resolver = options.resolver ?? credentialResolver;
   }
 
-  /** §14/§20 — list every configured provider with its profiles. */
+ /** — list every configured provider with its profiles. */
   list(providerIds?: string[]): AuthProviderView[] {
     const ids = providerIds && providerIds.length > 0 ? providerIds : this.discoverProviders();
     return ids
@@ -83,7 +83,7 @@ export class AuthOperations {
   }
 
   /**
-   * §13 — add a manually entered API key. The secret never appears in argv;
+ * — add a manually entered API key. The secret never appears in argv;
    * callers prompt for it off-TTY.
    */
   async addApiKey(input: { providerId: string; name: string; secret: string; activate?: boolean }): Promise<AuthProfile> {
@@ -105,7 +105,7 @@ export class AuthOperations {
   /**
    * Register an environment-backed profile. No secret is stored: the profile
    * simply names the variable to read, so `OPENROUTER_API_KEY` keeps working
-   * without being copied into any file (§10/§27).
+ * without being copied into any file ().
    */
   addEnv(input: { providerId: string; name: string; envName?: string; activate?: boolean }): AuthProfile {
     const id = makeProfileId(input.providerId, input.name);
@@ -128,7 +128,7 @@ export class AuthOperations {
     return profile;
   }
 
-  /** §14 — switch the active profile. Never touches another credential. */
+ /** — switch the active profile. Never touches another credential. */
   use(profileId: string): AuthProfile {
     const { providerId } = parseProfileId(profileId);
     const profile = this.profiles.get(profileId);
@@ -139,7 +139,7 @@ export class AuthOperations {
   }
 
   /**
-   * §16 — log out: clear the active pointer but retain the credential so the
+ * — log out: clear the active pointer but retain the credential so the
    * user can switch back without re-authenticating.
    */
   logout(profileId: string): { profileId: string; activeCleared: boolean } {
@@ -148,7 +148,7 @@ export class AuthOperations {
     return { profileId: profile.id, activeCleared };
   }
 
-  /** §16 — remove: delete metadata AND credential; requires auth next time. */
+ /** — remove: delete metadata AND credential; requires auth next time. */
   async remove(profileId: string): Promise<{ profileId: string; credentialDeleted: boolean }> {
     const profile = this.profiles.get(profileId);
     const credentialDeleted = await this.store.remove(profile.id);
@@ -156,7 +156,7 @@ export class AuthOperations {
     return { profileId: profile.id, credentialDeleted };
   }
 
-  /** §20 — doctor: filesystem/permission/config checks, no billing, no secrets. */
+ /** — doctor: filesystem/permission/config checks, no billing, no secrets. */
   doctor(): {
     storePath: string;
     permissions: "ok" | "repaired" | "missing";

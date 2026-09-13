@@ -1,5 +1,5 @@
 /**
- * Phase 84 §27 — legacy credential compatibility.
+ * — legacy credential compatibility.
  *
  * Before profiles existed, ToolNet stored provider keys through
  * `src/lib/keys.ts` (`keys.json`) and inline provider config. Both must keep

@@ -1,5 +1,5 @@
 /**
- * Phase 73.1 — Unified Contracts
+ * Unified Contracts
  *
  * Single source of truth for every cross-cutting type in the agent core.
  * The TUI, Simple REPL, headless runner, harness, providers and tools all
@@ -92,7 +92,7 @@ export type AgentEvent =
   | { type: "agent-complete" }
   | { type: "cancelled" }
   | { type: "error"; error: string }
-  // ── Phase 76A.5 — background job lifecycle. UIs render these; they never
+ // ── background job lifecycle. UIs render these; they never
   // drive the scheduler. `parentSessionId` lets a front-end filter to its own
   // session without knowing the job internals.
   | { type: "background-job-started"; jobId: string; jobType: string; title: string; parentSessionId: string }
@@ -181,14 +181,14 @@ export interface AgentResult {
   /** Full post-run transcript (assistant turns + tool results). */
   messages?: AgentMessage[];
   error?: string;
-  /** Phase 81 — evidence-derived outcome (never "the model said it finished"). */
+ /** evidence-derived outcome (never "the model said it finished"). */
   verdict?: "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED" | "TIMEOUT";
-  /** Phase 81 — which harness profile policy produced this run. */
+ /** which harness profile policy produced this run. */
   harnessId?: string;
   harnessVersion?: string;
-  /** Phase 81 — every unmet requirement behind a non-SUCCESS verdict. */
+ /** every unmet requirement behind a non-SUCCESS verdict. */
   completionReasons?: string[];
-  /** Phase 81 — observed side effects (files, commands, denials). */
+ /** observed side effects (files, commands, denials). */
   executionEvidence?: import("./harness/evidence").ExecutionEvidence;
 }
 

@@ -20,7 +20,7 @@ import { toolBash, toolRead, toolWrite, setWorkspaceRoot, resetWorkspaceState } 
 import { securityEngine, ToolGateway } from "../../lib/security";
 import { auditLogger } from "../../lib/security/auditLogger";
 
-describe("Security Hardening Phase 4 — Runtime Isolation & Dynamic Execution", () => {
+describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
   const tmpDir = path.join(os.tmpdir(), `toolnet-phase4-${Date.now()}`);
   const outsideDir = path.join(os.tmpdir(), `toolnet-outside-phase4-${Date.now()}`);
 
@@ -608,7 +608,7 @@ test("basic", () => { expect(1 + 1).toBe(2); });`);
     });
 
     test("CRITICAL_DENY cannot be overridden by whitelist/trust/bypass", () => {
-      // Tested in Phase 3: CRITICAL_DENY blocked in all modes
+ // Tested in : CRITICAL_DENY blocked in all modes
       const { policyEngine, sessionTrust } = require("../../lib/security");
       
       // Even with wildcard whitelist

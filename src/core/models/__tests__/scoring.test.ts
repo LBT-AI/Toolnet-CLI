@@ -47,7 +47,7 @@ function input(overrides: {
   };
 }
 
-describe("Phase 80 — ModelScorer", () => {
+describe("ModelScorer", () => {
   it("is deterministic for identical inputs", () => {
     const one = scoreTotal(input({ health: { ...unknownHealth(), state: "healthy", latencyMs: 120, successCount: 5 } }));
     for (let i = 0; i < 5; i++) {

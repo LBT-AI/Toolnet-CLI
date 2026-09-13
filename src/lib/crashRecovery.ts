@@ -19,7 +19,7 @@ export interface CrashState {
 }
 
 function getRecoveryDir(): string {
-  // Phase 3: canonical home recovery dir.
+ // : canonical home recovery dir.
   return getToolnetRecoveryDir();
 }
 

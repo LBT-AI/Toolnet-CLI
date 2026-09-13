@@ -1,5 +1,5 @@
 /**
- * Layer 4 — Phase 4 (t8): safeFetch hardening.
+ * Layer 4 — (t8): safeFetch hardening.
  *
  * Acceptance: toolWebFetch validates URL scheme (only http:/https:; localhost per policy),
  * limits redirect hops (max 3) without forwarding Authorization/Cookie cross-origin,

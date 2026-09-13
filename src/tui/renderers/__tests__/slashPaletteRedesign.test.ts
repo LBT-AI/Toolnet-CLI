@@ -57,7 +57,7 @@ describe("Slash Command Palette Redesign", () => {
 
   it("1. registry exposes exactly 39 commands (single source of truth)", () => {
     expect(getAllCommands().length).toBe(39);
-    // Phase 80 — the model catalog view is registered in the one registry.
+ // the model catalog view is registered in the one registry.
     expect(getAllCommands().map((command) => command.name)).toContain("catalog");
   });
 

@@ -1,12 +1,12 @@
 /**
- * Phase 76B — Teamwork DAG E2E (deterministic).
+ * Teamwork DAG E2E (deterministic).
  *
  * Drives the REAL Agent Engine + REAL SubagentManager + REAL ToolRegistry +
  * REAL BackgroundJobService against a NODE-ROUTED scripted model. Routing by a
  * `NODE:<id>` marker inside the node prompt (instead of by agent) is what makes
  * a plan with repeated agents deterministic.
  *
- * Scenarios (§76B.12–76B.14):
+ * Scenarios (–76B.14):
  *   A. a multi-stage plan runs through the `teamwork` tool: explore → coder →
  *      tester, with dependency outputs delivered and a real file mutation.
  *   B. plan-mode security: a parent that denies writes cannot create the file by
@@ -127,7 +127,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ── Suite ────────────────────────────────────────────────────────────────────
 
-describe.serial("Phase 76B — teamwork E2E", () => {
+describe.serial("teamwork E2E", () => {
   const originalFetch = globalThis.fetch;
   const SESSION = "team-e2e-session";
   let workspace: string;

@@ -1,5 +1,5 @@
 /**
- * Layer 4 — Phase 4: Safe HTTP fetch wrapper.
+ * Layer 4 — : Safe HTTP fetch wrapper.
  *
  * Hardening contract:
  *  1. URL schemes: only http: and https: are accepted. file:, javascript:,

@@ -1,5 +1,5 @@
 /**
- * Phase 81 §18 — `toolnet harness`.
+ * — `toolnet harness`.
  *
  * Formatting + orchestration only. Every read comes from the canonical
  * `harnessRegistry`, every write goes through `src/core/harness/store.ts`
@@ -66,7 +66,7 @@ NOTES:
 
 export interface HarnessCliDeps {
   io?: HarnessCliIO;
-  /** Phase 83 — external run injection seam (tests); defaults to the canonical runner. */
+ /** external run injection seam (tests); defaults to the canonical runner. */
   externalRun?: typeof externalHarnessRunner.run;
   /** Cancellation source for an external run. */
   signal?: AbortSignal;
@@ -134,7 +134,7 @@ export async function runHarnessCli(
 // ── external ────────────────────────────────────────────────────────────────────
 
 /**
- * Phase 83 §20 — external harness subcommands. Args after `--` are forwarded
+ * — external harness subcommands. Args after `--` are forwarded
  * verbatim as argv elements (never joined into a shell string).
  */
 async function runExternalSubcommand(
@@ -260,11 +260,11 @@ async function externalRun(
   const session = flagOf("--session");
   const timeoutFlag = flagOf("--timeout");
   const fork = allArgs.includes("--fork");
-  // Phase 84 §18 — explicit credential injection. Absent by default: the
+ // — explicit credential injection. Absent by default: the
   // external harness then uses its OWN auth (never ToolNet credentials).
   const authProfile = flagOf("--auth-profile");
 
-  // §15 — resume identity must carry the same harness namespace.
+ // — resume identity must carry the same harness namespace.
   let resume: { harnessId: string; externalSessionId: string } | undefined;
   if (session) {
     const parsed = parseNamespacedSession(session);
@@ -279,7 +279,7 @@ async function externalRun(
   try {
     const harnessId = id.trim().toLowerCase();
 
-    // §18 — inject only when the user named a profile, and only into an env
+ // — inject only when the user named a profile, and only into an env
     // name the adapter declares. The secret never enters argv or the output.
     let credentialEnv: Record<string, string> | undefined;
     if (authProfile) {

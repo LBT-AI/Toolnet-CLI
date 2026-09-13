@@ -1,5 +1,5 @@
 /**
- * Phase 83 §22 — Structured external-harness errors.
+ * — Structured external-harness errors.
  *
  * Every error carries `code`, `harnessId`, `retryable`, and a secret-free
  * `safeMessage` (no env values, no argv prompt content, no raw stderr dumps —

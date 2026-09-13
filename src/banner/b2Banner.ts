@@ -1,5 +1,5 @@
 import { isNoColor } from "../term";
-import { padVisible, visibleWidth } from "../tui/layout";
+import { padVisible, visibleWidth } from "../lib/text";
 import { getVersion } from "../lib/version";
 
 export type BannerPhase = "core" | "portal" | "connections" | "pulse" | "wordmark" | "final";

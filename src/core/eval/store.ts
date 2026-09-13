@@ -1,5 +1,5 @@
 /**
- * Phase 80 §15 — EvalStore.
+ * — EvalStore.
  *
  * No database dependency: one append-only JSONL file under
  * `~/.toolnetcli/evals/runs.jsonl`. Properties that matter:

@@ -1,5 +1,5 @@
 /**
- * Phase 77.7/77.9 — Canonical Hook Registry
+ * /77.9 — Canonical Hook Registry
  *
  * One registry owns every hook. Execution is strictly SEQUENTIAL in
  * registration order (stable-sorted by priority), because hooks may mutate the
@@ -242,7 +242,7 @@ export class HookRegistry {
   /**
    * Stable ordering: priority ascending, then registration order. `Array.sort`
    * is stable in every supported runtime, so equal priorities keep load order —
-   * exactly the determinism §77.7 requires.
+ * exactly the determinism requires.
    */
   private executionOrder(name: HookName): HookRegistration[] {
     return this.hooks

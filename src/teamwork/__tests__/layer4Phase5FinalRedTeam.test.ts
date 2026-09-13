@@ -29,7 +29,7 @@ afterEach(() => {
   sessionTrust.clearAll();
 });
 
-describe("Layer 4 Phase 5 FINAL — residual hardening and red team", () => {
+describe("Layer 4 FINAL — residual hardening and red team", () => {
   test("execution: CRITICAL_DENY cannot be overridden by trust or approval", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "phase5-exec-"));
     const sid = id("critical");

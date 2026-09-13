@@ -1,5 +1,5 @@
 /**
- * Phase 83 §16 — HarnessExecutionService: THE dispatch owner.
+ * — HarnessExecutionService: THE dispatch owner.
  *
  * One entry point that can execute a task on the NATIVE ToolNet harness or on
  * an EXTERNAL harness. Dispatch only:
@@ -12,7 +12,7 @@
  * beforehand), no tool execution, and no harness-specific if/else chains.
  * The native AgentHarness loop is NOT moved into this service.
  *
- * §6 trust boundary: external execution is `external_managed` — ToolNet never
+ * trust boundary: external execution is `external_managed` — ToolNet never
  * claims its permission system protected an external harness's tools, and a
  * normal ToolNet task is never silently auto-routed to an external binary.
  */
@@ -136,12 +136,12 @@ export class HarnessExecutionService {
       target: "external",
       harnessId: definition.id,
       external: result,
-      // §6 — always surfaced: ToolNet permissions do NOT govern this run.
+ // — always surfaced: ToolNet permissions do NOT govern this run.
       executionTrust: definition.executionTrust,
     };
   }
 
-  /** Namespace a freshly observed external session id (§15). */
+ /** Namespace a freshly observed external session id (). */
   captureSession(harnessId: string, result: ExternalHarnessResult): string | undefined {
     if (!result.sessionId) return undefined;
     const parsed = /^external:[^:]+:(.+)$/.exec(result.sessionId);

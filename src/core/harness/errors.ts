@@ -1,5 +1,5 @@
 /**
- * Phase 81 §5 — structured harness errors.
+ * — structured harness errors.
  *
  * A mistyped profile id must fail loudly: silently running a different
  * behavioural contract than the user asked for would make every eval and every

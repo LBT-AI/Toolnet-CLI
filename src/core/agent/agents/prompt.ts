@@ -1,5 +1,5 @@
 /**
- * Phase 75.2 — Child Agent System Prompt
+ * Child Agent System Prompt
  *
  * The child's prompt is derived from its AgentDefinition plus the constraints
  * the runtime actually enforces. It deliberately states the same rules the

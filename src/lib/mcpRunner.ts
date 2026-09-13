@@ -1,5 +1,5 @@
 /**
- * MCP Runner — Layer 4 Phase 3 (Supply-Chain Hardening)
+ * MCP Runner — Layer 4 (Supply-Chain Hardening)
  *
  * Security model:
  *  - MCP server configs are discovered from workspace files (semi-trusted
@@ -16,7 +16,7 @@
  *  - Every model-callable MCP tool still executes through ToolGateway →
  *    SecurityEngine (mcp__ prefix NEVER auto-allows).
  *
- * Remote MCP transports (Phase 78):
+ * Remote MCP transports ():
  *  - This module is the STDIO executor only. Every remote (HTTP/SSE) server is
  *    reached through `src/core/mcp/remoteTransport.ts`, which is the sole place
  *    a remote transport is constructed (enforced by an architecture test).
@@ -59,7 +59,7 @@ function numEnv(name: string, def: number): number {
 
 /**
  * One MCP server entry. Stdio entries carry `command`; remote entries
- * (Phase 78.2) carry `url` and are reached over Streamable HTTP / SSE.
+ * () carry `url` and are reached over Streamable HTTP / SSE.
  * Discovery accepts both, so remote servers are first-class config citizens
  * and flow through the same canonical McpManager.
  */
@@ -196,7 +196,7 @@ export function computeServerFingerprint(config: McpServerConfig): string {
     args: [...(config.args || [])].sort(),
     cwd: config.cwd || "",
     // A remote server pointed at a different URL is a different server: trust
-    // must be re-confirmed, and credentials must not carry over (Phase 78.8).
+ // must be re-confirmed, and credentials must not carry over ().
     url: config.url ?? "",
   });
   // FNV-1a 32-bit — short, deterministic, not security-critical (we only need
@@ -469,7 +469,7 @@ function delay(ms: number): Promise<void> {
  * Connects ONE server with connect-timeout, scrubbed env, and registry
  * bookkeeping. Concurrent calls for the same serverId share one init promise.
  *
- * Exported for the Phase 77 canonical McpManager, which drives per-server
+ * Exported for the canonical McpManager, which drives per-server
  * connect/disconnect; the security model (trust gate, scrubbed env, bounded
  * connect) lives here so there is exactly one connector implementation.
  */
@@ -760,7 +760,7 @@ export async function executeMcpTool(name: string, args: Record<string, any> = {
   }
 }
 
-/** Active clients (Phase 77 McpManager tool discovery + status). */
+/** Active clients ( McpManager tool discovery + status). */
 export function getActiveMcpClients(): ActiveMcpClient[] {
   return [...activeClientsMap.values()];
 }

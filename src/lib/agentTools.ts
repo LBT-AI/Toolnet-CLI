@@ -43,7 +43,7 @@ export function flushToolCache(): void {
 /**
  * Model-facing tool schemas.
  *
- * Phase 73.11 — this array is DERIVED from `toolRegistry`, the single schema
+ * this array is DERIVED from `toolRegistry`, the single schema
  * source. The historical hand-maintained array duplicated every definition and
  * additionally leaked dispatch aliases (`glob_search`, `grep_search`) to the
  * model. Deriving here makes the registry comment literally true and guarantees
@@ -71,14 +71,14 @@ export interface ExecuteToolOptions {
   workspaceRoot?: string;
   sandboxMode?: "workspace" | "ask" | "full-access";
   userApproved?: boolean;
-  /** Layer 4 Phase 1: full security context propagated to the executor. */
+ /** Layer 4 : full security context propagated to the executor. */
   sessionId?: string;
   agentRole?: string;
   agentDepth?: number;
   source?: "tui" | "headless" | "subagent" | "teamwork" | "plugin" | "vision" | "mcp";
   /** Abort signal — propagated to long-running executors (shell, fetch). */
   signal?: AbortSignal;
-  /** Phase 75: spawning-turn context for the `task` tool (scope + depth). */
+ /** : spawning-turn context for the `task` tool (scope + depth). */
   subagent?: SubagentRuntimeContext;
 }
 
@@ -240,7 +240,7 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
       });
       return JSON.stringify({ stdout: res.output || "", stderr: res.error || "", exitCode: res.success ? 0 : 1, tokensUsed: res.tokensUsed, toolCallsCount: res.toolCallsCount });
     } else {
-      // Phase 77: external tools (MCP + plugin) live in the canonical registry,
+ // : external tools (MCP + plugin) live in the canonical registry,
       // so they are found here first and receive the full execution context
       // (cwd / workspace / abort signal). The raw `executeMcpTool` call below
       // remains only as a compatibility fallback for callers that invoke an
@@ -277,7 +277,7 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
 
 /**
  * Public executeTool — thin COMPATIBILITY WRAPPER around ToolGateway.execute.
- * Layer 4 Phase 1: the ONLY security evaluation happens inside the gateway
+ * Layer 4 : the ONLY security evaluation happens inside the gateway
  * (SecurityEngine). This wrapper re-evaluates nothing and returns the gateway
  * result. userApproved is forwarded so an interactive caller that already
  * obtained user consent can execute an ASK tool once.

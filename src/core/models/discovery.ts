@@ -1,5 +1,5 @@
 /**
- * Phase 79 §16 — Model discovery / refresh.
+ * — Model discovery / refresh.
  *
  * Refresh rules:
  *  - Fetch, validate, normalize, then replace ATOMICALLY per provider.

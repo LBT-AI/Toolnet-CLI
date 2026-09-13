@@ -1,5 +1,5 @@
 /**
- * Phase 74.8 — Golden E2E: rename a symbol using code intelligence.
+ * Golden E2E: rename a symbol using code intelligence.
  *
  * Prompt (as a user would type it):
  *   "Đổi tên hàm getUser thành findUser và sửa toàn bộ nơi sử dụng. Sau đó chạy test."

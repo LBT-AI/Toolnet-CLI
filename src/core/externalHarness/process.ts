@@ -1,5 +1,5 @@
 /**
- * Phase 83 §5 — Safe process execution for external harnesses.
+ * — Safe process execution for external harnesses.
  *
  * Hard rules enforced here (never in adapters):
  *  - the child is spawned from `executable + argv[]` — never through
@@ -7,7 +7,7 @@
  *    backticks, quotes or newlines is inert data;
  *  - the environment is the existing `scrubChildEnv` allowlist plus ONLY the
  *    adapter's declared env names, still filtered through the secret
- *    deny-list (§14 — no arbitrary env cloning, values never logged);
+ * deny-list ( — no arbitrary env cloning, values never logged);
  *  - the working directory is validated against the sandbox before spawn;
  *  - abort/timeout kill the WHOLE process group (the harness may spawn its own
  *    children — killing only the direct child would orphan them);
@@ -34,7 +34,7 @@ export interface SafeSpawnSpec {
   /** Extra operational env vars (values never logged). */
   env?: Record<string, string>;
   /**
-   * Phase 84 §18 — explicitly requested credential env vars, applied after
+ * — explicitly requested credential env vars, applied after
    * scrubbing. Name-validated by the runner against the adapter declaration.
    */
   credentialEnv?: Record<string, string>;
@@ -84,7 +84,7 @@ export function normalizeCwd(cwd: string): string {
 /**
  * Build the child environment: allowlist + adapter names, secret-filtered.
  *
- * Phase 84 §18 — `credentialEnv` is the explicit credential-injection input.
+ * — `credentialEnv` is the explicit credential-injection input.
  * `scrubChildEnv` deliberately DENIES secret-shaped variable names, so
  * injection cannot ride the normal allowlist: it is a deliberate second step,
  * applied only after scrubbing and only for names the adapter itself declared

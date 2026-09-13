@@ -1,5 +1,5 @@
 /**
- * Phase 74.11 — LIVE LSP acceptance.
+ * LIVE LSP acceptance.
  *
  * This suite runs against a REAL `typescript-language-server` process spawned by
  * the production `LspManager` / `LspClient` / stdio transport. It never uses

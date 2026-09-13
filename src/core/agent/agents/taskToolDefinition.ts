@@ -1,5 +1,5 @@
 /**
- * Phase 75.7 — `task` tool definition
+ * `task` tool definition
  *
  * Registry entry for subagent delegation. Kept in its own module so the tool's
  * (long) model-facing description does not bloat the registry file, and so the

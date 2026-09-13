@@ -1,5 +1,5 @@
 /**
- * Phase 80 — eval layer barrel. Import from here, not individual modules.
+ * eval layer barrel. Import from here, not individual modules.
  */
 
 export { EVAL_RUN_SCHEMA_VERSION } from "./schema";

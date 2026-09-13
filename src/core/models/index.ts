@@ -1,5 +1,5 @@
 /**
- * Phase 79 — Provider Registry + Model Catalog + Model Router.
+ * Provider Registry + Model Catalog + Model Router.
  *
  * Canonical model layer barrel. Import from here, not from the individual
  * modules, so the surface stays stable as internals move.
@@ -67,7 +67,7 @@ export {
   type ProviderOutcome,
 } from "./health";
 
-// Phase 80 — performance profiles + eval evidence
+// performance profiles + eval evidence
 export {
   EVAL_DIMENSIONS,
   MIN_SAMPLES,
@@ -80,7 +80,7 @@ export {
   type PerformanceSample,
 } from "./performance";
 
-// Phase 80 — routing profiles
+// routing profiles
 export {
   DEFAULT_ROUTING_PROFILE,
   ROUTING_PROFILES,
@@ -93,7 +93,7 @@ export {
   type ScoreWeights,
 } from "./profiles";
 
-// Phase 80 — deterministic scorer
+// deterministic scorer
 export {
   CONTEXT_REFERENCE_TOKENS,
   COST_REFERENCE_USD,
@@ -110,7 +110,7 @@ export {
   type ScoreInput,
 } from "./scoring";
 
-// Phase 80 — task classification
+// task classification
 export {
   LONG_CONTEXT_THRESHOLD,
   TOOL_HEAVY_THRESHOLD,
@@ -121,7 +121,7 @@ export {
   type TaskType,
 } from "./taskClassifier";
 
-// Phase 80 — persistent model cache
+// persistent model cache
 export {
   MODEL_CACHE_SCHEMA_VERSION,
   MODEL_CACHE_TTL_MS,
@@ -136,7 +136,7 @@ export {
   type CachedProviderModels,
 } from "./cache";
 
-// Phase 82 — read-only routing projection (TUI/CLI)
+// read-only routing projection (TUI/CLI)
 export {
   buildRoutingView,
   renderRoutingView,
@@ -145,7 +145,7 @@ export {
   type RoutingViewInput,
 } from "./routingView";
 
-// Phase 80 — read-only catalog projection (TUI/CLI)
+// read-only catalog projection (TUI/CLI)
 export {
   buildCatalogRows,
   classifyPricing,
@@ -156,7 +156,7 @@ export {
   type CatalogView,
 } from "./catalogView";
 
-// Phase 80 — routing persistence
+// routing persistence
 export {
   POLICIES,
   addFallback,
@@ -220,7 +220,7 @@ export {
   type RoutingDecision,
 } from "./router";
 
-// Phase 82 — provider routes + route routing
+// provider routes + route routing
   export {
     DEFAULT_UPSTREAM,
     declaredUpstream,
@@ -322,7 +322,7 @@ export {
   type RuntimeModel,
 } from "./runtime";
 
-// Phase 82 §13 — hydrate the canonical route-performance tracker from the
+// — hydrate the canonical route-performance tracker from the
 // persisted intelligence snapshot exactly once per process, so the first
 // routing decision of a session already reflects observed reality. Stale
 // records decay on load; a corrupt file is quarantined, never thrown.

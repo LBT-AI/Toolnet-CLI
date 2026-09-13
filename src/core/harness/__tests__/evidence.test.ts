@@ -1,5 +1,5 @@
 /**
- * Phase 81 §12 — execution evidence derived from the existing event bus.
+ * — execution evidence derived from the existing event bus.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -21,7 +21,7 @@ function collect(events: Array<{ type: string; payload?: Record<string, unknown>
   return collector;
 }
 
-describe("Phase 81 §12 — canonical tool classification", () => {
+describe(" — canonical tool classification", () => {
   it("classifies mutation, shell and read tools", () => {
     expect(isMutationTool("write_file")).toBe(true);
     expect(isMutationTool("edit_file")).toBe(true);
@@ -54,7 +54,7 @@ describe("Phase 81 §12 — canonical tool classification", () => {
   });
 });
 
-describe("Phase 81 §12 — evidence collector", () => {
+describe(" — evidence collector", () => {
   it("starts empty", () => {
     const snapshot = new ExecutionEvidenceCollector().snapshot();
     expect(snapshot).toEqual(emptyExecutionEvidence());

@@ -16,7 +16,7 @@ import { auditLogger } from "../security/auditLogger";
 import { hookRegistry } from "../../core/hooks";
 
 function getPluginsDir(): string {
-  // Phase 3: canonical global plugins dir (~/.toolnetcli/plugins).
+ // : canonical global plugins dir (~/.toolnetcli/plugins).
   // DATA_DIR override still respected for tests/sandboxed installs.
   return process.env.DATA_DIR
     ? path.join(process.env.DATA_DIR, "plugins")
@@ -105,7 +105,7 @@ export class PluginManager {
   removePlugin(name: string): boolean {
     if (!this.plugins.has(name)) return false;
     this.plugins.delete(name);
-    // Phase 77: legacy plugins register into the canonical hook registry, so
+ // : legacy plugins register into the canonical hook registry, so
     // removal must drop their hooks too — otherwise a removed plugin keeps
     // observing the agent lifecycle.
     hookRegistry.unregisterOwner(this.hookOwner(name));
@@ -170,9 +170,9 @@ export class PluginManager {
 
       const owner = this.hookOwner(info.name);
 
-      // Phase 77.6/77.7: the legacy callback API is an ADAPTER onto the
+ // /77.7: the legacy callback API is an ADAPTER onto the
       // canonical hook registry — there is one hook execution engine, so legacy
-      // plugins and Phase 77 plugins share ordering and failure semantics.
+ // plugins and plugins share ordering and failure semantics.
       const api: PluginApi = {
         defineTool: (toolDef: PluginToolDefinition) => {
           this.tools.set(toolDef.name, { pluginName: info.name, tool: toolDef });
@@ -241,7 +241,7 @@ export class PluginManager {
   }
 
   /**
-   * Layer 4 Phase 1: plugin tool execution goes through the ToolGateway
+ * Layer 4 : plugin tool execution goes through the ToolGateway
    * (single SecurityEngine chokepoint). The plugin capability-grant model is
    * still enforced first; the gateway then evaluates the canonical policy
    * decision (ALLOW/ASK/DENY) and fail-closes headless ASK requests.

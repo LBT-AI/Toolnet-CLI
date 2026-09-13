@@ -1,5 +1,5 @@
 /**
- * Phase 80 §12/§13 — Built-in eval suites.
+ * — Built-in eval suites.
  *
  * Small on purpose: the goal is production-ready INFRASTRUCTURE plus a set of
  * cases that actually exercise the paths ToolNet cares about (tool selection,
@@ -11,7 +11,7 @@
 
 import type { EvalSuite } from "./types";
 
-/** §12 A/B/E — coding cases built on real fixture trees. */
+/** A/B/E — coding cases built on real fixture trees. */
 export const codingSuite: EvalSuite = {
   id: "coding",
   version: "1.0.0",
@@ -115,7 +115,7 @@ export const codingSuite: EvalSuite = {
   ],
 };
 
-/** §13 — tool-call quality cases. */
+/** — tool-call quality cases. */
 export const toolSuite: EvalSuite = {
   id: "tool",
   version: "1.0.0",
@@ -156,7 +156,7 @@ export const toolSuite: EvalSuite = {
   ],
 };
 
-/** §10 — text / reasoning / structured-output cases. */
+/** — text / reasoning / structured-output cases. */
 export const textSuite: EvalSuite = {
   id: "text",
   version: "1.0.0",

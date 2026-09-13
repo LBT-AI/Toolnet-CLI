@@ -1,5 +1,5 @@
 /**
- * Phase 80 §20/§21 — Live acceptance probes.
+ * — Live acceptance probes.
  *
  * Lives in the EVAL layer (not the model layer) so the dependency direction
  * stays clean: eval → models, never models → eval.
@@ -218,7 +218,7 @@ export async function runLiveCompletionProbe(
   }
 }
 
-// ── ToolNet live probe (Phase 80 §21) ───────────────────────────────────────
+// ── ToolNet live probe ( ) ───────────────────────────────────────
 
 export interface ToolNetProbeEntry {
   providerId: string;

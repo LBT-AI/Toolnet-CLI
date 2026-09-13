@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Phase 77.27 — Real stdio MCP fixture server.
+ * Real stdio MCP fixture server.
  *
  * This is a genuine MCP server process speaking JSON-RPC 2.0 over
  * newline-delimited stdio (the same shape `src/mock-mcp.ts` uses). It is NOT a
@@ -150,7 +150,7 @@ rl.on("line", (line: string) => {
       sendResult(id, {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "phase77-fixture", version: "1.0.0" },
+ serverInfo: { name: "fixture", version: "1.0.0" },
       });
       return;
 

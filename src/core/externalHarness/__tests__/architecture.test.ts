@@ -1,5 +1,5 @@
 /**
- * Phase 83 §24 — architecture guards.
+ * — architecture guards.
  *
  * Static proof that the external-harness layer is an INTEROPERABILITY
  * boundary, not a second runtime, and that trust never leaks:
@@ -38,7 +38,7 @@ function countMatches(haystack: string, pattern: RegExp): number {
   return (haystack.match(pattern) ?? []).length;
 }
 
-describe("Phase 83 §24 — architecture guards", () => {
+describe(" — architecture guards", () => {
   it("exposes exactly one canonical registry/runner/service (singleton identity)", () => {
     const { externalHarnessRegistry: againRegistry, externalHarnessRunner: againRunner, harnessExecutionService: againService } =
       require("../index") as typeof import("../index");

@@ -57,7 +57,7 @@ export interface TaskNodeOutput {
 
 /**
  * Structured execution result attached to a node by the scheduler
- * (Layer 4 Phase 2). COMPLETED ⇔ outputResult.success === true.
+ * (Layer 4 ). COMPLETED ⇔ outputResult.success === true.
  */
 export interface NodeOutputResult {
   success: boolean;

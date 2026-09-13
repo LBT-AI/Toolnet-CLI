@@ -89,7 +89,7 @@ describe("Provider Architecture — Fresh Install", () => {
     resetAppConfigCache();
     const { config } = loadAppConfig();
     expect(config.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
-    // Phase 80 — routing defaults ship with the config.
+ // routing defaults ship with the config.
     expect(config.routing.profile).toBe("auto");
     expect(config.routing.policy).toBe("priority");
     expect(config.gatewayUrl).toBeNull();

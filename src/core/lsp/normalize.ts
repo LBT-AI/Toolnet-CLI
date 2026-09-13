@@ -1,5 +1,5 @@
 /**
- * Phase 74 — Wire → normalized result adapters.
+ * Wire → normalized result adapters.
  *
  * Language servers return a handful of shapes for the same concept
  * (`Location`, `LocationLink`, `SymbolInformation`, flat or nested

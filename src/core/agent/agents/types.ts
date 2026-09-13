@@ -1,5 +1,5 @@
 /**
- * Phase 75 — Scoped Subagent Contracts
+ * Scoped Subagent Contracts
  *
  * A subagent is NOT a second runtime. It is the same Agent Engine running with
  * (a) its own child session, (b) a role system prompt, (c) a scoped tool set and
@@ -198,7 +198,7 @@ export interface TaskToolInput {
   /** Resume an existing child session instead of creating a new one. */
   task_id?: string;
   /**
-   * Phase 76A.3 — run the subagent asynchronously. The tool returns
+ * run the subagent asynchronously. The tool returns
    * immediately with a job id; the result is injected into the conversation
    * when it finishes. Foreground (the default) blocks until the result exists.
    */

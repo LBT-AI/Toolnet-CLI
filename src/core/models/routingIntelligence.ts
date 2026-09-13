@@ -1,12 +1,12 @@
 /**
- * Phase 82 §13 — Routing intelligence persistence.
+ * — Routing intelligence persistence.
  *
  * Only *derived numeric intelligence* is persisted: per-route counters and
  * latency aggregates. Nothing else.
  *
  *   NEVER persisted: API keys, prompt text, response text, headers, auth data.
  *
- * Rules mirror the Phase 80 model cache so there is one storage discipline:
+ * Rules mirror the model cache so there is one storage discipline:
  *  - ATOMIC write to a temp file + rename, mode 0600, cache dir 0700;
  *  - CORRUPTION-SAFE: an unparseable/invalid file is quarantined, never thrown;
  *  - STALE → decay: records older than the metric TTL are dropped on load, so a

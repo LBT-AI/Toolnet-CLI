@@ -1,5 +1,5 @@
 /**
- * Phase 81 §13/§14/§15 — harness-aware eval.
+ * — harness-aware eval.
  *
  * The runner is NOT forked: the same `EvalRunner` takes a harness profile and
  * records it, so "which policy produced this result?" is answerable from stored
@@ -63,7 +63,7 @@ beforeAll(() => {
   providerRegistry.register(
     {
       id: PROVIDER,
-      name: "Phase 81 Cross-Harness Fixture",
+ name: " Cross-Harness Fixture",
       kind: "openai-compatible",
       baseURL: server.url,
       authentication: { apiKeyEnv: "PHASE81_CROSS_KEY", scheme: "bearer", hasApiKey: false },
@@ -99,7 +99,7 @@ afterEach(() => {
   fs.mkdirSync(storeDir, { recursive: true });
 });
 
-describe("Phase 81 §13 — harness identity on eval records", () => {
+describe(" — harness identity on eval records", () => {
   it("resolveHarnessId defaults to the identity profile", () => {
     expect(resolveHarnessId(undefined)).toBe("default");
     expect(resolveHarnessId("  ")).toBe("default");
@@ -151,7 +151,7 @@ describe("Phase 81 §13 — harness identity on eval records", () => {
   });
 
   it("stored runs remain readable when harness attribution is absent", () => {
-    // A record written before Phase 81 has no harnessId; readers must not
+ // A record written before has no harnessId; readers must not
     // assume `default` for it.
     const legacy = {
       schemaVersion: 1,
@@ -175,7 +175,7 @@ describe("Phase 81 §13 — harness identity on eval records", () => {
   });
 });
 
-describe("Phase 81 §14 — the same model under different harnesses is measurable", () => {
+describe(" — the same model under different harnesses is measurable", () => {
   it("produces separate, attributable runs", async () => {
     const runner = new EvalRunner({ store, workspacesRoot: os.tmpdir() });
     const a = await runner.runSuite(miniSuite, MODEL_REF, { harness: "default" });

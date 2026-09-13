@@ -1,5 +1,5 @@
 /**
- * Child Environment Scrubber — Phase 1 (Layer 4)
+ * Child Environment Scrubber — (Layer 4)
  *
  * Provides a hardened allowlist-based environment for child processes spawned
  * by shell execution. Host secrets (API keys, tokens, cloud credentials) are

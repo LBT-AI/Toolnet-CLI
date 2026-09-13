@@ -1,5 +1,5 @@
 /**
- * Phase 81 §6 — prompt policy.
+ * — prompt policy.
  *
  * Prompt assembly is separated from AgentHarness so instruction strategy is
  * data, not a branch buried in the loop. This module receives the already
@@ -104,7 +104,7 @@ export function assemblePromptBase(input: PromptBuildInput): string {
 /**
  * Canonical prompt for a run: caller override wins verbatim, else the profile's
  * assembly. Kept as a plain truthiness check so a caller-supplied prompt is
- * used byte-for-byte, exactly as it was before Phase 81.
+ * used byte-for-byte, exactly as it was before .
  */
 export function composeSystemPrompt(input: PromptBuildInput): string {
   if (input.callerOverride) return input.callerOverride;

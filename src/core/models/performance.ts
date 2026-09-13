@@ -1,5 +1,5 @@
 /**
- * Phase 80 §16 — Model performance profile.
+ * — Model performance profile.
  *
  * The bridge between the eval layer and routing. Eval runs produce normalized
  * *samples*; this module aggregates them into per-model, per-dimension scores.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { FAILURE_THRESHOLD, ProviderHealthTracker, healthRank } from "../health";
 
-describe("Phase 79 — provider health", () => {
+describe("provider health", () => {
   it("starts unknown with zero counters", () => {
     const tracker = new ProviderHealthTracker();
     const health = tracker.get("p");

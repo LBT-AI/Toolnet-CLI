@@ -25,7 +25,7 @@ afterEach(() => {
   server = undefined;
 });
 
-describe("Phase 80 — live acceptance honesty", () => {
+describe("live acceptance honesty", () => {
   it("reports an ENVIRONMENT skip when the OpenRouter key is missing", async () => {
     delete process.env.OPENROUTER_API_KEY;
     const report = await runLiveCompletionProbe({ allowBilledCall: true });
@@ -90,7 +90,7 @@ describe("Phase 80 — live acceptance honesty", () => {
   });
 });
 
-describe("Phase 80 — live completion probe (local fixture)", () => {
+describe("live completion probe (local fixture)", () => {
   beforeEach(() => {
     process.env.OPENROUTER_API_KEY = "sk-or-fixture-key";
   });

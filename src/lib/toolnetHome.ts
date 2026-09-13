@@ -1,5 +1,5 @@
 /**
- * Canonical ToolNet Global User-Data Directory — Layer 4 Phase 3
+ * Canonical ToolNet Global User-Data Directory — Layer 4
  *
  * ALL global ToolNet state lives under ONE canonical root:
  *
@@ -225,7 +225,7 @@ const SENSITIVE_FILE_NAMES = new Set([
   "auth_token",
   "cli-secret",
   "credentials.json",
-  // Phase 84 — provider credential store (the auth module writes it 0600 too;
+ // provider credential store (the auth module writes it 0600 too;
   // this is defense-in-depth for files created before hardening ran).
   "auth-credentials.json",
 ]);

@@ -1,5 +1,5 @@
 /**
- * Worker Execution Result model — Layer 4 Phase 2 (Scheduler Correctness)
+ * Worker Execution Result model — Layer 4 (Scheduler Correctness)
  *
  * Failure is a first-class value: providers/gateway/network/auth errors are
  * typed results, NEVER stringly-typed "success". A string return value alone

@@ -1,5 +1,5 @@
 /**
- * Phase 78.7/78.8/78.35/78.36 — Canonical MCP auth store.
+ * /78.8/78.35/78.36 — Canonical MCP auth store.
  *
  * One file, one writer:
  *
@@ -10,7 +10,7 @@
  *   - Every mutation is SERIALIZED through a promise chain; two close-together
  *     mutations (token refresh + client registration) cannot lose an update.
  *   - Credentials are BOUND to `name + serverUrl`. Re-pointing a server at a
- *     different URL does NOT inherit the old token (Phase 78.8) — that would
+ * different URL does NOT inherit the old token () — that would
  *     hand a credential to whatever now answers at that host.
  *   - A corrupt file is QUARANTINED (renamed aside) and the store resets to
  *     empty instead of crashing startup. File contents are never logged.
@@ -40,7 +40,7 @@ export interface McpAuthClientInfo {
 export interface McpAuthEntry {
   /** Server name the credentials belong to (config key). */
   name: string;
-  /** The URL these credentials were issued for. Binding key for Phase 78.8. */
+ /** The URL these credentials were issued for. Binding key for . */
   serverUrl?: string;
   tokens?: McpAuthTokens;
   clientInfo?: McpAuthClientInfo;
@@ -75,7 +75,7 @@ export class McpAuthStore {
   private readonly filePath: string;
   private readonly onWarn: (message: string) => void;
   private entries: Record<string, McpAuthEntry> | null = null;
-  /** Serializes every mutation (Phase 78.35). */
+ /** Serializes every mutation (). */
   private queue: Promise<void> = Promise.resolve();
   private lastQuarantine: AuthStoreQuarantine | null = null;
 
@@ -88,7 +88,7 @@ export class McpAuthStore {
     return this.filePath;
   }
 
-  /** Non-fatal record of the most recent quarantine (Phase 78.36). */
+ /** Non-fatal record of the most recent quarantine (). */
   getQuarantine(): AuthStoreQuarantine | null {
     return this.lastQuarantine;
   }
@@ -204,7 +204,7 @@ export class McpAuthStore {
   }
 
   /**
-   * URL-bound token lookup (Phase 78.8).
+ * URL-bound token lookup ().
    *
    * Credentials are only returned when the stored `serverUrl` matches the
    * current one. A server re-pointed from `https://one.example` to
@@ -244,7 +244,7 @@ export class McpAuthStore {
     });
   }
 
-  /** Full removal — tokens, client info, verifier/state (Phase 78.16). */
+ /** Full removal — tokens, client info, verifier/state (). */
   async remove(name: string): Promise<boolean> {
     return this.withLock((entries) => {
       if (!entries[name]) return false;

@@ -23,7 +23,7 @@ function model(providerId: string, apiModelId: string, extra: Partial<ModelDefin
   };
 }
 
-describe("Phase 79 — fallback classification", () => {
+describe("fallback classification", () => {
   it("retries transient failures", () => {
     expect(isRetryableFailure(new ProviderRateLimitError("p"))).toBe(true);
     expect(isRetryableFailure(new ProviderUnavailableError("p"))).toBe(true);
@@ -59,7 +59,7 @@ describe("Phase 79 — fallback classification", () => {
   });
 });
 
-describe("Phase 79 — bounded fallback execution", () => {
+describe("bounded fallback execution", () => {
   let catalog: ModelCatalog;
   let registry: ProviderRegistry;
   let router: ModelRouter;

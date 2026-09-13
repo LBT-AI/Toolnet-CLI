@@ -6,7 +6,7 @@ import {
   toLegacyCapabilities,
 } from "../capabilities";
 
-describe("Phase 79 — capability normalization", () => {
+describe("capability normalization", () => {
   it("keeps undeclared capabilities unknown (never guesses true)", () => {
     expect(normalizeCapabilities({})).toEqual({});
     expect(normalizeCapabilities(undefined)).toEqual({});

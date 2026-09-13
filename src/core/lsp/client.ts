@@ -1,5 +1,5 @@
 /**
- * Phase 74 — LSP client.
+ * LSP client.
  *
  * Owns one language-server session: the `initialize` handshake, document
  * synchronization, JSON-RPC request/response correlation with timeouts and

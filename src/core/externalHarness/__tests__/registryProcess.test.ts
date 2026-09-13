@@ -1,5 +1,5 @@
 /**
- * Phase 83 §23 — External harness registry, security and process tests.
+ * — External harness registry, security and process tests.
  *
  * Nothing here requires an external harness to be installed: process tests
  * use `bun` itself as the child binary, which is guaranteed present.
@@ -43,7 +43,7 @@ function fakeDefinition(id: string, executable = "definitely-not-a-real-binary-x
   };
 }
 
-describe("Phase 83 §3 — registry", () => {
+describe(" — registry", () => {
   it("registers, refuses duplicates, resolves and reports unknowns", () => {
     const registry = new ExternalHarnessRegistry();
     registry.register(fakeDefinition("alpha"));
@@ -100,7 +100,7 @@ describe("Phase 83 §3 — registry", () => {
   });
 });
 
-describe("Phase 83 §12 — detection against missing binaries", () => {
+describe(" — detection against missing binaries", () => {
   it("reports structured unavailable for a missing executable", async () => {
     const registry = new ExternalHarnessRegistry();
     const definition = fakeDefinition("missing");
@@ -147,7 +147,7 @@ describe("Phase 83 §12 — detection against missing binaries", () => {
   });
 });
 
-describe("Phase 83 §5 — safe process execution", () => {
+describe(" — safe process execution", () => {
   it("runs argv children and captures stdout/stderr/exit code", async () => {
     const outcome = await safeSpawn({
       executable: process.execPath,

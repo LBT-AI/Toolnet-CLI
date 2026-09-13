@@ -1,5 +1,5 @@
 /**
- * URL Router — §6 + §10
+ * URL Router — +
  *
  * Classifies URLs into kinds and enforces the security boundary between
  * external content (untrusted data) and system instructions.

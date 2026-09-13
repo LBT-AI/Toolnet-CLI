@@ -1,5 +1,5 @@
 /**
- * Phase 74 — Language-server registry and discovery.
+ * Language-server registry and discovery.
  *
  * ToolNet never installs a language server. It only *finds* one that the user
  * already has (project-local `node_modules/.bin` first, then `PATH`). When

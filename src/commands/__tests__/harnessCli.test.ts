@@ -1,5 +1,5 @@
 /**
- * Phase 81 §18 — `toolnet harness` CLI surface.
+ * — `toolnet harness` CLI surface.
  */
 
 import fs from "node:fs";
@@ -38,7 +38,7 @@ afterEach(() => {
   } catch {}
 });
 
-describe("Phase 81 §18 — toolnet harness", () => {
+describe(" — toolnet harness", () => {
   it("lists every profile and marks the active one", async () => {
     const c = capture();
     const code = await runHarnessCli(["list"], { io: c.io });

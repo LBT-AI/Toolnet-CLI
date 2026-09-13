@@ -1,5 +1,5 @@
 /**
- * Phase 80 — fake OpenAI-compatible HTTP server for eval integration tests.
+ * fake OpenAI-compatible HTTP server for eval integration tests.
  *
  * It is a REAL local HTTP server: the eval runner, AgentHarness, ModelRouter,
  * ProviderRegistry and ModelAdapter all take their production code paths. Only
@@ -197,7 +197,7 @@ export const scripts = {
         ? { toolCalls: [{ id: "call_shell", name: "bash", arguments: { command } }] }
         : { content: "Ran it." };
   },
-  /** Narrates a change without calling any tool — the §13 failure mode. */
+ /** Narrates a change without calling any tool — the failure mode. */
   narrateOnly(text = "I fixed the file. The bug is resolved.") {
     return (): FakeTurn => ({ content: text });
   },

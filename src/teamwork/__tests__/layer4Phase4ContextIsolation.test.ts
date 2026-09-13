@@ -1,8 +1,8 @@
 /**
- * Layer 4 — Phase 4: Context / Session Isolation + Provider-Compatible
+ * Layer 4 — : Context / Session Isolation + Provider-Compatible
  * Compaction + Remote MCP residual review.
  *
- * This is the single targeted test for the Phase 4 deliverable. It
+ * This is the single targeted test for the deliverable. It
  * covers the 39-item matrix (SESSION, ASYNC, SUBAGENT, COMPACTION,
  * SUMMARY, TOKENS, PERSISTENCE, TRUST, REMOTE MCP, CACHE) plus a
  * series of architecture assertions that no production code path
@@ -18,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-// Phase 4 modules under test
+// modules under test
 import {
   // ContextRegistry
   contextRegistry,
@@ -130,7 +130,7 @@ describe("SESSION (1–6) — per-session isolation", () => {
 
     memB.recordUserGoal("write docs");
     memB.recordFileAccess("README.md", "read");
-    memB.recordInsight("document phase 4");
+    memB.recordInsight("document the rollback plan");
 
     const aSnap = memA.getSnapshot();
     const bSnap = memB.getSnapshot();

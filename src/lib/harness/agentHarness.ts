@@ -38,7 +38,7 @@ import { AgentStateMachine } from "./agentState";
 import { ModelAdapter, type AgentModelResponse, type AgentToolCall } from "./modelAdapter";
 import { parseTaskRequirements, evaluateCompletionGate, recordEvidence, emptyEvidence } from "../../core/agent/completionGate";
 import type { CompletionEvidence, TaskRequirement } from "../../core/contracts";
-// Phase 81 — harness compatibility layer. POLICY ONLY: the profile shapes the
+// harness compatibility layer. POLICY ONLY: the profile shapes the
 // prompt, the exposed tool set, the loop bounds and the completion verdict. It
 // cannot change a permission decision, and it is never a second loop.
 import {
@@ -87,7 +87,7 @@ import type {
 import type { AgentRole } from "../../teamwork/types";
 
 /**
- * Phase 77.12 — process-lifetime ledger of `session.start` activations.
+ * process-lifetime ledger of `session.start` activations.
  *
  * Deliberately module-level, not per-harness: `AgentEngine.run` constructs a
  * NEW harness for every turn, so an instance field would re-fire the hook on
@@ -97,7 +97,7 @@ import type { AgentRole } from "../../teamwork/types";
 const sessionStartActivated = new Set<string>();
 
 /**
- * Phase 77.12 — test seam: forget every activated session. Production code
+ * test seam: forget every activated session. Production code
  * never calls this; the process lifetime IS the dedup window.
  */
 export function resetSessionStartLedger(): void {
@@ -120,22 +120,22 @@ export class AgentHarness {
   private workspaceCtx: WorkspaceContext;
   private changeTracker = new ChangeTracker();
   private taskContextManager = new TaskContextManager();
-  /** Phase 73.9 — verified side effects from the most recent loop run. */
+ /** verified side effects from the most recent loop run. */
   private lastCompletionEvidence: CompletionEvidence = emptyEvidence();
-  /** Phase 75 — permission scope applied to every tool call in this run. */
+ /** permission scope applied to every tool call in this run. */
   private toolPermissions?: ToolPermissionScope;
-  /** Phase 75 — maximum subagent nesting depth for this run. */
+ /** maximum subagent nesting depth for this run. */
   private maxSubagentDepth = DEFAULT_SUBAGENT_MAX_DEPTH;
-  /** Phase 75 — approval hook handed to child subagents. */
+ /** approval hook handed to child subagents. */
   private approvalHook?: (input: { name: string; args: any; reason?: string }) => Promise<boolean>;
-  /** Phase 81 — the resolved policy contract for this harness instance. */
+ /** the resolved policy contract for this harness instance. */
   private profile: HarnessProfile = defaultProfile;
-  /** Phase 81 — evidence collector for the active run (null outside a run). */
+ /** evidence collector for the active run (null outside a run). */
   private evidenceCollector: ExecutionEvidenceCollector | null = null;
-  /** Phase 81 — set when a requested profile id could not be resolved. */
+ /** set when a requested profile id could not be resolved. */
   private profileError: string | null = null;
   /**
-   * Phase 81 §11 — explicit terminal run state.
+ * — explicit terminal run state.
    *
    * Deliberately NOT derived from the error string: a loop abort message
    * contains "Aborting loop.", so string-matching `abort` reported a stuck loop
@@ -146,7 +146,7 @@ export class AgentHarness {
     cancelled: false,
     timedOut: false,
   };
-  /** Phase 81 — requirements parsed for the active run, for the verdict. */
+ /** requirements parsed for the active run, for the verdict. */
   private lastRequirements: TaskRequirement = {
     mutationRequired: false,
     executionRequired: false,
@@ -171,7 +171,7 @@ export class AgentHarness {
       timeoutMs: config.timeoutMs || 120000,
     };
 
-    // Phase 81 — resolve the configured harness profile at construction.
+ // resolve the configured harness profile at construction.
     // A CONFIG-sourced id that the registry does not know falls back to
     // `default` and reports itself in the init event rather than bricking the
     // CLI; a PER-CALL id (below) is strict, because that is the one a user just
@@ -205,7 +205,7 @@ export class AgentHarness {
   }
 
   /**
-   * Phase 81 §5 — apply a per-call harness id.
+ * — apply a per-call harness id.
    *
    * An explicit id is a contract: an unknown one is recorded as an error and
    * the run fails loudly in `executeLoopInner` rather than silently running a
@@ -225,12 +225,12 @@ export class AgentHarness {
     }
   }
 
-  /** Phase 81 §11 — reset the explicit terminal state for a new run. */
+ /** — reset the explicit terminal state for a new run. */
   private resetRunState(): void {
     this.lastRunState = { cancelled: false, timedOut: false };
   }
 
-  // ── Workspace awareness (§8) ─────────────────────────────────────────────
+ // ── Workspace awareness () ─────────────────────────────────────────────
 
   getWorkspace(): WorkspaceContext {
     return { ...this.workspaceCtx };
@@ -245,18 +245,18 @@ export class AgentHarness {
     return { ...this.lastCompletionEvidence };
   }
 
-  /** Phase 81 — the policy contract this harness instance runs under. */
+ /** the policy contract this harness instance runs under. */
   getProfile(): HarnessProfile {
     return this.profile;
   }
 
-  /** Phase 81 — observed evidence (files touched, commands, denials) for the last run. */
+ /** observed evidence (files touched, commands, denials) for the last run. */
   getExecutionEvidence(): ExecutionEvidence {
     return this.evidenceCollector?.snapshot() ?? emptyExecutionEvidence();
   }
 
   /**
-   * Phase 81 §7 — tool EXPOSURE for this profile.
+ * — tool EXPOSURE for this profile.
    *
    * Only shrinks (or reorders) the set offered to the model. Every executed
    * call still goes securityEngine → ToolGateway, so this has no way to grant a
@@ -270,7 +270,7 @@ export class AgentHarness {
   }
 
   /**
-   * Phase 81 §11 — compute the run verdict from evidence, then attach the
+ * — compute the run verdict from evidence, then attach the
    * harness identity so every consumer (UI, eval record, report) can say which
    * policy contract produced the result.
    */
@@ -327,7 +327,7 @@ export class AgentHarness {
     }
   }
 
-  // ── LLM Runtime (Phase 73.3) ──────────────────────────────────────────────
+ // ── LLM Runtime () ──────────────────────────────────────────────
 
   /**
    * The ONLY place the agent loop talks to a model. Every provider response is
@@ -339,9 +339,9 @@ export class AgentHarness {
    * and the final response is reassembled from them. Otherwise a single
    * non-streaming completion is used.
    *
-   * Phase 82 §7 — `routes` is the ordered provider/upstream chain for this
+ * — `routes` is the ordered provider/upstream chain for this
    * model. A single route (the default: no fallback configured) takes the
-   * pre-Phase-82 path verbatim. A multi-route chain walks it with BOUNDED
+ * legacy path verbatim. A multi-route chain walks it with BOUNDED
    * fallback: each route once, retryable failures only, and never after output
    * has already been streamed to the user.
    */
@@ -356,7 +356,7 @@ export class AgentHarness {
       signal?: AbortSignal;
       onContentDelta?: (text: string) => void;
       reasoningEffort?: "low" | "medium" | "high";
-      /** Phase 77.11 — forwarded to the model hooks as session metadata. */
+ /** forwarded to the model hooks as session metadata. */
       sessionId?: string;
     },
     mode: ExecutionMode,
@@ -370,7 +370,7 @@ export class AgentHarness {
       const startedAt = Date.now();
       try {
         const result = await this.completeModelOnce(provider, req, mode, wantStream);
-        // Phase 79.12 — health derives from observed outcomes only.
+ // health derives from observed outcomes only.
         noteModelSuccess(provider.id, Date.now() - startedAt);
         return result;
       } catch (error) {
@@ -418,7 +418,7 @@ export class AgentHarness {
       }
     );
 
-    // Phase 82 §13 — the chain just produced real routing evidence (latency,
+ // — the chain just produced real routing evidence (latency,
     // success, failure classifications). Snapshot the derived numeric
     // intelligence to disk so the next process routes on it. Best-effort: a
     // persistence failure can never fail a completed request.
@@ -451,7 +451,7 @@ export class AgentHarness {
       headers?: Record<string, string>;
       signal?: AbortSignal;
       onContentDelta?: (text: string) => void;
-      /** Phase 82 — fires once, on the first emitted delta of any kind. */
+ /** fires once, on the first emitted delta of any kind. */
       onFirstDelta?: () => void;
       reasoningEffort?: "low" | "medium" | "high";
       sessionId?: string;
@@ -573,7 +573,7 @@ export class AgentHarness {
 
     this.metrics.toolCallsRequested++;
 
-    // Phase 75 — scope gate. A tool denied by the active permission scope is
+ // scope gate. A tool denied by the active permission scope is
     // refused BEFORE the security gateway, so a scoped agent (plan mode, a
     // role-scoped subagent) can never reach an out-of-scope executor. This is
     // the enforcement half of `deriveSubagentPermission`: the derived scope is
@@ -633,7 +633,7 @@ export class AgentHarness {
       sessionId: this.config.sessionId,
       source: this.activeMode === "SUBAGENT" ? "subagent" : this.activeMode === "TEAMWORK" ? "teamwork" : "headless",
       signal: options.signal,
-      // Phase 75 — a `task` call derives the child scope from the SPAWNING
+ // a `task` call derives the child scope from the SPAWNING
       // turn's scope. Absent an explicit scope, the sandbox mode is the honest
       // baseline (never unbounded).
       subagent: {
@@ -690,7 +690,7 @@ export class AgentHarness {
 
     let output = gatewayRes.stdout || JSON.stringify({ success: true });
 
-    // Phase 74.6: mutations get LSP diagnostics as supplementary feedback so the
+ // : mutations get LSP diagnostics as supplementary feedback so the
     // model can repair before running a full test. This never spawns a server
     // and never throws — see `withLspDiagnostics`.
     if (isWriteTool && typeof args?.path === "string" && !options.signal?.aborted) {
@@ -745,7 +745,7 @@ export class AgentHarness {
   // ── Core Execution Loop ──────────────────────────────────────────────────
 
   /**
-   * Phase 77.6 — public loop entry that brackets the whole turn with the
+ * public loop entry that brackets the whole turn with the
    * `agent.start` / `agent.end` hooks.
    *
    * Every front-end (TUI, headless, subagent, teamwork node, REPL) funnels
@@ -762,7 +762,7 @@ export class AgentHarness {
     const model = options.model || this.config.model || "";
     const hookMeta = { sessionId, signal: options.signal };
 
-    // Phase 81 — per-call harness selection wins over the configured one. Done
+ // per-call harness selection wins over the configured one. Done
     // before anything else so policy (and the prompt built by the caller's
     // entry point) reflects the requested contract.
     this.applyRunProfile(options);
@@ -776,7 +776,7 @@ export class AgentHarness {
       hookMeta,
     );
 
-    // Phase 81 §12 — evidence is derived from this harness's own event stream.
+ // — evidence is derived from this harness's own event stream.
     // A nested run (a subagent spawned by a tool call) gets its own collector,
     // and the parent's is restored on the way out so the parent's verdict is
     // computed from the parent's evidence.
@@ -790,7 +790,7 @@ export class AgentHarness {
 
     try {
       const inner = await this.executeLoopInner(initialMessages, options, mode);
-      // §11 — the verdict is computed from evidence, never from narration alone.
+ // — the verdict is computed from evidence, never from narration alone.
       const result = this.finalizeResult(inner);
       await hookRegistry.run(
         "agent.end",
@@ -823,7 +823,7 @@ export class AgentHarness {
   }
 
   /**
-   * Phase 77.12 — the canonical `session.start` edge.
+ * the canonical `session.start` edge.
    *
    * Contract: `session.start` means SESSION ACTIVATION, not per-turn setup. It
    * fires exactly once per sessionId per process lifetime, on the FIRST turn
@@ -867,7 +867,7 @@ export class AgentHarness {
     mode: ExecutionMode = "HEADLESS"
   ): Promise<HarnessResult> {
     const startTime = Date.now();
-    // Phase 81 §8 — an explicit caller budget always wins, then the profile's.
+ // — an explicit caller budget always wins, then the profile's.
     const maxTurns = resolveMaxTurns(
       options.maxTurns,
       this.profile.continuationPolicy.maxTurns,
@@ -900,7 +900,7 @@ export class AgentHarness {
       };
     }
 
-    // Phase 81 §5 — a requested profile that does not exist fails the run with
+ // — a requested profile that does not exist fails the run with
     // a structured error. Running a different contract than the caller asked
     // for would make every result (and every eval) untrustworthy.
     if (this.profileError) {
@@ -922,7 +922,7 @@ export class AgentHarness {
       };
     }
 
-    // Phase 79.17 — the harness resolves provider + model through the canonical
+ // the harness resolves provider + model through the canonical
     // ModelRouter (never its own provider map). `resolveRuntimeModel` degrades
     // to the legacy active-provider path when the catalog cannot satisfy the
     // reference, so no existing configuration changes behaviour.
@@ -954,7 +954,7 @@ export class AgentHarness {
     let turnsUsed = 0;
     let accumulatedTokens = 0;
 
-    // Phase 73.9 — Completion Gate: derive task requirements from the user
+ // Completion Gate: derive task requirements from the user
     // prompt (or caller-provided requirements) and track verified evidence.
     const userPrompt =
       [...initialMessages].reverse().find((m) => m.role === "user")?.content ?? "";
@@ -966,7 +966,7 @@ export class AgentHarness {
     this.lastCompletionEvidence = evidence;
     this.lastRequirements = requirements;
 
-    // Phase 81 §9 — progress is bounded per profile. `0` disables the bound,
+ // — progress is bounded per profile. `0` disables the bound,
     // which is what keeps the identity profile's loop unchanged.
     const progress = new ProgressTracker(
       this.profile.continuationPolicy.maxConsecutiveNoProgressTurns,
@@ -975,7 +975,7 @@ export class AgentHarness {
       this.evidenceCollector?.snapshot() ?? emptyExecutionEvidence();
 
     /**
-     * §9 — one progress sample per model turn. Returns a structured abort when
+ * — one progress sample per model turn. Returns a structured abort when
      * the bound is reached, else null. Disabled for the identity profile.
      */
     const checkProgress = (responseText: string): { error: string } | null => {
@@ -1025,7 +1025,7 @@ export class AgentHarness {
     while (turnsUsed < maxTurns) {
       turnsUsed++;
 
-      // Phase 76A.4 — notification instead of polling. Runtime messages that
+ // notification instead of polling. Runtime messages that
       // arrived for this session (a finished background task) are drained into
       // the conversation before the next model turn, so the model learns about
       // the result through its own context rather than by sleeping and asking.
@@ -1057,7 +1057,7 @@ export class AgentHarness {
         };
       }
 
-      // Phase 81 §10 — the profile picks the compression strategy; token
+ // — the profile picks the compression strategy; token
       // accounting stays the ContextEngine's (one estimator, not two).
       const prep = contextEngine.prepareMessagesForApi(messages, {
         model,
@@ -1094,7 +1094,7 @@ export class AgentHarness {
         });
       }
 
-      // §2/§3 — capability-gate tool definitions: models that declare
+ // — capability-gate tool definitions: models that declare
       // `tools: false` never receive tool schemas, so they cannot pretend to
       // call tools. Models without native tool calling still receive schemas;
       // their structured JSON tool blocks are parsed by the adapter below.
@@ -1102,7 +1102,7 @@ export class AgentHarness {
       const toolsForRequest =
         caps?.tools === false
           ? undefined
-          : // Phase 81 §7 — toolsOverride wins (subagent scoping, plan mode),
+          : // toolsOverride wins (subagent scoping, plan mode),
             // then the profile's EXPOSURE policy over the canonical registry.
             options.toolsOverride || this.toolsForProfile();
 
@@ -1123,8 +1123,8 @@ export class AgentHarness {
           },
           mode,
           options.stream === true,
-          // Phase 82 — the provider/upstream chain the router decided. A single
-          // route keeps the exact pre-Phase-82 path; a multi-route chain (only
+ // the provider/upstream chain the router decided. A single
+ // route keeps the exact legacy path; a multi-route chain (only
           // present when fallback is configured) enables bounded fallback.
           modelResolution.resolved?.routes
         );
@@ -1238,7 +1238,7 @@ export class AgentHarness {
 
         const finalOutput = assistantContent;
 
-        // ── Completion Gate (§19/§73.9) ────────────────────────────────────
+ // ── Completion Gate (9) ────────────────────────────────────
         // A text-only answer is NOT final when the task required a mutation,
         // execution, verification, or test run that never succeeded. Feed the
         // corrective instruction back and continue the loop instead.
@@ -1251,7 +1251,7 @@ export class AgentHarness {
         });
 
         if (gate.decision === "continue") {
-          // §9 — a repeated non-answer that the gate rejects is not progress.
+ // — a repeated non-answer that the gate rejects is not progress.
           const stalledAtGate = checkProgress(finalOutput);
           if (stalledAtGate) {
             this.agentState.transition("error", "no-progress");
@@ -1354,7 +1354,7 @@ export class AgentHarness {
             this.lastToolSig = sig;
             this.consecutiveToolRepeat = 1;
           }
-          // §8 — the repeat bound comes from the profile, never a literal.
+ // — the repeat bound comes from the profile, never a literal.
           if (exceedsRepeatedToolCalls(this.profile.continuationPolicy, this.consecutiveToolRepeat)) {
             loopAborted = true;
             return {
@@ -1379,7 +1379,7 @@ export class AgentHarness {
 
           let res = await this.dispatchTool(name, args, ctx);
 
-          // ── Interactive approval (§16/§21): when the gateway needs a
+ // ── Interactive approval (): when the gateway needs a
           // decision and the front-end supplied a hook, ask exactly once and
           // re-dispatch with userApproved. A denial is a typed result the
           // model must respect — the tool never runs.
@@ -1397,7 +1397,7 @@ export class AgentHarness {
             }
           }
 
-          // ── Completion evidence (§19) — only VERIFIED outcomes count.
+ // ── Completion evidence () — only VERIFIED outcomes count.
           // A write/edit/patch tool that returned ok is a mutation; a shell
           // command with exitCode 0 is an execution (and a test run when the
           // command looks like a test invocation).
@@ -1448,7 +1448,7 @@ export class AgentHarness {
         };
       }
 
-      // §9 — bound the loop on observable progress, not on optimism.
+ // — bound the loop on observable progress, not on optimism.
       const stalled = checkProgress(assistantContent);
       if (stalled) {
         this.agentState.transition("error", "no-progress");
@@ -1500,7 +1500,7 @@ export class AgentHarness {
     const projectCtx = buildProjectContext(this.config.workspaceRoot || process.cwd(), this.config.currentCwd || this.config.workspaceRoot || process.cwd());
     let projectSummary = this.formatProjectContext(projectCtx);
     
-    // Phase 87 - Inject Repository Intelligence
+ // Inject Repository Intelligence
     try {
       const { repositoryIntelligence } = await import("../../core/repo");
       const repoContext = await repositoryIntelligence.getCompactContext(this.config.currentCwd || this.config.workspaceRoot || process.cwd());
@@ -1520,7 +1520,7 @@ export class AgentHarness {
 
     const taskBlock = taskSummary ? `\n${taskSummary}\n` : "";
 
-    // Phase 81 §6 — the profile's PromptPolicy decides which blocks appear and
+ // — the profile's PromptPolicy decides which blocks appear and
     // how tightly they are joined. `assemblePromptBase` always emits the
     // runtime permission context, so no profile can drop the security boundary.
     const base = composeSystemPrompt({
@@ -1591,7 +1591,7 @@ export class AgentHarness {
     const mode = options.mode || "HEADLESS";
     const prompt = options.prompt || "";
 
-    // ── Task Understanding Layer (§2/§30) ───────────────────────────────────
+ // ── Task Understanding Layer () ───────────────────────────────────
     this.agentState.transition("understanding");
     const task = analyzePrompt(prompt);
     this.taskContextManager.setGoal(task.objectives[0] || prompt);
@@ -1644,7 +1644,7 @@ export class AgentHarness {
   }
 
   /**
-   * Phase 75.9 — Rebuild the message list for a RESUMED child session.
+ * Rebuild the message list for a RESUMED child session.
    *
    * A resumed subagent must run under the same operating contract as its first
    * call, so the live system prompt (project summary, permission context, role
@@ -1691,7 +1691,7 @@ ${getCodingAgentToolUseGuidance()}`;
     options: ExecutionOptions = {}
   ): Promise<HarnessResult> {
     const { getSubagentRolePrompt, getSubagentTools } = await import("../../teamwork/subagentRuntime");
-    // Phase 75: a caller that supplies a system prompt (an AgentDefinition
+ // : a caller that supplies a system prompt (an AgentDefinition
     // composed by the subagent manager) owns the role contract. The legacy
     // role-prompt generator is the fallback for role-only callers.
     const rolePrompt = options.systemPrompt?.trim()
@@ -1808,9 +1808,9 @@ Your access is strictly limited to the policy described in [RUNTIME PERMISSION C
   }
 }
 
-// ── Completion-evidence helpers (Phase 73.9) ────────────────────────────────
+// ── Completion-evidence helpers () ────────────────────────────────
 //
-// Phase 81: the tool classification (what counts as a mutation / a shell run /
+// : the tool classification (what counts as a mutation / a shell run /
 // a test / a verification) MOVED to `core/harness/evidence.ts` and is imported
 // above. It has exactly one definition there, shared with the execution-evidence
 // collector, so the harness and the verdict can never disagree about whether a

@@ -1,5 +1,5 @@
 /**
- * Phase 81 §18 — harness profile persistence.
+ * — harness profile persistence.
  *
  * Persisted into the CANONICAL config owner (`~/.toolnetcli/config.json`,
  * `src/lib/appConfig.ts`, schema v4). No second config file is introduced, and

@@ -1,5 +1,5 @@
 /**
- * Phase 83 §3 — THE ExternalHarnessRegistry.
+ * — THE ExternalHarnessRegistry.
  *
  * Stores adapter DEFINITIONS only — it never spawns processes, never talks to
  * providers, and never executes tools. Exactly one instance exists

@@ -1,14 +1,9 @@
 import { A } from "../../term";
 import { stripAnsi, truncate } from "../layout";
 import { composeBox, computeBoxGeometry } from "./composeBox";
+import type { ListItem } from "../../lib/text";
 
-export interface ListItem {
-  id: string;
-  title: string;
-  subtitle?: string;
-  description?: string;
-  status?: "enabled" | "disabled" | "active";
-}
+export type { ListItem };
 
 export interface ScrollableListPanelState {
   title: string;

@@ -1,5 +1,5 @@
 /**
- * Normalized Model Adapter — §2 + §3
+ * Normalized Model Adapter — +
  *
  * Every provider/model speaks its own dialect (OpenAI chat/completions,
  * Anthropic messages, Gemini generateContent, ToolNet gateway). The rest of
@@ -58,11 +58,11 @@ export interface AgentModelRequest {
   reasoningEffort?: "low" | "medium" | "high";
   /** Sampling temperature — planner-style callers rely on low values. */
   temperature?: number;
-  /** Phase 77.11 — session id for hook metadata (observability only). */
+ /** session id for hook metadata (observability only). */
   sessionId?: string;
 }
 
-// ── Phase 77.11 — model lifecycle hooks ──────────────────────────────────────
+// ── model lifecycle hooks ──────────────────────────────────────
 //
 // The adapter is the ONLY place any provider call is assembled, so it is the
 // only place `model.before` / `model.after` can fire exactly once. Putting them

@@ -17,7 +17,7 @@ afterEach(() => {
  * module imported the class through ESM, so the two identities could differ and
  * the raw OpenRouter discovery silently returned an EMPTY catalog.
  */
-describe("Phase 80 — OpenRouter discovery through refresh", () => {
+describe("OpenRouter discovery through refresh", () => {
   it("fetches and normalizes models from the provider's raw catalogue", async () => {
     server = createFakeOpenAiServer({
       models: ["fixture/model-a"],

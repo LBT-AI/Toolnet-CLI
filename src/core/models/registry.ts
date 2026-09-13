@@ -1,5 +1,5 @@
 /**
- * Phase 79 §4 — Canonical ProviderRegistry.
+ * — Canonical ProviderRegistry.
  *
  * This registry is a PROJECTION layer over the existing provider abstraction
  * (`src/providers`): one registration per provider id, one place that answers
@@ -178,7 +178,7 @@ export class ProviderRegistry {
   }
 
   /**
-   * Phase 82 §4 — classification-aware outcome recording.
+ * — classification-aware outcome recording.
    *
    * Caller-fault failures (permission, cancellation, malformed request, schema)
    * are observed but never degrade the provider.

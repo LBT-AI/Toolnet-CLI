@@ -1,5 +1,5 @@
 /**
- * Phase 80 §9/§10/§14 — Eval contracts.
+ * — Eval contracts.
  *
  * The eval layer measures models on the SAME execution path production uses:
  *
@@ -69,7 +69,7 @@ export interface EvalGraderSpec {
   allowDuplicateToolCalls?: boolean;
   /** All observed tool calls must have succeeded. Default false. */
   requireSuccessfulTools?: boolean;
-  /** Any tool call at all fails the case (§13: narrating without acting). */
+ /** Any tool call at all fails the case (: narrating without acting). */
   allowNoToolCall?: boolean;
   // file-mutation
   path?: string;
@@ -81,9 +81,9 @@ export interface EvalGraderSpec {
   // command-exit
   exitCodes?: number[];
   // run-state
-  /** The run must have been cancelled (Phase 80 §12 H). */
+ /** The run must have been cancelled ( H). */
   expectCancelled?: boolean;
-  /** The run must have completed without a runtime exception (§12 G). */
+ /** The run must have completed without a runtime exception ( G). */
   expectNoCrash?: boolean;
   /** A runtime exception occurred instead of a graded outcome. */
   expectRuntimeError?: boolean;
@@ -121,13 +121,13 @@ export interface EvalCase {
   /** Per-case environment overrides (never secrets). */
   env?: Record<string, string>;
   /**
-   * Phase 81 §13 — harness profile for this case. The same model under
+ * — harness profile for this case. The same model under
    * different harness policies is exactly what a cross-harness comparison
    * measures, so the profile is part of the case, not a global setting.
    */
   harness?: string;
   /**
-   * Phase 83 §17 — execution target for this case: `native` (ToolNet's own
+ * — execution target for this case: `native` (ToolNet's own
    * AgentHarness) or an external harness id (`opencode`, `codex`, …).
    * Deliberately a DIFFERENT dimension from `harness`: a native `coding`
    * profile is not the same thing as the external `codex` harness, and the
@@ -221,20 +221,20 @@ export interface EvalCaseResult {
   output?: string;
   /** Context footprint of the case, when the case ran a native harness. */
   context?: EvalContextMetrics;
-  /** Phase 81 — the harness profile actually used for this case. */
+ /** the harness profile actually used for this case. */
   harnessId?: string;
-  /** Phase 83 §17 — execution target actually used (`native` | external id). */
+ /** — execution target actually used (`native` | external id). */
   executionTarget?: string;
-  /** Phase 81 §11 — evidence-derived verdict, when the harness reported one. */
+ /** — evidence-derived verdict, when the harness reported one. */
   verdict?: "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED" | "TIMEOUT";
-  /** Phase 81 — model turns consumed by the case. */
+ /** model turns consumed by the case. */
   turns?: number;
 }
 
 export interface EvalRunMetrics {
   passRate: number;
   meanDurationMs: number;
-  /** Phase 81 §14 — mean turns per case, so harnesses are comparable. */
+ /** — mean turns per case, so harnesses are comparable. */
   meanTurns?: number;
   meanInputTokens: number;
   meanOutputTokens: number;
@@ -267,16 +267,16 @@ export interface EvalRunRecord {
   metrics: EvalRunMetrics;
   cases: EvalCaseResult[];
   /**
-   * Phase 81 §13 — which harness policy contract produced this run.
+ * — which harness policy contract produced this run.
    *
-   * Optional because records written before Phase 81 (and records replayed from
+ * Optional because records written before (and records replayed from
    * the store) legitimately have no harness identity. Every NEW run populates
    * both fields; readers must treat them as "unattributed" when absent rather
    * than assuming `default`.
    */
   harnessId?: string;
   harnessVersion?: string;
-  /** Phase 83 §17 — execution target of the run (`native` by definition). */
+ /** — execution target of the run (`native` by definition). */
   executionTarget?: string;
   toolnetVersion?: string;
   commit?: string;

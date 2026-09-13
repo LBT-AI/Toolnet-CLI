@@ -1,5 +1,5 @@
 /**
- * Phase 76B.11 — Canonical `teamwork` tool
+ * Canonical `teamwork` tool
  *
  * The tool only SUBMITS a plan. Execution stays in the shared engine: every
  * node becomes a BackgroundJob whose work is a scoped subagent run. The tool
@@ -43,7 +43,7 @@ const DESCRIPTION = [
 export interface TeamworkToolInput {
   nodes?: TeamworkPlan["nodes"];
   id?: string;
-  /** Run the plan asynchronously and return immediately (Phase 76A). */
+ /** Run the plan asynchronously and return immediately (). */
   background?: boolean;
 }
 

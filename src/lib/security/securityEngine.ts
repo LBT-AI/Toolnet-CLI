@@ -26,7 +26,7 @@ export class SecurityEngine {
   private currentMode: SandboxMode = "workspace";
   private pluginTools = new Set<string>();
   /**
-   * Phase 77.10 — declared risk of a plugin tool. A plugin tool that mutates is
+ * declared risk of a plugin tool. A plugin tool that mutates is
    * an approval checkpoint like any built-in write; a plugin tool declared
    * read-only stays friction-free. Legacy registrations without a risk keep the
    * historical behaviour of being handled by the plugin's own capability model.
@@ -59,7 +59,7 @@ export class SecurityEngine {
   }
 
   /**
-   * Canonical permission resource for an external tool (Phase 77.16/77.11).
+ * Canonical permission resource for an external tool (/77.11).
    * `mcp__github__search_code` → `mcp:github/search_code`
    * `plugin__my-plugin__reverse` → `plugin:my-plugin/reverse`
    * Built-ins have no external resource and return undefined.
@@ -97,7 +97,7 @@ export class SecurityEngine {
   }
 
   /**
-   * Layer 4 Phase 1: canonical session-trust target key.
+ * Layer 4 : canonical session-trust target key.
    * THE single source for how a tool+args pair maps to a sessionTrust key.
    * The TUI approval modal MUST call this instead of deriving its own key from
    * command/path so recordDecision and isTrustedForSession always match.
@@ -390,7 +390,7 @@ export class SecurityEngine {
       : (args?.path || args?.name || args?.url || "");
 
     const sid = context?.sessionId || (
-      // Test-only compatibility for pre-Phase-5 callers. Production paths
+ // Test-only compatibility for legacy callers. Production paths
       // must provide context.sessionId and never enter this bucket. Legacy
       // tests may bind the deprecated singleton to an explicit current id.
       process.env.NODE_ENV === "test"
@@ -434,7 +434,7 @@ export class SecurityEngine {
         const resource = this.toolPermissionResource(toolName) ?? toolName;
         return { decision: "ASK", allowed: false, needsApproval: true, riskLevel: "DANGEROUS", capability: toolCap, reason: `External MCP tool '${resource}' requires user confirmation.` };
       }
-      // Phase 77.10 — a plugin tool that is NOT declared read-only is an approval
+ // a plugin tool that is NOT declared read-only is an approval
       // checkpoint, exactly like a built-in write. Plugin registration does not
       // buy the tool any privilege.
       if (this.pluginToolNeedsApproval(toolName)) {
@@ -449,7 +449,7 @@ export class SecurityEngine {
       return { decision: "DENY", allowed: false, needsApproval: false, riskLevel: "DANGEROUS", capability: toolCap, reason: `Blocked in 'workspace' sandbox mode: ${analysisReason || "Dangerous command"}` };
     }
 
-    // Phase 77.10 — plugin tools carry a declared risk. A mutating plugin tool
+ // plugin tools carry a declared risk. A mutating plugin tool
     // in workspace mode is an approval prompt, never a silent allow; a plugin
     // tool explicitly declared read-only stays usable.
     const pluginNeedsApproval = this.pluginToolNeedsApproval(toolName);
@@ -459,7 +459,7 @@ export class SecurityEngine {
     }
 
     if (category === "MCP_TOOL" && !this.isPluginTool(toolName)) {
-      // Phase 3: evaluate the UNDERLYING MCP tool name. The public tool may be
+ // : evaluate the UNDERLYING MCP tool name. The public tool may be
       // namespaced (mcp__<server>__<tool>) — never let the mcp__ prefix make a
       // mutating tool look read-only, and never let it look built-in.
       const effectiveName = this.effectiveToolName(toolName);
@@ -514,7 +514,7 @@ export class SecurityEngine {
     }
 
     if (category === "MCP_TOOL") {
-      // Phase 77: underlying tool name for namespaced external tools (mcp__ /
+ // : underlying tool name for namespaced external tools (mcp__ /
       // plugin__). The namespace must never change the assessed capability.
       const effectiveName = this.effectiveToolName(toolName);
       const declaredRisk = this.pluginToolRisks.get(toolName);
@@ -614,7 +614,7 @@ export class SecurityEngine {
   }
 
   categorizeTool(toolName: string): ActionCategory {
-    // Phase 75 — agent delegation. A delegated subagent is NOT privileged: every
+ // agent delegation. A delegated subagent is NOT privileged: every
     // tool it calls is evaluated by this same engine with its own derived scope.
     // Classifying `task` as SHELL_EXECUTE keeps it in the execution class
     // instead of letting it fall through to MCP_TOOL, which would wrongly treat

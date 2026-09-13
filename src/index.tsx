@@ -138,7 +138,7 @@ INTERACTIVE COMMANDS:
   }
 }
 
-// ---- Model layer subcommands (Phase 79.15) ----
+// ---- Model layer subcommands () ----
 // `toolnet providers|models|model|routing` are the canonical registry/catalog/
 // router inspection surface. `toolnet provider` below stays the config command.
 if (subCmd === "models" || subCmd === "model" || subCmd === "providers" || subCmd === "routing") {
@@ -147,7 +147,7 @@ if (subCmd === "models" || subCmd === "model" || subCmd === "providers" || subCm
   process.exit(code);
 }
 
-// ---- Eval subcommands (Phase 80.18) ----
+// ---- Eval subcommands () ----
 // `toolnet eval` measures models on the production AgentHarness path.
 if (subCmd === "repo") {
   const { runRepoCommand } = await import("./commands/repo");
@@ -167,7 +167,7 @@ if (subCmd === "eval") {
   process.exit(code);
 }
 
-// ---- Harness subcommands (Phase 81.18) ----
+// ---- Harness subcommands () ----
 // `toolnet harness` inspects and selects the policy profile for the ONE
 // AgentHarness. Independent of `toolnet routing`, which selects the model.
 if (subCmd === "harness") {
@@ -176,7 +176,7 @@ if (subCmd === "harness") {
   process.exit(code);
 }
 
-// ---- Auth subcommands (Phase 84.20) ----
+// ---- Auth subcommands () ----
 // Provider credential profiles. Secret-free output only; writes go through the
 // canonical AuthProfileRegistry / CredentialStore.
 if (subCmd === "auth") {
@@ -329,7 +329,7 @@ SUBCOMMANDS:
   process.exit(1);
 }
 
-// ---- MCP subcommand (Phase 78.32) ----
+// ---- MCP subcommand () ----
 if (subCmd === "mcp") {
   const { runMcpCli } = await import("./commands/mcpCli");
   const code = await runMcpCli(args.slice(1));
@@ -614,7 +614,7 @@ const isInteractiveMode = !isHeadless && !isSimple && !isBannerOnly;
 initWorkspace();
 
 // ---- Legacy global-state migration (idempotent, non-fatal) ----
-// Phase 3: consolidates ~/.toolnet-cli and ~/.toolnet into ~/.toolnetcli.
+// : consolidates ~/.toolnet-cli and ~/.toolnet into ~/.toolnetcli.
 // Never runs for subcommand help/version paths (fast exit happens before).
 import("./lib/toolnetHome")
   .then(({ migrateLegacyToolnetState }) => migrateLegacyToolnetState())

@@ -1,5 +1,5 @@
 /**
- * Phase 79 §6 — Canonical model reference parsing.
+ * — Canonical model reference parsing.
  *
  * The whole point of this module is that `split("/")` is WRONG. OpenRouter
  * model ids contain slashes:

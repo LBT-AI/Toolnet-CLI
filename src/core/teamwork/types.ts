@@ -1,5 +1,5 @@
 /**
- * Phase 76B.1 — Teamwork DAG Contracts
+ * Teamwork DAG Contracts
  *
  * A plan is DATA, not a runtime. Every node is executed as a BackgroundJob
  * whose work is a normal scoped subagent run on the shared Agent Engine, so a

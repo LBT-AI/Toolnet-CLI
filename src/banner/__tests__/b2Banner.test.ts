@@ -53,7 +53,7 @@ describe("B2 Twin Portal elapsed-time banner", () => {
   it("recomputes the pose when terminal size changes during animation", async () => {
     const captured = capture(80, 24);
     let size = { cols: 80, rows: 24 };
-    // Phase 81 — the injected clock above advances by a fixed step PER CALL, so
+ // the injected clock above advances by a fixed step PER CALL, so
     // the frames this test renders are already fully deterministic. The frame
     // interval only decided how long the test waited in real time: at frameMs
     // 100 the timeline needs ~9 ticks (~900ms) inside a 3s budget, which starved

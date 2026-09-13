@@ -1,5 +1,5 @@
 /**
- * Phase 73.5 — Shared Agent Engine
+ * Shared Agent Engine
  *
  * THE single entry point every interface calls:
  *
@@ -64,7 +64,7 @@ export interface AgentEngineRunOptions {
   systemPrompt?: string;
   signal?: AbortSignal;
   /**
-   * Phase 81 — harness profile id. Policy for the ONE harness (prompt blocks,
+ * harness profile id. Policy for the ONE harness (prompt blocks,
    * tool exposure, loop bounds, completion verdict). It never selects a model
    * and never changes a permission verdict.
    */
@@ -77,12 +77,12 @@ export interface AgentEngineRunOptions {
   /** Restrict the tool set (subagents, scoped tasks). */
   toolsOverride?: unknown[];
   /**
-   * Phase 75 — hard permission scope for this run. Denied tools are refused
+ * hard permission scope for this run. Denied tools are refused
    * before the security gateway, and any `task` child inherits a scope derived
    * from this one (never broader).
    */
   toolPermissionSet?: ToolPermissionScope;
-  /** Phase 75 — maximum subagent nesting depth for this run. */
+ /** maximum subagent nesting depth for this run. */
   subagentMaxDepth?: number;
 
   /** Ask the model to stream (provider must support it). */
@@ -211,7 +211,7 @@ export function toToolResult(raw: unknown): ToolResult {
   };
 }
 
-// ── Phase 76A.5 — background job events ─────────────────────────────────────
+// ── background job events ─────────────────────────────────────
 
 /**
  * Translate one background job event into the unified AgentEvent contract.
@@ -303,7 +303,7 @@ export class AgentEngine {
 
     const emit = (event: AgentEvent) => options.onEvent?.(event);
 
-    // Phase 76A.5 — forward background job events for this session while the
+ // forward background job events for this session while the
     // run is active. A job that outlives the turn is still reported to long-
     // lived subscribers via `bridgeBackgroundJobEvents`.
     const unsubscribeBackground = options.onEvent
@@ -355,7 +355,7 @@ export class AgentEngine {
       toolCalls: result.toolCallsCount,
       messages: result.messages as unknown as AgentResult["messages"],
       error: result.error,
-      // Phase 81 — the evidence-derived verdict and harness identity travel with
+ // the evidence-derived verdict and harness identity travel with
       // the result, so a UI or an eval record can report which policy contract
       // produced it without reaching into the harness.
       verdict: result.verdict,
@@ -381,7 +381,7 @@ export class AgentEngine {
       timeoutMs: options.timeoutMs,
       systemPrompt: options.systemPrompt,
       signal: options.signal,
-      /** Phase 81 — forwarded so per-call selection beats the configured default. */
+ /** forwarded so per-call selection beats the configured default. */
       harness: options.harness,
       mode,
       agentRole: options.agentRole,
@@ -396,7 +396,7 @@ export class AgentEngine {
 
     // Legacy role-only subagent entry: caller knows a role and a single task,
     // with no conversation of its own. When a transcript IS supplied (resumed
-    // Phase 75 child session) the transcript wins — otherwise the stored child
+ // child session) the transcript wins — otherwise the stored child
     // history would be silently discarded on resume.
     if (mode === "SUBAGENT" && options.agentRole && !options.messages?.length) {
       return harness.runSubagent(

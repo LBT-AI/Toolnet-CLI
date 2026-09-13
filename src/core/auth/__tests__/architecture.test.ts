@@ -1,9 +1,9 @@
 /**
- * Phase 84 §31 — architecture guards.
+ * — architecture guards.
  *
  * Static proof that provider auth has exactly ONE store, ONE profile registry
  * and ONE resolver, that no second secret store hides in a provider/CLI/TUI/
- * external-harness-local map, and that the MCP OAuth store (Phase 78) keeps its
+ * external-harness-local map, and that the MCP OAuth store () keeps its
  * own typed namespace.
  */
 
@@ -36,7 +36,7 @@ function countMatches(haystack: string, pattern: RegExp): number {
   return (haystack.match(pattern) ?? []).length;
 }
 
-describe("Phase 84 §31 — auth architecture guards", () => {
+describe(" — auth architecture guards", () => {
   it("exposes one canonical singleton per owner (stable identity across imports)", () => {
     const again = require("../index") as typeof import("../index");
     expect(again.credentialStore).toBe(credentialStore);
@@ -82,7 +82,7 @@ describe("Phase 84 §31 — auth architecture guards", () => {
       }
     }
     expect(violations).toEqual([]);
-    // Phase 78's MCP store is a different, typed namespace: it must not adopt
+ // 's MCP store is a different, typed namespace: it must not adopt
     // the provider credential store's name either.
     const mcpFiles = productionFiles(path.join("src", "core", "mcp"));
     for (const file of mcpFiles) {

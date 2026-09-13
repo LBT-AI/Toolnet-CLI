@@ -1,5 +1,5 @@
 /**
- * Phase 76B.3–76B.10 — Teamwork Engine
+ * 76B.10 — Teamwork Engine
  *
  * A dependency scheduler, nothing more. It owns no provider call, no tool
  * executor and no agent loop: each node is handed to the shared
@@ -258,7 +258,7 @@ export class TeamworkEngine {
       state.attempts++;
       const attempt = state.attempts;
 
-      // Phase 77.11 — `teamwork.node.before` fires in the ENGINE, before any
+ // `teamwork.node.before` fires in the ENGINE, before any
       // child is spawned, so a veto guarantees "no subagent, no tool call, no
       // process". A policy veto cannot be fixed by retrying, so a deny is
       // terminal for this node and dependents see a deterministic failure.

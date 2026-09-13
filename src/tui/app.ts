@@ -18,14 +18,16 @@ import { renderHarnessPanelBox } from "./renderers/harnessPanelRenderer";
 import { handleKey, handlePaste, getSuggestions, getInputState, setInputState, resetInputState } from "./input/inputHandler";
 import { sendMessage } from "./events/agentWiring";
 import { A, T, getSize } from "../term";
+import { renderFallbackFrame } from "./renderers/errorBoundary";
 import { BracketedPasteParser, ENABLE_BRACKETED_PASTE } from "../lib/bracketedPaste";
+import { PasteBurstDetector, type PasteBurstChunk } from "./input/pasteBurst";
 import { setupTerminalLifecycle, restoreTerminal, wrapErrorBoundary, onTerminalResize } from "../lib/terminalLifecycle";
 import { setResponseLanguage } from "../lib/language";
 import { reasoningEffortLabel } from "../lib/reasoning";
 import { initWorkspace } from "../lib/codingAgent";
 import { loadConfig } from "../lib/config";
 import { parseSessionArgs, loadSession, getLastSessionId, formatExitMessage } from "../lib/sessionPersistence";
-import { providerPicker } from "../components/ProviderPicker";
+import { providerPicker } from "./providerPicker";
 import { checkPendingRecovery, clearPendingRecovery, markCleanExit } from "../lib/crashRecovery";
 import { disposeExtensions, initializeExtensions } from "../core/extensions";
 import { hookRegistry } from "../core/hooks";
@@ -93,7 +95,7 @@ function buildFrame(): string {
     tuiState.isStreaming ||
     Boolean(tuiState.statusText) ||
     messageQueue.size() > 0;
-  const layout = computeLayout(activeSuggests.length, 2, tuiState.cursorPos, statusActive);
+  const layout = computeLayout(activeSuggests.length, 2, tuiState.cursorPos, statusActive, tuiState.inputBuffer ? tuiState.inputBuffer.split("\n").length : 1);
   const { cols, rows, hasPanel, panelWidth, chatCols, chatRows, popupRows } = layout;
   const out: string[] = [];
 
@@ -377,6 +379,10 @@ function commitFrame(): void {
     wrapErrorBoundary(() => {
       process.stdout.write(buildFrame());
     }, (err: unknown) => {
+      const error = err instanceof Error ? err : new Error(String(err));
+      // Paint an actionable fallback frame (session state is untouched) so
+      // the user can redraw or exit instead of staring at a corrupted screen.
+      process.stdout.write(renderFallbackFrame(error, getSize().cols, getSize().rows));
       // UI-level error recovery: close popups and update status
       tuiState.showModelPicker = false;
       tuiState.showKeyManager = false;
@@ -386,8 +392,8 @@ function commitFrame(): void {
       tuiState.showHelp = false;
       tuiState.overlay = { type: "none" };
       if (providerPicker.show) providerPicker.show = false;
-      tuiState.setStatus(`⚠️ UI recovered from render glitch (${err instanceof Error ? err.message : String(err)})`);
-      tuiState.showToast(`⚠️ UI recovered: ${err instanceof Error ? err.message : String(err)}`, 3000);
+      tuiState.setStatus(`⚠️ UI recovered from render glitch (${error.message})`);
+      tuiState.showToast(`⚠️ UI recovered: ${error.message}`, 3000);
     });
   } finally {
     rendering = false;
@@ -427,7 +433,7 @@ function exitApp(): void {
 }
 
 /**
- * Phase 77.6/77.25 — teardown ordering.
+ * /77.25 — teardown ordering.
  *
  * The `session.end` hook fires and extension resources (plugin hooks, MCP
  * child processes) are released BEFORE the process exits, otherwise cleanup
@@ -470,14 +476,9 @@ async function shutdownAndExit(): Promise<void> {
   process.exit(0);
 }
 
-function handleResize(): void {
-  if (tuiState.showHelp) tuiState.showHelp = false;
-  renderAll();
-}
-
 export async function main(): Promise<void> {
   initWorkspace();
-  // Phase 77: plugins + MCP register their tools/hooks into the canonical
+ // : plugins + MCP register their tools/hooks into the canonical
   // registries before the first turn, so the model only ever sees one tool set.
   await initializeExtensions({ workspaceRoot: process.cwd() });
 
@@ -564,45 +565,72 @@ export async function main(): Promise<void> {
   }
   process.stdin.resume();
 
-  process.stdout.on("resize", handleResize);
+  // Resize is handled solely by the debounced SIGWINCH listener registered at
+  // startup; a second raw listener here would re-render twice per resize.
   renderAll();
 
   const pasteParser = new BracketedPasteParser();
+  const burstDetector = new PasteBurstDetector();
+
+  const emitBurstChunks = (chunks: PasteBurstChunk[]) => {
+    for (const chunk of chunks) {
+      if (chunk.type === "paste") {
+        handlePaste(chunk.content, { renderAll, sendMessage, exitApp, openModelPicker });
+      } else {
+        for (const char of chunk.content) {
+          handleKey(Buffer.from(char, "utf8"), { renderAll, sendMessage, exitApp, openModelPicker });
+        }
+      }
+    }
+  };
+
+  const handleRawBytes = (content: string) => {
+    const buf = Buffer.from(content, "utf8");
+    let i = 0;
+    while (i < buf.length) {
+      if (buf[i] === 0x1b) {
+        if (i + 1 < buf.length && (buf[i + 1] === 0x5b || buf[i + 1] === 0x4f)) {
+          let j = i + 2;
+          while (j < buf.length && !(buf[j] >= 0x40 && buf[j] <= 0x7e)) j++;
+          handleKey(buf.slice(i, j + 1), { renderAll, sendMessage, exitApp, openModelPicker });
+          i = j + 1;
+        } else if (i + 1 < buf.length) {
+          handleKey(buf.slice(i, i + 2), { renderAll, sendMessage, exitApp, openModelPicker });
+          i += 2;
+        } else {
+          handleKey(buf.slice(i, i + 1), { renderAll, sendMessage, exitApp, openModelPicker });
+          i += 1;
+        }
+      } else {
+        let j = i;
+        while (j < buf.length && buf[j] !== 0x1b) j++;
+        for (const char of buf.slice(i, j).toString("utf8")) {
+          handleKey(Buffer.from(char, "utf8"), { renderAll, sendMessage, exitApp, openModelPicker });
+        }
+        i = j;
+      }
+    }
+  };
 
   process.stdin.on("data", (data: Buffer) => {
     const chunks = pasteParser.parse(data);
     for (const chunk of chunks) {
       if (chunk.type === "paste") {
+        // Preserve ordering: emit any buffered plain-text group first.
+        emitBurstChunks(burstDetector.flush());
         handlePaste(chunk.content, { renderAll, sendMessage, exitApp, openModelPicker });
         continue;
       }
 
-      const buf = Buffer.from(chunk.content);
-      let i = 0;
-      while (i < buf.length) {
-        if (buf[i] === 0x1b) {
-          if (i + 1 < buf.length && (buf[i + 1] === 0x5b || buf[i + 1] === 0x4f)) {
-            let j = i + 2;
-            while (j < buf.length && !(buf[j] >= 0x40 && buf[j] <= 0x7e)) j++;
-            handleKey(buf.slice(i, j + 1), { renderAll, sendMessage, exitApp, openModelPicker });
-            i = j + 1;
-          } else if (i + 1 < buf.length) {
-            handleKey(buf.slice(i, i + 2), { renderAll, sendMessage, exitApp, openModelPicker });
-            i += 2;
-          } else {
-            handleKey(buf.slice(i, i + 1), { renderAll, sendMessage, exitApp, openModelPicker });
-            i++;
-          }
-        } else {
-          const b = buf[i];
-          let len = 1;
-          if ((b & 0xe0) === 0xc0) len = 2;
-          else if ((b & 0xf0) === 0xe0) len = 3;
-          else if ((b & 0xf8) === 0xf0) len = 4;
-          handleKey(buf.slice(i, i + len), { renderAll, sendMessage, exitApp, openModelPicker });
-          i += len;
-        }
+      // Escape sequences bypass the burst detector entirely: a keystroke
+      // carrying ESC must reach the key handler even mid-paste-burst.
+      if (chunk.content.includes("\x1b")) {
+        emitBurstChunks(burstDetector.flush());
+        handleRawBytes(chunk.content);
+        continue;
       }
+
+      emitBurstChunks(burstDetector.accept(chunk.content, Date.now()));
     }
   });
 

@@ -19,7 +19,7 @@ import { bypassEngine } from "../../lib/bypass";
 import { getSubagentTools } from "../subagentRuntime";
 import { setSandboxMode } from "../../lib/permissions";
 
-describe("Security Hardening Phase 3 Suite", () => {
+describe("Security Hardening Suite", () => {
   beforeEach(() => {
     setSandboxMode("workspace");
     sessionTrust.clear();

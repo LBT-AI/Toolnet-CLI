@@ -1,5 +1,5 @@
 /**
- * Phase 84 §3 — Profile-id validation + §23 structured auth errors.
+ * — Profile-id validation + structured auth errors.
  *
  * Profile ids are USER INPUT that becomes part of an on-disk map key, so they
  * are validated before anything touches the store: `provider/name`, name
@@ -62,7 +62,7 @@ export function parseProfileId(profileId: string): { providerId: string; name: s
   };
 }
 
-/** §23 — base for all structured auth errors. */
+/** — base for all structured auth errors. */
 export class AuthError extends Error {
   readonly code: string;
   readonly providerId?: string;

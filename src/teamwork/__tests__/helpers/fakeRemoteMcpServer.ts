@@ -1,5 +1,5 @@
 /**
- * Phase 78.20/78.21/78.22 — Real local HTTP MCP fixture.
+ * /78.21/78.22 — Real local HTTP MCP fixture.
  *
  * This is a genuine MCP server speaking JSON-RPC 2.0 over real HTTP, bound to
  * 127.0.0.1. Nothing about the client transport (StreamableHTTP or SSE) is

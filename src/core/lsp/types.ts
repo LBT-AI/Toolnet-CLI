@@ -1,5 +1,5 @@
 /**
- * Phase 74 — LSP / Code Intelligence: normalized contracts.
+ * LSP / Code Intelligence: normalized contracts.
  *
  * These types are deliberately server-independent. Every language server
  * (tsserver, pyright, gopls, …) is adapted into this shape by `client.ts`, so

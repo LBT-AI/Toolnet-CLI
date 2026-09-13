@@ -1,5 +1,5 @@
 /**
- * Phase 74.7 — LSP integration on a real TypeScript fixture.
+ * LSP integration on a real TypeScript fixture.
  *
  * A fake language server stands in for `typescript-language-server` so the
  * tests are deterministic and CI never depends on an installed binary. The

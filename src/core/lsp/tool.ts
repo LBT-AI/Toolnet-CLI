@@ -1,5 +1,5 @@
 /**
- * Phase 74 — The canonical `lsp` tool.
+ * The canonical `lsp` tool.
  *
  * One tool, six operations, registered once in the canonical ToolRegistry so it
  * flows through the existing permission → execute → verify pipeline. There is

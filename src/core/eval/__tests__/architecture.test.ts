@@ -34,7 +34,7 @@ function countMatches(haystack: string, pattern: RegExp): number {
   return (haystack.match(global) ?? []).length;
 }
 
-describe("Phase 80 — architecture guards", () => {
+describe("architecture guards", () => {
   it("exposes exactly one canonical router, catalog and registry", () => {
     const wholeSrc = productionFiles("src").map(readSource).join("\n");
     expect(countMatches(wholeSrc, /class ModelRouter\b/)).toBe(1);

@@ -1,7 +1,6 @@
-import { getSize } from "../term";
-import { A } from "../term";
-import { truncate } from "../tui/layout";
-import { composeBox, computeBoxGeometry } from "../tui/renderers/composeBox";
+import { getSize, A } from "../term";
+import { truncateVisible } from "../lib/text";
+import { composeBox, computeBoxGeometry } from "./renderers/composeBox";
 
 const MAX_DISPLAY = 10;
 
@@ -63,7 +62,7 @@ export class ProviderPickerState {
       const modelIdx = listStart + i;
       const model = visible[i];
       const isSel = modelIdx === this.idx;
-      const text = truncate(model, boxW - 10);
+      const text = truncateVisible(model, boxW - 10);
       if (isSel) {
         body.push(A.bgOverlay + "  " + A.fgViolet + A.bold + "● " + A.reset + A.bgOverlay + A.bold + A.fgText + text + A.reset);
       } else {

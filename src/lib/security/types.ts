@@ -57,12 +57,12 @@ export interface ToolExecutionContext {
   agentDepth?: number;
   sessionId?: string;
   userId?: string;
-  /** Layer 4 Phase 1: origin of the call — for audit + role propagation. */
+ /** Layer 4 : origin of the call — for audit + role propagation. */
   source?: "tui" | "headless" | "subagent" | "teamwork" | "plugin" | "vision" | "mcp";
   /** Abort signal — propagated to the executor so running processes can be killed. */
   signal?: AbortSignal;
   /**
-   * Phase 75 — runtime facts for tools that create subagents (`task`).
+ * runtime facts for tools that create subagents (`task`).
    * The harness attaches the spawning turn's effective permission scope and
    * nesting depth so a child can never be granted more than its parent holds.
    */
@@ -164,7 +164,7 @@ export type SecurityAuditDecision =
   | "EXECUTION_START"
   | "EXECUTION_COMPLETE"
   | "RATE_LIMITED"
-  /** Phase 77: a lifecycle hook vetoed the call before any side effect. */
+ /** : a lifecycle hook vetoed the call before any side effect. */
   | "BLOCKED_BY_HOOK";
 
 export interface SecurityAuditEvent {

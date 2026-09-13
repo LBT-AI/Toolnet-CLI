@@ -22,7 +22,7 @@ export type HarnessEventType =
   | "agent:thinking"
   | "agent:stream_chunk"
   | "agent:reasoning_chunk"
-  /** Phase 76A.4 — a runtime notification was injected into the conversation. */
+ /** a runtime notification was injected into the conversation. */
   | "agent:notification"
   | "tool:queued"
   | "tool:approval_required"
@@ -32,7 +32,7 @@ export type HarnessEventType =
   | "agent:compact"
   | "agent:complete"
   | "agent:error"
-  /** Phase 82 — provider/upstream routing observation (route attempted/failed). */
+ /** provider/upstream routing observation (route attempted/failed). */
   | "agent:routing"
   | "subagent:spawn"
   | "subagent:complete"
@@ -62,7 +62,7 @@ export interface HarnessConfig {
   maxTurns?: number;
   timeoutMs?: number;
   /**
-   * Phase 81 — harness profile id. POLICY only: it shapes the prompt, the
+ * harness profile id. POLICY only: it shapes the prompt, the
    * exposed tool set, the loop bounds and the completion verdict. It cannot
    * change a permission decision, and it is never a second loop.
    */
@@ -80,28 +80,28 @@ export interface ExecutionOptions {
   systemPrompt?: string;
   stream?: boolean;
   toolsOverride?: any[];
-  /** Phase 81 — harness profile id for this run (explicit wins over auto). */
+ /** harness profile id for this run (explicit wins over auto). */
   harness?: string;
   toolChoice?: "auto" | "required" | "none";
   sandboxMode?: SandboxMode;
   mode?: ExecutionMode;
-  /** Real agent role for the security context (Phase 2 policy propagation). */
+ /** Real agent role for the security context ( policy propagation). */
   agentRole?: string;
   /** Nesting depth for subagent recursion gates. */
   agentDepth?: number;
   /** Abort signal — cancelling stops provider calls AND running tools. */
   signal?: AbortSignal;
   /**
-   * Phase 75 — effective permission scope for this run. When set, tools denied
+ * effective permission scope for this run. When set, tools denied
    * by the scope are refused BEFORE the security gateway, and `task` children
    * inherit this scope (intersected with their agent definition).
    */
   toolPermissionSet?: ToolPermissionScope;
-  /** Phase 75 — maximum subagent nesting depth (default 1 = no grandchildren). */
+ /** maximum subagent nesting depth (default 1 = no grandchildren). */
   subagentMaxDepth?: number;
   onChunk?: (chunk: string) => void;
   onEvent?: (event: string, data: any) => void;
-  /** Phase 73.9 — task requirements parsed from the user prompt. When set, the
+ /** task requirements parsed from the user prompt. When set, the
    *  loop runs the Completion Gate before accepting a text-only final answer. */
   taskRequirements?: TaskRequirement;
   /** Live evidence fed by verified tool results (Completion Gate). */
@@ -139,16 +139,16 @@ export interface HarnessResult {
   error?: string;
   artifacts?: string[];
   teamworkState?: SchedulerState;
-  /** Phase 73.9 — verified side effects accumulated by the Completion Gate. */
+ /** verified side effects accumulated by the Completion Gate. */
   evidence?: CompletionEvidence;
-  /** Phase 81 — which policy contract produced this result. */
+ /** which policy contract produced this result. */
   harnessId?: string;
   harnessVersion?: string;
-  /** Phase 81 §11 — evidence-derived outcome, not "the model said it finished". */
+ /** — evidence-derived outcome, not "the model said it finished". */
   verdict?: "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED" | "TIMEOUT";
   /** Every unmet requirement behind a non-SUCCESS verdict. */
   completionReasons?: string[];
-  /** Phase 81 §12 — observed side effects (files, commands, denials). */
+ /** — observed side effects (files, commands, denials). */
   executionEvidence?: import("../../core/harness/evidence").ExecutionEvidence;
 }
 

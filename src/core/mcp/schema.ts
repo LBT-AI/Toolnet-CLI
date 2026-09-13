@@ -1,5 +1,5 @@
 /**
- * Phase 77.17 — MCP schema normalization.
+ * MCP schema normalization.
  *
  * A remote MCP server is UNTRUSTED input. Everything it returns is treated as
  * data that must be validated and bounded before it can enter the model

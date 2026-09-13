@@ -34,7 +34,7 @@ import {
   TOOLNET_DEFAULT_MODELS,
 } from "../../providers";
 import { tuiState } from "../../tui/state";
-import { providerPicker } from "../../components/ProviderPicker";
+import { providerPicker } from "../../tui/providerPicker";
 import { handleKey } from "../../tui/input/inputHandler";
 
 function tmpDir(): string {

@@ -1,5 +1,5 @@
 /**
- * Phase 74 — LSP / Code Intelligence public API.
+ * LSP / Code Intelligence public API.
  */
 
 export * from "./types";

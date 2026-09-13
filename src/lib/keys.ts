@@ -5,7 +5,7 @@ import { getToolnetKeysPath } from "./toolnetHome";
 
 function getDataDir(): string {
   if (process.env.DATA_DIR) return process.env.DATA_DIR;
-  // Phase 3: canonical home (win32 included — one root everywhere).
+ // : canonical home (win32 included — one root everywhere).
   return path.dirname(getToolnetKeysPath());
 }
 

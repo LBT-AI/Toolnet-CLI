@@ -2,7 +2,7 @@
  * Dynamic Agent Scheduler for ToolNet Teamwork v2
  * Target File: cli/src/teamwork/dynamicScheduler.ts
  *
- * Layer 4 Phase 2 — Scheduler Correctness + Budget Enforcement:
+ * Layer 4 Scheduler Correctness + Budget Enforcement:
  *  - NO fake success: provider/network/auth failures are typed failures.
  *  - COMPLETED ⇔ outputResult.success === true.
  *  - Dependency gate: child READY only when ALL parents are COMPLETED AND
@@ -40,7 +40,7 @@ export interface SchedulerOptions {
   model?: string;
   maxConcurrencyOverride?: number;
   /**
-   * Layer 4 Phase 2 CONTRACT (structured):
+ * Layer 4 CONTRACT (structured):
    *   executorFn is a MODEL ORCHESTRATION hook, not a tool execution path.
    *   - Returns a WorkerExecutionResult (structured) OR a plain string.
    *     Strings are normalized via normalizeWorkerResult: non-empty string =
@@ -53,7 +53,7 @@ export interface SchedulerOptions {
    *     failure can never be interpreted as success by the scheduler.
    */
   executorFn?: (node: TaskNode, prompt: string) => Promise<string> | Promise<WorkerExecutionResult> | string | WorkerExecutionResult;
-  /** Parent sandbox mode — child workers can never exceed it (Phase 2). */
+ /** Parent sandbox mode — child workers can never exceed it (). */
   sandboxMode?: SandboxMode;
   /** Workspace root propagated to every worker's security context. */
   workspaceRoot?: string;
@@ -121,7 +121,7 @@ function isCompletedStatus(status: TaskStatus | undefined): boolean {
 }
 
 /**
- * Dependency gate (Phase 2): a dependency is successful ONLY when its node is
+ * Dependency gate (): a dependency is successful ONLY when its node is
  * COMPLETED and its structured outputResult.success === true.
  */
 export function isDependencySuccessful(node: TaskNode | undefined): boolean {
@@ -287,7 +287,7 @@ export class DynamicScheduler {
 
       const deps = node.dependsOn || node.dependencies || [];
       const depNodes = deps.map(depId => this.nodesList.find(n => n.id === depId));
-      // Phase 2 dependency gate: every dependency must be COMPLETED with
+ // dependency gate: every dependency must be COMPLETED with
       // structured success. Failed/skipped/budget-exhausted dependency blocks.
       return depNodes.every(dep => isDependencySuccessful(dep));
     });
@@ -575,7 +575,7 @@ export class DynamicScheduler {
 
       let workerResult: WorkerExecutionResult;
       if (this.options.executorFn) {
-        // Structured contract (Phase 2): string → normalized structured result;
+ // Structured contract (): string → normalized structured result;
         // WorkerExecutionResult passes through. Empty string is never success.
         const raw = await this.options.executorFn(node, fullPrompt);
         workerResult = normalizeWorkerResult(raw);

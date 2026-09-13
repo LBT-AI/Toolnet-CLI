@@ -1,5 +1,5 @@
 /**
- * Phase 82 §4 — Failure classification for health and route performance.
+ * — Failure classification for health and route performance.
  *
  * The single rule this module enforces: a failure that is the CALLER's fault
  * must never mark a provider unhealthy. A permission denial, a user

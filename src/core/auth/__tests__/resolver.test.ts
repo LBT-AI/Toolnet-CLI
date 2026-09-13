@@ -1,5 +1,5 @@
 /**
- * Phase 84 §8/§22/§33 — CredentialResolver precedence + AuthProfileRegistry.
+ * — CredentialResolver precedence + AuthProfileRegistry.
  *
  * Every test uses a temp config dir, a temp credential store and an injected
  * environment, so nothing touches the real user's credentials.
@@ -209,7 +209,7 @@ describe("CredentialResolver — deterministic precedence", () => {
     const resolver = new CredentialResolver({ store, profiles, env: {} });
     expect(resolver.resolve({ providerId: "openrouter" }).secret).toBe("work-secret-000000001");
 
-    // §15 — the request's session identity pins the account.
+ // — the request's session identity pins the account.
     const pinned = resolver.resolve({ providerId: "openrouter", sessionProfile: "openrouter/personal" });
     expect(pinned.secret).toBe("personal-secret-00002");
     expect(pinned.source).toBe("session_profile");

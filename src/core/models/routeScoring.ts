@@ -1,5 +1,5 @@
 /**
- * Phase 82 §6 — Canonical route scorer.
+ * — Canonical route scorer.
  *
  * One scorer, no randomness, deterministic ordering:
  *
@@ -166,7 +166,7 @@ export function scoreRoute(input: RouteScoreInput): RouteScore {
  * Deterministic total ordering.
  * Returns <0 when `a` should be tried before `b`.
  *
- * The POLICY SCORE is the primary key — §3/§6: `cheapest` must actually pick
+ * The POLICY SCORE is the primary key — : `cheapest` must actually pick
  * the cheapest route and `fastest` the fastest, regardless of declared
  * provider priority. Priority and health are tie-breakers (a policy with no
  * distinguishing evidence, e.g. all-unknown pricing, still degrades to the

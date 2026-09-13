@@ -1,7 +1,7 @@
 /**
  * Unit tests for the Agent Runtime core modules added in the production
- * refactor: normalized model adapter (§2/§3), agent state machine (§16),
- * and the single tool registry (§4).
+ * refactor: normalized model adapter (), agent state machine (),
+ * and the single tool registry ().
  */
 
 import { test, expect, describe } from "bun:test";
@@ -18,7 +18,7 @@ import { agentTools } from "../../lib/agentTools";
 import { setModelCapabilities } from "../../lib/reasoning";
 import type { ChatResponse } from "../../providers/types";
 
-// ── Model Adapter — structured tool protocol (§3) ───────────────────────────
+// ── Model Adapter — structured tool protocol () ───────────────────────────
 
 describe("parseStructuredToolCalls", () => {
   test("parses a JSON tool_call block inside a code fence", () => {
@@ -63,7 +63,7 @@ describe("parseStructuredToolCalls", () => {
   });
 
   test("rejects unknown tools — prose cannot become a tool call", () => {
-    // §3: "I created test.py" must NOT be parsed into an execution.
+ // : "I created test.py" must NOT be parsed into an execution.
     const prose = "I created test.py for you! Here is the code:\nprint('hello')";
     expect(parseStructuredToolCalls(prose)).toBeNull();
   });
@@ -203,7 +203,7 @@ describe("normalizeChatResponse", () => {
   });
 });
 
-// ── Agent State Machine (§16) ───────────────────────────────────────────────
+// ── Agent State Machine () ───────────────────────────────────────────────
 
 describe("AgentStateMachine", () => {
   test("starts idle and transitions through valid path", () => {
@@ -272,7 +272,7 @@ describe("AgentStateMachine", () => {
     expect(h[1].to).toBe("error");
   });
 
-  // §30 — full P0 lifecycle: understanding → gathering-context → thinking →
+ // — full P0 lifecycle: understanding → gathering-context → thinking →
   // executing-tool → verifying → testing → responding
   test("full P0 lifecycle transitions are valid", () => {
     const sm = new AgentStateMachine();
@@ -316,7 +316,7 @@ describe("AgentStateMachine", () => {
   });
 });
 
-// ── Tool Registry (§4) ──────────────────────────────────────────────────────
+// ── Tool Registry () ──────────────────────────────────────────────────────
 
 describe("toolRegistry", () => {
   test("every tool has name, description, parameters, risk, execute", () => {
@@ -367,7 +367,7 @@ describe("toolRegistry", () => {
   });
 });
 
-// ── Phase 73.10 — canonical names + one primary execution path ───────────────
+// ── canonical names + one primary execution path ───────────────
 
 describe("toolRegistry — canonical names (no aliases exposed to the model)", () => {
   test("schemas() exposes exactly one name per capability", () => {
@@ -442,7 +442,7 @@ describe("ARCHITECTURE — one primary execution path", () => {
   });
 });
 
-// ── Phase 73.11 — single definition source & interface parity ────────────────
+// ── single definition source & interface parity ────────────────
 
 describe("ARCHITECTURE — single definition source and interface parity", () => {
   const srcDir = path.join(__dirname, "../..");

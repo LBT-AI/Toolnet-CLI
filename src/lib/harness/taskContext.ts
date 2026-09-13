@@ -1,5 +1,5 @@
 /**
- * ActiveTaskContext — §3 + §12
+ * ActiveTaskContext — +
  *
  * Tracks the current task's goal, files, URLs, plan, constraints, and requirements
  * across multiple turns so follow-up messages like "tiếp", "sửa cái đó" are resolved

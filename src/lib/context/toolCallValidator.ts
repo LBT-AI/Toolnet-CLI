@@ -1,5 +1,5 @@
 /**
- * Layer 4 — Phase 4: Tool-call pair validator.
+ * Layer 4 — : Tool-call pair validator.
  *
  * Walks a message list and reports:
  *   - `valid`:              true if every assistant tool_call is matched

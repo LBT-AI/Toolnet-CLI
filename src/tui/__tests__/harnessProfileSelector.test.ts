@@ -1,5 +1,5 @@
 /**
- * Phase 81 §19 — the TUI is a CONSUMER of the canonical harness registry.
+ * — the TUI is a CONSUMER of the canonical harness registry.
  *
  * `/harness use` and `/harness profile` must go through the same config API the
  * CLI uses, and the panel section must read the registry rather than keeping its
@@ -47,7 +47,7 @@ afterEach(() => {
   } catch {}
 });
 
-describe("Phase 81 §19 — TUI harness profile section", () => {
+describe(" — TUI harness profile section", () => {
   it("exposes a Profile section in the harness panel", () => {
     const ids = getHarnessSections().map((section) => section.id);
     expect(ids).toContain("profile");
@@ -78,7 +78,7 @@ describe("Phase 81 §19 — TUI harness profile section", () => {
   });
 });
 
-describe("Phase 81 §19 — /harness selector", () => {
+describe(" — /harness selector", () => {
   it("persists a profile through the same API as the CLI", async () => {
     const c = ctx();
     await harnessCommand.handler(["use", "reasoning"], c.context as never);

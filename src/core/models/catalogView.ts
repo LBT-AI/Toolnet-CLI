@@ -1,5 +1,5 @@
 /**
- * Phase 80 §8 — Read-only catalog projection.
+ * — Read-only catalog projection.
  *
  * One place that turns the canonical layer into display rows, so the TUI and
  * the CLI cannot drift apart. It reads `ModelCatalog`, `ProviderRegistry` and

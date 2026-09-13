@@ -20,7 +20,7 @@ import { deriveSubagentPermission } from "../../core/agent/agents/permissions";
 import { BackgroundJobService } from "../../core/background/service";
 
 /**
- * Phase 77.27–77.33 — live acceptance.
+ * 77.33 — live acceptance.
  *
  * The MCP path here spawns a REAL server process and performs a REAL
  * initialize/tools-list/call sequence. Nothing about the manager or the
@@ -595,7 +595,7 @@ describe("Security engine — external tool classification", () => {
 });
 
 /**
- * Phase 77.12/77.39 — structural guards.
+ * /77.39 — structural guards.
  *
  * These read the source rather than behaviour: a future change that gives
  * plugins or MCP their own model loop, provider call or executor would still

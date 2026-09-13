@@ -1,5 +1,5 @@
 /**
- * Phase 75.7 / 76A.3 — Canonical `task` tool
+ * / 76A.3 — Canonical `task` tool
  *
  * The single entry point a model uses to delegate work. It is a normal registry
  * tool: it goes through the same permission gate, executes through the same
@@ -121,7 +121,7 @@ export function renderTaskEnvelope(input: TaskEnvelopeInput): string {
   return lines.join("\n");
 }
 
-/** What the parent model is told after launching background work (§76A.4). */
+/** What the parent model is told after launching background work (). */
 const BACKGROUND_STARTED = [
   "The task is running in the background. You will be notified automatically when it finishes.",
   "DO NOT sleep, poll for progress, ask the task for status, or duplicate this task's work.",

@@ -9,7 +9,7 @@ const PROVIDER = "phase80catalog";
 providerRegistry.register(
   {
     id: PROVIDER,
-    name: "Phase 80 Catalog",
+ name: " Catalog",
     kind: "openai-compatible",
     baseURL: "https://catalog.invalid/v1",
     models: [
@@ -48,7 +48,7 @@ function context(messages: string[]): CommandContext {
   };
 }
 
-describe("Phase 80 — `/catalog`", () => {
+describe("`/catalog`", () => {
   it("parses filters, capability validation and a selection target", () => {
     expect(parseCatalogArgs(["--provider", "openrouter", "--capability", "tools"])).toEqual({
       filter: { provider: "openrouter", capability: "tools" },

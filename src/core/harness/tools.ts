@@ -1,5 +1,5 @@
 /**
- * Phase 81 §7 — tool policy.
+ * — tool policy.
  *
  * This module decides which of the ALREADY-REGISTERED tools the model is
  * offered, and in what order. It cannot decide permission.

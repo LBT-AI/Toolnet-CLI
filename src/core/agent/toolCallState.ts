@@ -1,5 +1,5 @@
 /**
- * Phase 73.4/73.8 — Tool Call State
+ * /73.8 — Tool Call State
  *
  * Each tool call moves through a documented lifecycle:
  *

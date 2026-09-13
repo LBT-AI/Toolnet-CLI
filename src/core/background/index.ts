@@ -1,5 +1,5 @@
 /**
- * Phase 76A — Background Jobs
+ * Background Jobs
  *
  * Public surface. Import from here; the service is the only job registry in the
  * codebase (no per-subsystem job stores).

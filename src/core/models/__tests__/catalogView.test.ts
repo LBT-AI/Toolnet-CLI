@@ -24,7 +24,7 @@ const registry = new ProviderRegistry(catalog);
 registry.register(
   {
     id: PROVIDER,
-    name: "Phase 80 View",
+ name: " View",
     kind: "openai-compatible",
     baseURL: "https://view.invalid/v1",
     models: [
@@ -44,7 +44,7 @@ afterAll(() => {
   registry.unregister(PROVIDER);
 });
 
-describe("Phase 80 — catalog view", () => {
+describe("catalog view", () => {
   it("lists catalogue rows with health and pricing metadata", () => {
     const view = buildCatalogRows({ catalog, registry, filter: { provider: PROVIDER } });
     expect(view.rows).toHaveLength(3);

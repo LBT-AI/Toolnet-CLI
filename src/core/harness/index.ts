@@ -1,5 +1,5 @@
 /**
- * Phase 81 — Harness compatibility layer.
+ * Harness compatibility layer.
  *
  * POLICY for the single AgentHarness. Nothing exported here is a runtime, an
  * execution loop, a provider wrapper or a tool executor, and nothing here can

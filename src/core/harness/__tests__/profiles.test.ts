@@ -1,5 +1,5 @@
 /**
- * Phase 81 §3/§4/§5/§17/§18 — profiles, registry, resolver, persistence.
+ * — profiles, registry, resolver, persistence.
  */
 
 import fs from "node:fs";
@@ -50,7 +50,7 @@ afterEach(() => {
   } catch {}
 });
 
-describe("Phase 81 — built-in profiles", () => {
+describe("built-in profiles", () => {
   it("registers each built-in exactly once, in declaration order", () => {
     const builtinIds = ["default", "minimal", "coding", "tool-heavy", "reasoning"];
     for (const id of builtinIds) expect(harnessRegistry.get(id)).toBeDefined();
@@ -130,7 +130,7 @@ describe("Phase 81 — built-in profiles", () => {
   });
 });
 
-describe("Phase 81 — registry", () => {
+describe("registry", () => {
   it("rejects a duplicate id", () => {
     const registry = new HarnessRegistry();
     registry.register(defaultProfile);
@@ -159,7 +159,7 @@ describe("Phase 81 — registry", () => {
   });
 });
 
-describe("Phase 81 §17 — auto resolution (one table)", () => {
+describe(" — auto resolution (one table)", () => {
   it("maps coding/debugging to coding, tool_heavy and reasoning/planning", () => {
     expect(AUTO_HARNESS_BY_TASK.coding).toBe("coding");
     expect(AUTO_HARNESS_BY_TASK.debugging).toBe("coding");
@@ -210,7 +210,7 @@ describe("Phase 81 §17 — auto resolution (one table)", () => {
   });
 });
 
-describe("Phase 81 §5 — an unknown profile id fails loudly", () => {
+describe(" — an unknown profile id fails loudly", () => {
   it("throws a structured error for an explicit unknown id", () => {
     expect(() => resolveHarnessProfile({ profile: "codign" })).toThrow(HarnessError);
     try {
@@ -232,7 +232,7 @@ describe("Phase 81 §5 — an unknown profile id fails loudly", () => {
   });
 });
 
-describe("Phase 81 §18 — persistence in the canonical config owner", () => {
+describe(" — persistence in the canonical config owner", () => {
   it("defaults to the default profile", () => {
     expect(currentHarnessSettings().profile).toBe("default");
   });
@@ -270,7 +270,7 @@ describe("Phase 81 §18 — persistence in the canonical config owner", () => {
   });
 });
 
-describe("Phase 81 — policy summary is inspectable", () => {
+describe("policy summary is inspectable", () => {
   it("summarizeHarnessProfile names every policy module", () => {
     const lines = summarizeHarnessProfile(defaultProfile).join("\n");
     for (const label of ["Prompt", "Tools", "Continuation", "Context", "Completion"]) {

@@ -1,5 +1,5 @@
 /**
- * Phase 84 §19/§20/§28/§30/§33 — CLI, redaction and external-harness
+ * — CLI, redaction and external-harness
  * credential-injection tests.
  *
  * The injection test performs a REAL spawn (bun as the child) and proves two
@@ -154,7 +154,7 @@ describe("auth CLI — no secrets in output", () => {
   });
 });
 
-describe("profile id validation — §30 path traversal and control characters", () => {
+describe("profile id validation — path traversal and control characters", () => {
   test("rejects traversal, separators, control chars and over-long names", async () => {
     for (const name of ["../../etc/passwd", "a/b", "back\\slash", "bell\u0007", "x".repeat(200), ""]) {
       await expect(
@@ -180,7 +180,7 @@ describe("profile id validation — §30 path traversal and control characters",
   });
 });
 
-describe("credential shapes — §30 keys with shell metacharacters stay inert", () => {
+describe("credential shapes — keys with shell metacharacters stay inert", () => {
   test("stores and resolves keys containing quotes, spaces, newlines and shell syntax", async () => {
     const wild = "sk-or; && $(touch /tmp/pwned) `id` \"quoted\" 'single'\n\u00e9\u4e2d\u6587";
     await authOperations.addApiKey({ providerId: "openrouter", name: "wild", secret: wild, activate: false });
@@ -193,7 +193,7 @@ describe("credential shapes — §30 keys with shell metacharacters stay inert",
   });
 });
 
-describe("redaction — §19", () => {
+describe("redaction — ", () => {
   test("registered secrets are scrubbed from arbitrary text", () => {
     registerResolvedSecret(SECRET);
     expect(resolvedSecretCount()).toBeGreaterThan(0);
@@ -222,7 +222,7 @@ describe("redaction — §19", () => {
   });
 });
 
-describe("external harness credential injection — §18", () => {
+describe("external harness credential injection — ", () => {
   test("an undeclared env name is refused", async () => {
     await authOperations.addApiKey({ providerId: "openrouter", name: "work", secret: SECRET, activate: false });
     expect(() =>

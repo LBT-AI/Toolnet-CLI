@@ -1,5 +1,5 @@
 /**
- * Phase 79 §7 — OpenRouter metadata normalization.
+ * — OpenRouter metadata normalization.
  *
  * Turns OpenRouter's raw `/api/v1/models` records into canonical
  * `ModelDefinition`s. Two disciplines:
@@ -43,7 +43,7 @@ interface OpenRouterTopProvider {
 }
 
 /**
- * Phase 82 §8/§9 — declared upstream identity.
+ * — declared upstream identity.
  *
  * OpenRouter's listing endpoint usually does NOT name the serving upstream; the
  * endpoints endpoint does. We read ONLY an explicitly declared name and never
@@ -68,7 +68,7 @@ export function declaredUpstreamName(record: Record<string, unknown>): string | 
 }
 
 /**
- * Phase 82 §8 — normalize an OpenRouter *endpoints* payload into per-upstream
+ * — normalize an OpenRouter *endpoints* payload into per-upstream
  * route metadata.
  *
  * The caller decides whether to fetch endpoints (this module performs no
@@ -178,7 +178,7 @@ export function normalizeOpenRouterModel(
   if (typeof record.description === "string") metadata.description = record.description;
   if (typeof record.created === "number") metadata.created = record.created;
   if (topProvider.is_moderated !== undefined) metadata.moderated = topProvider.is_moderated;
-  // Phase 82 §8 — only a DECLARED upstream becomes route identity.
+ // — only a DECLARED upstream becomes route identity.
   const upstream = declaredUpstreamName(record);
   if (upstream) metadata.upstream = upstream;
   if (Array.isArray(record.supported_parameters)) {

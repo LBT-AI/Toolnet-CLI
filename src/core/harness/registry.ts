@@ -1,5 +1,5 @@
 /**
- * Phase 81 §5 — the single HarnessRegistry.
+ * — the single HarnessRegistry.
  *
  * Exactly one registry exists in the process (`harnessRegistry`). It owns the
  * set of known harness profiles and is the only place a profile is looked up.

@@ -1,5 +1,5 @@
 /**
- * Phase 84 §11/§12/§33 — OpenRouter OAuth via PKCE (S256).
+ * — OpenRouter OAuth via PKCE (S256).
  *
  * Protocol implemented exactly as documented (read at
  * https://openrouter.ai/docs/guides/overview/auth/oauth during this phase):
@@ -21,12 +21,12 @@
  *    appends `?code=` cannot corrupt or drop it;
  *  - `state` is validated BEFORE the exchange; a mismatch stores NOTHING;
  *  - a flow is single-use: the same state/verifier can never complete twice
- *    (§24 — "Attempt A cannot complete Attempt B");
+ * ( — "Attempt A cannot complete Attempt B");
  *  - failures (mismatch, timeout, HTTP error) store nothing.
  *
  * OpenRouter's exchange returns an API KEY, not a refreshable token pair, so
  * the result is modeled as `OAuthExchangedKeyCredential` and is never called
- * "refreshable" (§4).
+ * "refreshable" ().
  */
 
 import http from "node:http";
@@ -47,14 +47,14 @@ export interface PkcePair {
   codeChallenge: string;
 }
 
-/** §11 — PKCE generation. Verifier is random; challenge is S256. */
+/** — PKCE generation. Verifier is random; challenge is S256. */
 export function generatePkce(): PkcePair {
   const codeVerifier = randomBytes(48).toString("base64url");
   const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
   return { codeVerifier, codeChallenge };
 }
 
-/** §11 — one-time, unguessable state. */
+/** — one-time, unguessable state. */
 export function generateState(): string {
   return randomBytes(24).toString("base64url");
 }
@@ -80,7 +80,7 @@ export interface AuthorizationUrlOptions {
 }
 
 /**
- * §11/§12 — build the authorization URL.
+ * — build the authorization URL.
  * With no `callbackUrl` this is the documented HEADLESS form, which requires a
  * `code_challenge` because the code is displayed on screen.
  */
@@ -110,7 +110,7 @@ export interface PendingFlow {
 }
 
 /**
- * §24 — pending-flow bookkeeping. Each attempt owns its own state + verifier,
+ * — pending-flow bookkeeping. Each attempt owns its own state + verifier,
  * so two concurrent logins cannot complete each other's callback.
  *
  * Kept in memory (never persisted): the verifier must not survive the process
@@ -187,7 +187,7 @@ export interface LoopbackServer {
 }
 
 /**
- * §11 — loopback callback server.
+ * — loopback callback server.
  *
  * Binds `127.0.0.1` explicitly (never 0.0.0.0), uses an ephemeral port unless
  * one is requested, and encodes the state in the path so a redirect that
@@ -270,7 +270,7 @@ export interface ExchangeResult {
 }
 
 /**
- * §11 — exchange an authorization code for a user-controlled API key.
+ * — exchange an authorization code for a user-controlled API key.
  *
  * `state` is validated by the caller BEFORE this is invoked. A non-2xx
  * response never yields a credential: the error detail is redacted by the

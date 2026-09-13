@@ -1,5 +1,5 @@
 /**
- * Phase 79 §10/§11/§13 — Canonical ModelRouter.
+ * — Canonical ModelRouter.
  *
  * One router, deterministic rules, no ML. Selection order:
  *
@@ -45,7 +45,7 @@ import { latencyScore, scoreModel } from "./scoring";
 
 export interface RoutingConfig {
   policy: RoutingPolicy;
-  /** Phase 80 — default routing profile when a request names none. */
+ /** default routing profile when a request names none. */
   profile: RoutingProfileName;
   /** Ordered fallback references appended after the head candidate. */
   fallback: string[];
@@ -53,9 +53,9 @@ export interface RoutingConfig {
   maxAttempts: number;
   /** Providers never considered unless explicitly named. */
   excludedProviders: string[];
-  /** Phase 82 — provider/upstream ordering policy. */
+ /** provider/upstream ordering policy. */
   providerPolicy: string;
-  /** Phase 82 — whether a retryable failure may try the next route. */
+ /** whether a retryable failure may try the next route. */
   allowProviderFallback: boolean;
 }
 
@@ -91,18 +91,18 @@ export function resetRoutingConfig(): void {
 }
 
 /**
- * Phase 82 §10 — provider-level decision evidence.
+ * — provider-level decision evidence.
  *
  * Produced without any provider call, health mutation or billing, so `explain`
  * and `simulate` are safe to run at any time.
  */
 export interface RoutingDecision {
   request: RoutingRequest;
-  /** Phase 80 model-selection profile. */
+ /** model-selection profile. */
   profile: string;
-  /** Phase 79/80 model-selection policy. */
+ /** /80 model-selection policy. */
   modelPolicy: RoutingPolicy;
-  /** Phase 82 provider/upstream policy. */
+ /** provider/upstream policy. */
   providerPolicy: ProviderRoutingPolicy;
   selectedRoute?: ProviderRoute;
   /** Ordered the way fallback would walk them. */
@@ -123,7 +123,7 @@ interface Candidate {
   model: ModelDefinition;
   rank: number;
   reason: string;
-  /** Phase 80 — scorer total when a scoring profile ranked this candidate. */
+ /** scorer total when a scoring profile ranked this candidate. */
   score?: number;
 }
 
@@ -134,12 +134,12 @@ export interface RouterOptions {
    *  routing decisions are reproducible in tests. */
   activeProviderId?: () => string | null;
   /**
-   * Phase 80 — OPTIONAL eval evidence. When absent (the default), routing works
+ * OPTIONAL eval evidence. When absent (the default), routing works
    * purely from capability/health/metadata; the eval component scores NEUTRAL.
    * Never a hard dependency, so a fresh install routes the same as before.
    */
   performance?: () => ModelPerformanceProfile[] | Map<string, ModelPerformanceProfile>;
-  /** Phase 82 — injectable per-route performance tracker (defaults to the singleton). */
+ /** injectable per-route performance tracker (defaults to the singleton). */
   routePerformance?: RoutePerformanceTracker;
 }
 
@@ -165,7 +165,7 @@ export class ModelRouter {
       throw new ModelRoutingError("Routing cancelled by caller.", { retryable: false });
     }
 
-    // Phase 80 — resolve the profile first; it supplies default policy, weights
+ // resolve the profile first; it supplies default policy, weights
     // and (optionally) required capabilities / context floor.
     const profile = resolveRoutingProfile(request.profile ?? routingConfig.profile);
     const policy: RoutingPolicy =
@@ -187,7 +187,7 @@ export class ModelRouter {
 
     const candidates = this.rankCandidates(request, policy, excluded, profile);
 
-    // Phase 82 §17 (defect hunt) — an explicit pin is a PIN, not a capability
+ // (defect hunt) — an explicit pin is a PIN, not a capability
     // waiver. If the requested model fails the request's required capabilities
     // (including the profile's), that is a hard error, not a silent downgrade
     // to a model that cannot do the job.
@@ -299,7 +299,7 @@ export class ModelRouter {
         );
       }
       if (matches.length > 1) {
-        // Phase 82 §1/§9 — one logical model served by several providers is the
+ // — one logical model served by several providers is the
         // SUPPORTED case, not an error: pick the best provider route with the
         // deterministic provider policy (health → priority → id) and let the
         // fallback chain keep the alternates reachable. Throwing here would
@@ -529,7 +529,7 @@ export class ModelRouter {
     score?: number,
   ): ResolvedModel {
     const ordered = dedupeById(chain);
-    // Phase 82 §1 — expose the same chain as provider routes so bounded fallback
+ // — expose the same chain as provider routes so bounded fallback
     // and diagnostics operate on provider/upstream identity, not on model ids.
     const routes = ordered.map((candidate) =>
       routeFromModel(candidate.model, candidate.provider, this.registry.healthOf(candidate.provider.id)),
@@ -547,7 +547,7 @@ export class ModelRouter {
     };
   }
 
-  // ── Phase 82 §10 — routing explanation ────────────────────────────────────
+ // ── — routing explanation ────────────────────────────────────
 
   /**
    * Full decision evidence for one request, with NO provider call, no health
@@ -564,7 +564,7 @@ export class ModelRouter {
       ...(request.excludedProviders ?? []),
     ];
 
-    // Phase 82 §3 — an explicit request policy governs the provider layer too:
+ // — an explicit request policy governs the provider layer too:
     // `explain({ policy: "cheapest" })` must mean the same thing to model
     // selection and provider ordering. A provider-pinning policy like
     // `explicit`/`fallback` maps to the declared-priority route policy.
@@ -592,8 +592,8 @@ export class ModelRouter {
       performance: this.performance,
     });
 
-    // The model-selection layer (Phase 79/80) owns WHICH logical model; the
-    // route policy owns which PROVIDER serves it (§16). When the request names
+ // The model-selection layer (/80) owns WHICH logical model; the
+ // route policy owns which PROVIDER serves it (). When the request names
     // a model, the two layers agree on the pool, so the policy-ranked route
     // order wins and the resolved chain only contributes models the route
     // layer cannot see (e.g. models from an otherwise-disabled provider the
@@ -638,7 +638,7 @@ export class ModelRouter {
       }
     }
 
-    // Phase 82 §7 — the chain can never contain a route the policy layer
+ // — the chain can never contain a route the policy layer
     // rejected (allow/deny list, disabled, capability, context, price).
     // Without this filter the model-selection merge could re-introduce a
     // provider the route policy excluded, letting fallback bypass constraints.
@@ -688,7 +688,7 @@ export class ModelRouter {
     };
   }
 
-  /** Provider routing policy currently in effect (Phase 82). */
+ /** Provider routing policy currently in effect (). */
   private get providerPolicyName(): string {
     return routingConfig.providerPolicy;
   }
@@ -725,7 +725,7 @@ export class ModelRouter {
 }
 
 /**
- * Phase 82 §7 — is provider/upstream fallback enabled for this decision?
+ * — is provider/upstream fallback enabled for this decision?
  *
  * `allowProviderFallback: false` is an absolute veto: it pins the decision to a
  * single route even when a configured chain exists.
@@ -756,7 +756,7 @@ function preferredScore(model: ModelDefinition, preferred: RoutingRequest["prefe
 }
 
 /**
- * Phase 80 §5 — observed provider speed. `sufficient: false` means there are
+ * — observed provider speed. `sufficient: false` means there are
  * not enough successful samples to judge, so `fastest` routing must fall back to
  * health/priority rather than inventing a latency.
  */
@@ -786,12 +786,12 @@ function activeProviderId(): string | null {
 export interface AttemptRecord {
   modelId: string;
   providerId: string;
-  /** Phase 82 — the provider route that was attempted. */
+ /** the provider route that was attempted. */
   routeId?: string;
   ok: boolean;
   error?: string;
   retryable?: boolean;
-  /** Phase 82 — normalized failure classification. */
+ /** normalized failure classification. */
   failureKind?: string;
   /** Rolling TTFT observation for streaming attempts. */
   ttftMs?: number;
@@ -827,7 +827,7 @@ export async function invokeWithFallback<T>(
   const router = options.router ?? new ModelRouter({ registry });
   const resolved = router.resolve(request);
 
-  // Phase 82 §7 — ONE executor. `invokeWithFallback` is the request-level
+ // — ONE executor. `invokeWithFallback` is the request-level
   // convenience wrapper over the route-aware chain below; there is no second
   // fallback implementation anywhere in the codebase.
   const routes = resolved.routes ?? [];
@@ -874,7 +874,7 @@ function withRoute(
 }
 
 /**
- * Phase 82 §7 — bounded, route-aware fallback execution.
+ * — bounded, route-aware fallback execution.
  *
  * Contract:
  *  - each route is attempted AT MOST ONCE per invocation;

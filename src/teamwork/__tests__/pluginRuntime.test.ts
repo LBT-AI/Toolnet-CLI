@@ -12,7 +12,7 @@ import { PluginRuntime, normalizePluginToolOutput } from "../../core/plugins/run
 import { pluginPermissionResource, pluginToolName } from "../../core/plugins/types";
 
 /**
- * Phase 77.1–77.11 — plugin contract, loader, runtime.
+ * 77.11 — plugin contract, loader, runtime.
  *
  * The suite drives REAL plugin modules from disk through the real staged
  * loader, so a regression in resolution/import/registration fails here rather

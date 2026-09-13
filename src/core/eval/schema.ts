@@ -1,5 +1,5 @@
 /**
- * Phase 80 §15 — Eval store schema version. Bumped whenever `EvalRunRecord`
+ * — Eval store schema version. Bumped whenever `EvalRunRecord`
  * changes shape; the store refuses to read a record written by a newer schema
  * and skips (never throws on) an invalid line.
  */

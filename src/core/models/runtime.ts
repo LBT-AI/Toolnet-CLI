@@ -1,5 +1,5 @@
 /**
- * Phase 79 §17 — Runtime integration.
+ * — Runtime integration.
  *
  * THE single place a front-end obtains "which provider instance, which model
  * id". The AgentHarness calls this instead of reaching into `src/providers`
@@ -46,7 +46,7 @@ let bootstrapped = false;
 /**
  * Populate the registry from existing config exactly once per process.
  *
- * Phase 80 adds two more one-time steps, both failure-tolerant:
+ * adds two more one-time steps, both failure-tolerant:
  *  - hydrate the catalog from the on-disk model cache (so `toolnet models`
  *    does not need the network),
  *  - load the persisted routing profile/policy into the router.
@@ -84,7 +84,7 @@ export function resetRuntimeBootstrap(): void {
  *
  * The ModelAdapter gate (`tools === false`, `nativeToolCalls === false`) reads
  * that cache, so without this bridge a capability discovered from a provider
- * would never reach the gating decision — the exact loss §5 forbids.
+ * would never reach the gating decision — the exact loss forbids.
  */
 export function syncAdapterCapabilities(): void {
   const entries = modelCatalog
@@ -140,7 +140,7 @@ export function resolveRuntimeModel(
   return legacyModel(trimmed || getActiveDefaultModel() || "default", options.gatewayUrl);
 }
 
-/** The pre-Phase-79 resolution path, preserved verbatim for compatibility. */
+/** The legacy resolution path, preserved verbatim for compatibility. */
 function legacyModel(model: string, gatewayUrl?: string): RuntimeModel {
   const baseUrl = gatewayUrl || getActiveBaseUrl() || "http://localhost:8080";
   const provider =

@@ -1,5 +1,5 @@
 /**
- * Phase 79 §7/§8/§9/§14 — Provider definitions + config bootstrap.
+ * — Provider definitions + config bootstrap.
  *
  * Backward compatibility is a hard requirement: an existing install has a
  * `providers.json` produced by `src/providers/registry`, optionally an active

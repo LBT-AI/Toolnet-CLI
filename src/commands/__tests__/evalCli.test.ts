@@ -89,7 +89,7 @@ afterEach(() => {
   } catch {}
 });
 
-describe("Phase 80 — `toolnet eval`", () => {
+describe("`toolnet eval`", () => {
   it("lists suites without needing stored results", async () => {
     const { io, stdout } = capture();
     const code = await runEvalCli(["list"], { io, store: new EvalStore({ dir }) });

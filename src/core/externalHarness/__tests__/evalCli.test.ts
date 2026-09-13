@@ -1,5 +1,5 @@
 /**
- * Phase 83 §17/§18/§20 — eval integration + CLI tests.
+ * — eval integration + CLI tests.
  *
  * Eval: the executionTarget dimension reuses the SAME EvalRunner, graders and
  * isolated workspace; an unavailable external harness is recorded as
@@ -19,9 +19,9 @@ import { runHarnessCli, HARNESS_CLI_USAGE } from "../../../commands/harnessCli";
 import { createOpenCodeAdapter } from "../adapters";
 import { ExternalHarnessRegistry } from "../registry";
 
-// ── §17/§18 — eval over execution targets ──────────────────────────────────
+// ── — eval over execution targets ──────────────────────────────────
 
-describe("Phase 83 §17 — eval executionTarget dimension", () => {
+describe(" — eval executionTarget dimension", () => {
   const suite = {
     id: "phase83-external",
     version: "1.0.0",
@@ -69,9 +69,9 @@ describe("Phase 83 §17 — eval executionTarget dimension", () => {
   });
 });
 
-// ── §16 — HarnessExecutionService dispatch ──────────────────────────────────
+// ── — HarnessExecutionService dispatch ──────────────────────────────────
 
-describe("Phase 83 §16 — HarnessExecutionService dispatch", () => {
+describe(" — HarnessExecutionService dispatch", () => {
   it("native is the default target; unknown ids are structured errors", async () => {
     expect(harnessExecutionService.resolveTarget("").kind).toBe("native");
     expect(harnessExecutionService.resolveTarget("native").kind).toBe("native");
@@ -115,9 +115,9 @@ describe("Phase 83 §16 — HarnessExecutionService dispatch", () => {
   });
 });
 
-// ── §20 — CLI ───────────────────────────────────────────────────────────────
+// ── — CLI ───────────────────────────────────────────────────────────────
 
-describe("Phase 83 §20 — harness external CLI", () => {
+describe(" — harness external CLI", () => {
   function capture() {
     const out: string[] = [];
     const err: string[] = [];

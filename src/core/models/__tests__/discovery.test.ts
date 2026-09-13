@@ -24,7 +24,7 @@ function registration(overrides: Partial<ProviderRegistration> = {}): ProviderRe
   };
 }
 
-describe("Phase 79 — discovery normalization", () => {
+describe("discovery normalization", () => {
   it("preserves tools and nativeToolCalls from gateway metadata", () => {
     const gateway = normalizeListedModel(
       {
@@ -72,7 +72,7 @@ describe("Phase 79 — discovery normalization", () => {
   });
 });
 
-describe("Phase 79 — refresh atomicity", () => {
+describe("refresh atomicity", () => {
   let catalog: ModelCatalog;
   let registry: ProviderRegistry;
   const originalFetch = globalThis.fetch;

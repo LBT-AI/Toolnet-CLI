@@ -1,5 +1,5 @@
 /**
- * Phase 82 §1 — Canonical ProviderRoute.
+ * — Canonical ProviderRoute.
  *
  * The distinction this module exists to preserve:
  *
@@ -10,7 +10,7 @@
  *
  * A *model* is what the caller asks for; a *route* is one concrete way to serve
  * it (provider + optional upstream). The catalog stores each model once per
- * provider — Phase 82 does NOT duplicate a model entry per upstream. Routes are
+ * provider — does NOT duplicate a model entry per upstream. Routes are
  * a derived, read-only projection over `ModelCatalog` + `ProviderRegistry`.
  *
  * Unknown stays unknown: when a provider does not publish upstream identity
@@ -39,7 +39,7 @@ export function routeIdOf(providerId: string, apiModelId: string, upstreamId?: s
  *
  * Exact, never fuzzy: two routes serve the same logical model only when their
  * provider-native model ids match exactly after trimming/case-folding. There is
- * deliberately no prefix/fuzzy matching — Phase 82 forbids mapping
+ * deliberately no prefix/fuzzy matching — forbids mapping
  * `claude-3.5-sonnet` onto `anthropic/claude-3.5-sonnet` by guesswork.
  */
 export function logicalModelKey(apiModelId: string): string {

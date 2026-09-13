@@ -11,7 +11,7 @@ import { getSandboxMode } from "../permissions";
 
 function getConfigDir(): string {
   if (process.env.DATA_DIR) return process.env.DATA_DIR;
-  // Phase 3: canonical home module (single TOOLNETCLI_CONFIG_DIR-aware source).
+ // : canonical home module (single TOOLNETCLI_CONFIG_DIR-aware source).
   return getToolnetHome();
 }
 

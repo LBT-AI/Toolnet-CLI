@@ -1,5 +1,5 @@
 /**
- * Layer 4 — Phase 5: SessionTrust is a MAP of per-session trust state.
+ * Layer 4 — : SessionTrust is a MAP of per-session trust state.
  *
  * Strict per-session isolation contract:
  *  - Every recordDecision / isTrustedForSession / isDeniedForSession call
@@ -120,7 +120,7 @@ export class SessionTrustManager {
     third: TrustDuration | "ALWAYS" | string | Record<string, unknown>,
     fourth?: TrustDuration | "ALWAYS" | string
   ): void {
-    // Compatibility callers from Phase 0–4 used (tool, target, duration),
+ // Compatibility callers from 4 used (tool, target, duration),
     // or (tool, target, duration, session). Keep that adapter explicit and
     // deterministic; production uses the first form.
     const legacyOrder = isTrustDuration(third);

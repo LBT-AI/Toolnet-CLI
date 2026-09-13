@@ -6,11 +6,11 @@ import { formatModelRef } from "../ref";
 import type { ModelDefinition } from "../types";
 
 /**
- * Phase 80 §24 — routing must be a LOCAL decision. The target is a sub-10ms
+ * — routing must be a LOCAL decision. The target is a sub-10ms
  * median with a realistic catalog size; the assertion is a median (not a single
  * sample) so a GC pause or a busy CI host cannot make it flaky.
  */
-describe("Phase 80 — routing hot path", () => {
+describe("routing hot path", () => {
   let catalog: ModelCatalog;
   let registry: ProviderRegistry;
 

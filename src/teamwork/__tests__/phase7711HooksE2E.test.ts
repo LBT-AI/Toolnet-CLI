@@ -1,5 +1,5 @@
 /**
- * Phase 77.11 — hook wiring + cross-runtime coverage (deterministic).
+ * hook wiring + cross-runtime coverage (deterministic).
  *
  * Everything here runs against the REAL runtime — real ModelAdapter, real
  * ToolGateway, real TeamworkEngine, real AgentEngine — so a hook that is wired
@@ -12,7 +12,7 @@
  *   file.afterWrite             → fires only after a verified write
  *   teamwork.node.before/after  → fired by the ENGINE, not the UI
  *
- * Cross-runtime (§77.32/77.33): an MCP tool registered through the canonical
+ * Cross-runtime (33): an MCP tool registered through the canonical
  * adapter is reachable from a subagent and from a DAG node, and a parent `deny`
  * stops the call before the transport is ever touched.
  */
@@ -148,7 +148,7 @@ function writeFile(relative: string, content: string): string {
 
 // ── 1. Model hooks ───────────────────────────────────────────────────────────
 
-describe("Phase 77.11 — model lifecycle hooks", () => {
+describe("model lifecycle hooks", () => {
   test("model.before fires once before the provider and can transform permitted knobs", async () => {
     const order: string[] = [];
     let beforeCount = 0;
@@ -297,7 +297,7 @@ describe("Phase 77.11 — model lifecycle hooks", () => {
 
 // ── 2. File hooks ────────────────────────────────────────────────────────────
 
-describe("Phase 77.11 — file write hooks", () => {
+describe("file write hooks", () => {
   test("tool.before → file.beforeWrite → mutation → file.afterWrite → tool.after", async () => {
     const order: string[] = [];
 
@@ -438,7 +438,7 @@ function dagNode(id: string, agent = "general", dependsOn: string[] = []) {
   return { id, title: id, agent, prompt: `[[${id}]] do ${id}`, dependsOn };
 }
 
-describe("Phase 77.11 — teamwork node hooks fire in the engine", () => {
+describe("teamwork node hooks fire in the engine", () => {
   test("a normal node runs before → node → after", async () => {
     const order: string[] = [];
     hookRegistry.register({
@@ -559,7 +559,7 @@ async function registerFixtureMcpTool(): Promise<{ name: string; calls: Array<Re
   return { name: canonicalMcpToolName("fixture", "read_fixture"), calls };
 }
 
-describe("Phase 77.32 — MCP inside a subagent", () => {
+describe("MCP inside a subagent", () => {
   test("an allowed MCP tool travels ToolRegistry → Permission → adapter → result", async () => {
     const { name: mcpName, calls } = await registerFixtureMcpTool();
     expect(toolRegistry.ownerOf(mcpName)).toBe("mcp:fixture");
@@ -648,7 +648,7 @@ describe("Phase 77.32 — MCP inside a subagent", () => {
 
 // ── 5. Teamwork + MCP canonical path ─────────────────────────────────────────
 
-describe("Phase 77.33 — MCP inside a DAG node", () => {
+describe("MCP inside a DAG node", () => {
   test("a DAG node reaches MCP only through the canonical tool pipeline", async () => {
     const { name: mcpName, calls } = await registerFixtureMcpTool();
 
@@ -696,7 +696,7 @@ describe("Phase 77.33 — MCP inside a DAG node", () => {
 
 // ── 6. Architecture guards ───────────────────────────────────────────────────
 
-describe("Phase 77.11 — architecture guards", () => {
+describe("architecture guards", () => {
   function sourceFiles(root: string): string[] {
     const out: string[] = [];
     const walk = (dir: string) => {

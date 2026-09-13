@@ -8,7 +8,7 @@ import {
   resolveRoutingProfile,
 } from "../profiles";
 
-describe("Phase 80 — Routing profiles", () => {
+describe("Routing profiles", () => {
   it("defines every documented profile", () => {
     expect(ROUTING_PROFILE_NAMES).toEqual([
       "auto",
@@ -26,7 +26,7 @@ describe("Phase 80 — Routing profiles", () => {
     }
   });
 
-  it("keeps `auto` on the Phase 79 priority ordering", () => {
+ it("keeps `auto` on the priority ordering", () => {
     const auto = ROUTING_PROFILES.auto;
     expect(DEFAULT_ROUTING_PROFILE).toBe("auto");
     expect(auto.ranking).toBe("policy");

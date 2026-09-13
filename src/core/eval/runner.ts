@@ -1,5 +1,5 @@
 /**
- * Phase 80 §9/§12/§13/§14 — EvalRunner.
+ * — EvalRunner.
  *
  * Drives every case through the PRODUCTION path:
  *
@@ -53,13 +53,13 @@ export interface EvalHarness {
     tokensUsed: number;
     durationMs: number;
     error?: string;
-    /** Phase 81 — evidence-derived verdict and harness identity. */
+ /** evidence-derived verdict and harness identity. */
     verdict?: "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED" | "TIMEOUT";
     turnsUsed?: number;
     harnessId?: string;
     harnessVersion?: string;
   }>;
-  /** Phase 81 — present on the real harness; absent on minimal test doubles. */
+ /** present on the real harness; absent on minimal test doubles. */
   getProfile?(): { id: string; version: string };
 }
 
@@ -78,13 +78,13 @@ export interface EvalRunnerOptions {
   keepWorkspaces?: boolean;
   maxTurns?: number;
   /**
-   * Phase 81 §13/§14 — harness profile for every case in the run. A case's own
+ * — harness profile for every case in the run. A case's own
    * `harness` wins, which lets one run measure several policies against the same
    * model. Defaults to the configured profile, then `default`.
    */
   harness?: string;
   /**
-   * Phase 83 §17 — execution target for every case in the run (`native` or an
+ * — execution target for every case in the run (`native` or an
    * external harness id). A case's own `executionTarget` wins. External cases
    * run through the ExternalHarnessRunner in the SAME isolated workspace;
    * grading reuses the deterministic graders unchanged.
@@ -101,7 +101,7 @@ interface UsageTotals {
 const DEFAULT_CASE_TIMEOUT_MS = 60_000;
 
 /**
- * Phase 81 §13 — which harness contract a run measures. `default` is the
+ * — which harness contract a run measures. `default` is the
  * identity profile, so an unlabelled run is still attributed honestly.
  */
 export function resolveHarnessId(id?: string): string {
@@ -143,7 +143,7 @@ export class EvalRunner {
    * Run a whole suite against one model reference (resolved through the router).
    * The suite is never aborted by a single case failure.
    *
-   * Phase 81 §13 — the run records WHICH harness policy produced it, so a
+ * — the run records WHICH harness policy produced it, so a
    * comparison between profiles is a comparison of measured runs rather than of
    * assumptions about what a profile ought to do.
    */
@@ -209,7 +209,7 @@ export class EvalRunner {
     const usage: UsageTotals = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     const owner = `eval:${context.runId}:${entry.id}`;
 
-    // Usage comes from the real `model.after` hook edge (Phase 77.11), which is
+ // Usage comes from the real `model.after` hook edge (), which is
     // the same observation a plugin would get. No harness modification needed.
     hookRegistry.register({
       name: "model.after",
@@ -277,7 +277,7 @@ export class EvalRunner {
         maxTurns: entry.maxTurns ?? this.options.maxTurns ?? 8,
         timeoutMs,
         sessionId: `${context.runId}-${entry.id}`,
-        // Phase 81 — the profile travels through the PRODUCTION path
+ // the profile travels through the PRODUCTION path
         // (`AgentHarness` → policies). The runner never applies policy itself.
         harness: entry.harness ?? context.harness,
       });
@@ -359,7 +359,7 @@ export class EvalRunner {
       ...(graded.pass ? {} : { failureClass: classifyFailure(entry, observation) }),
       output: output.slice(0, 2000),
       context: contextMetrics,
-      // Phase 81 — record the policy contract, so a stored result can be
+ // record the policy contract, so a stored result can be
       // attributed to a harness as well as a model.
       harnessId:
         caseHarnessId ??
@@ -378,13 +378,13 @@ export class EvalRunner {
   }
 
   /**
-   * Phase 83 §17/§18 — run one case on an EXTERNAL harness through the
+ * — run one case on an EXTERNAL harness through the
    * production ExternalHarnessRunner, in the SAME disposable workspace, then
    * grade with the SAME deterministic graders. The only differences from the
    * native path are the executor and the observation source (normalized
    * external events instead of native tool events).
    *
-   * §18 honesty rule: harness availability problems are recorded as
+ * honesty rule: harness availability problems are recorded as
    * HARNESS_UNAVAILABLE/CORE_RUNTIME failures — never counted as model
    * quality — and a missing binary skips the case as ENVIRONMENT.
    */
@@ -462,7 +462,7 @@ export class EvalRunner {
       });
     } catch (error) {
       // Availability/capability problems are environment/runtime facts — they
-      // must not be graded as model failures (§18). An unknown harness id is
+ // must not be graded as model failures (). An unknown harness id is
       // a configuration error on the eval's side, so ENVIRONMENT fits it too.
       const environment =
         error instanceof HarnessUnavailableError || error instanceof HarnessNotFoundError;
@@ -568,7 +568,7 @@ export class EvalRunner {
       sandboxMode: "workspace",
       maxTurns: entry.maxTurns ?? this.options.maxTurns ?? 8,
       timeoutMs: entry.timeoutMs ?? DEFAULT_CASE_TIMEOUT_MS,
-      // Phase 81 §13 — same harness class, different policy contract.
+ // — same harness class, different policy contract.
       ...(entry.harness ?? context.harness
         ? { harness: entry.harness ?? context.harness }
         : {}),
@@ -697,7 +697,7 @@ export function classifyFailure(entry: EvalCase, observation: EvalObservation): 
   if (/abort|cancel/i.test(detail)) return "CANCELLED";
   if (entry.cancelAfterMs !== undefined) return "CANCELLED";
   if (observation.runtimeError && /timeout|timed out/i.test(observation.runtimeError)) return "TIMEOUT";
-  // Phase 81 — an unrunnable harness configuration is a RUNTIME problem, not a
+ // an unrunnable harness configuration is a RUNTIME problem, not a
   // model-quality signal. Blaming the model here would poison exactly the
   // comparison the harness dimension exists to support.
   if (/HARNESS_PROFILE_NOT_FOUND|Unknown harness profile/i.test(detail)) return "CORE_RUNTIME";
@@ -782,7 +782,7 @@ export function buildMetrics(cases: EvalCaseResult[]): EvalRunRecord["metrics"] 
   return {
     passRate: Math.round((passed / count) * 1000) / 1000,
     meanDurationMs: Math.round(duration / count),
-    // §14 — turns are only meaningful when the harness reported them.
+ // — turns are only meaningful when the harness reported them.
     meanTurns: turnsSeen > 0 ? Math.round((turns / turnsSeen) * 10) / 10 : 0,
     meanInputTokens: Math.round(input / count),
     meanOutputTokens: Math.round(outputTokens / count),

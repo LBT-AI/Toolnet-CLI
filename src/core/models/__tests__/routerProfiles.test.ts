@@ -20,7 +20,7 @@ function registration(overrides: Partial<ProviderRegistration> = {}): ProviderRe
   return { id: "openrouter", kind: "openrouter", baseURL: "https://openrouter.ai/api/v1", ...overrides };
 }
 
-describe("Phase 80 — profile-driven routing", () => {
+describe("profile-driven routing", () => {
   let catalog: ModelCatalog;
   let registry: ProviderRegistry;
   let router: ModelRouter;
@@ -36,7 +36,7 @@ describe("Phase 80 — profile-driven routing", () => {
     resetRoutingConfig();
   });
 
-  it("keeps default routing on the Phase 79 priority ordering", () => {
+ it("keeps default routing on the priority ordering", () => {
     registry.register(registration({ priority: 100, models: [model("openrouter", "low")] }));
     registry.register(
       registration({ id: "toolnet", kind: "toolnet", baseURL: "https://t", priority: 5, models: [model("toolnet", "high")] }),

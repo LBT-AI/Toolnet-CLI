@@ -16,7 +16,7 @@
  * - No hardcoded gateway URLs
  *
  * Schema v3 (current):
- * - `routing` block added (Phase 80): default profile, policy, fallback chain,
+ * - `routing` block added (): default profile, policy, fallback chain,
  *   attempt bound and excluded providers. Backward compatible — a v2 config
  *   migrates by gaining the defaults.
  */
@@ -34,7 +34,7 @@ export type SandboxMode = "workspace" | "ask" | "full-access";
 export const SANDBOX_MODES: SandboxMode[] = ["workspace", "ask", "full-access"];
 
 /**
- * Phase 80 — persisted routing settings. Stored in the canonical config file;
+ * persisted routing settings. Stored in the canonical config file;
  * no second config owner is introduced.
  */
 export interface AppRoutingSettings {
@@ -49,11 +49,11 @@ export interface AppRoutingSettings {
   /** Providers never considered unless explicitly named. */
   excludedProviders: string[];
   /**
-   * Phase 82 — provider/upstream ordering policy (`priority`, `cheapest`,
+ * provider/upstream ordering policy (`priority`, `cheapest`,
    * `fastest`, `balanced`, `reliability-first`).
    */
   providerPolicy: string;
-  /** Phase 82 — absolute veto on provider/upstream fallback for a request. */
+ /** absolute veto on provider/upstream fallback for a request. */
   allowProviderFallback: boolean;
 }
 
@@ -68,7 +68,7 @@ export const DEFAULT_ROUTING_SETTINGS: AppRoutingSettings = {
 };
 
 /**
- * Phase 81 — persisted harness profile selection. Stored in the canonical
+ * persisted harness profile selection. Stored in the canonical
  * config file; no second config owner is introduced.
  *
  * Harness and routing are independent axes: `routing.profile` picks which model
@@ -84,7 +84,7 @@ export const DEFAULT_HARNESS_SETTINGS: AppHarnessSettings = {
 };
 
 /**
- * Phase 84 — provider auth settings (CONFIG ONLY — secrets never live here).
+ * provider auth settings (CONFIG ONLY — secrets never live here).
  * Profile metadata and per-provider active pointers. Raw credentials live in
  * the CredentialStore (auth-credentials.json, 0600). This block survives
  * validation generically so a hand-edited profile entry can't brick the CLI;
@@ -121,11 +121,11 @@ export interface AppConfig {
   updateCheckEnabled: boolean;
   /** Startup banner: "once" (default) | "always" | "never". */
   banner: BannerSetting;
-  /** Phase 80 — provider/model routing settings. */
+ /** provider/model routing settings. */
   routing: AppRoutingSettings;
-  /** Phase 81 — harness profile (policy) settings. */
+ /** harness profile (policy) settings. */
   harness: AppHarnessSettings;
-  /** Phase 84 — provider auth profile metadata + active pointers (no secrets). */
+ /** provider auth profile metadata + active pointers (no secrets). */
   auth: AppAuthSettings;
 }
 
@@ -156,7 +156,7 @@ const MIGRATABLE_FIELDS = [
 ] as const;
 
 export function getConfigDir(): string {
-  // Phase 3: canonical home module is the single source of truth.
+ // : canonical home module is the single source of truth.
   return getToolnetHome();
 }
 
@@ -224,7 +224,7 @@ export function validateConfig(input: unknown): AppConfig {
 }
 
 /**
- * Phase 84 — coerce an unknown `auth` block into valid settings. Generic
+ * coerce an unknown `auth` block into valid settings. Generic
  * (shape-level) validation only: profile objects must carry an id/type and
  * pointers must be strings. Semantic checks (credential exists, ids well
  * formed) happen in AuthProfileRegistry at write time; a hand-edited config
@@ -316,7 +316,7 @@ export function validateRoutingSettings(input: unknown): AppRoutingSettings {
       .map((entry) => entry.trim().toLowerCase())
       .filter((entry) => entry.length > 0);
   }
-  // Phase 82 — provider/upstream ordering + fallback veto.
+ // provider/upstream ordering + fallback veto.
   if (typeof input.providerPolicy === "string" && input.providerPolicy.trim()) {
     out.providerPolicy = input.providerPolicy.trim().toLowerCase();
   }
@@ -357,13 +357,13 @@ function migrateConfig(raw: Record<string, unknown>): AppConfig {
     cfg.schemaVersion = 3;
   }
 
-  // v3 → v4 migration (Phase 81): add the harness block.
+ // v3 → v4 migration (): add the harness block.
   if (cfg.schemaVersion < 4) {
     cfg.harness = validateHarnessSettings((raw as Record<string, unknown>).harness);
     cfg.schemaVersion = 4;
   }
 
-  // v4 → v5 migration (Phase 82): add the provider routing policy/fallback veto.
+ // v4 → v5 migration (): add the provider routing policy/fallback veto.
   if (cfg.schemaVersion < 5) {
     cfg.routing = validateRoutingSettings({ ...cfg.routing, ...(raw as Record<string, unknown>).routing as object });
     cfg.schemaVersion = 5;

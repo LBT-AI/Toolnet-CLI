@@ -42,7 +42,7 @@ function model(providerId: string, apiModelId: string): ModelDefinition {
   };
 }
 
-describe("Phase 80 — persistent model cache", () => {
+describe("persistent model cache", () => {
   it("round-trips providers atomically and writes mode 0600", () => {
     const file = tempFile();
     expect(setCachedProviderModels("alpha", [model("alpha", "a1")], { filePath: file })).toBe(true);

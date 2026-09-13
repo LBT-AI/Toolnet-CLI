@@ -12,11 +12,11 @@ import { getToolnetHome } from "../lib/toolnetHome";
 import type { Provider, ProviderConfig } from "./types";
 import { OpenAICompatibleProvider } from "./openaiCompatible";
 import { getCliKey, loadCliKeys } from "../lib/keys";
-// Phase 84 §9 — provider keys resolve through the canonical auth layer.
+// — provider keys resolve through the canonical auth layer.
 import { credentialResolver } from "../core/auth/resolver";
 
 export function getProvidersConfigDir(): string {
-  // Phase 3: canonical home module (single TOOLNETCLI_CONFIG_DIR-aware source).
+ // : canonical home module (single TOOLNETCLI_CONFIG_DIR-aware source).
   return getToolnetHome();
 }
 
@@ -239,7 +239,7 @@ export function getDefaultProviderConfig(id: string): ProviderConfig {
 /**
  * Resolve the API key for a provider config.
  *
- * Phase 84 §9 — this is now a thin delegation to the canonical
+ * — this is now a thin delegation to the canonical
  * CredentialResolver; the provider layer never reads credential files itself.
  * Deterministic precedence (documented in src/core/auth/resolver.ts):
  *
@@ -408,7 +408,7 @@ export function createProviderInstance(config: ProviderConfig): Provider {
     return new ToolNetProvider(config);
   }
 
-  // Phase 79.7 — OpenRouter gets its own adapter (OpenAI-compatible transport
+ // OpenRouter gets its own adapter (OpenAI-compatible transport
   // plus raw model discovery). It must be checked before the generic
   // OpenAI-compatible fallthrough.
   if (providerType === "openrouter") {

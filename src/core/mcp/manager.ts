@@ -1,11 +1,11 @@
 /**
- * Phase 77.14/77.19/77.20/77.22/77.35 — The one McpManager.
- * Phase 78.1/78.4/78.5/78.6/78.9/78.31 — Remote MCP + auth, same pipeline.
+ * /77.19/77.20/77.22/77.35 — The one McpManager.
+ * /78.4/78.5/78.6/78.9/78.31 — Remote MCP + auth, same pipeline.
  *
  * The manager is a thin orchestration layer over two transport executors:
  *
- *   stdio  → `src/lib/mcpRunner.ts`  (Phase 77, unchanged)
- *   remote → `./remoteTransport.ts`  (Phase 78, Streamable HTTP then SSE)
+ * stdio → `src/lib/mcpRunner.ts` (, unchanged)
+ * remote → `./remoteTransport.ts` (, Streamable HTTP then SSE)
  *
  * It does NOT become a second runtime. Whichever executor produced the tools,
  * they are normalized with the same schema layer and registered into the SAME
@@ -151,7 +151,7 @@ export interface McpManagerOptions {
   onLog?: (level: "info" | "warn" | "error", message: string, meta?: Record<string, unknown>) => void;
   /** Auth store override — tests point this at a temp file. */
   authStore?: McpAuthStore;
-  /** Structured lifecycle events (Phase 78.6). */
+ /** Structured lifecycle events (). */
   onEvent?: McpServerEventListener;
 }
 
@@ -214,7 +214,7 @@ export class McpManager {
     return managed.status;
   }
 
-  /** Secret-free diagnostic view of every known MCP server (Phase 78.31). */
+ /** Secret-free diagnostic view of every known MCP server (). */
   getDiagnostics(): ExtensionStatus[] {
     return this.listServers().map(toExtensionStatus);
   }
@@ -411,12 +411,12 @@ export class McpManager {
     return this.callToolByName(managed.server.serverId, managed.server.name, toolName, args, signal);
   }
 
-  // ── Phase 78.9/78.12/78.16 — auth lifecycle ────────────────────────────────
+ // ── /78.12/78.16 — auth lifecycle ────────────────────────────────
 
   /**
    * Start the OAuth flow for a remote server.
    *
-   * `waitForCallback: false` implements the headless/VPS path (Phase 78.12):
+ * `waitForCallback: false` implements the headless/VPS path ():
    * print the authorization URL, let the operator complete it elsewhere, then
    * finish with `completeAuth(name, code, state)`.
    */
@@ -527,7 +527,7 @@ export class McpManager {
 
   /**
    * Finish an authorization. `state` is validated against the stored value
-   * BEFORE the code is exchanged (Phase 78.23); a mismatch saves nothing and
+ * BEFORE the code is exchanged (); a mismatch saves nothing and
    * leaves the server unauthenticated.
    */
   async completeAuth(nameOrId: string, code: string, state?: string): Promise<McpServerStatus> {
@@ -571,7 +571,7 @@ export class McpManager {
   }
 
   /**
-   * Phase 78.16 — remove credentials for a server. The server config itself is
+ * remove credentials for a server. The server config itself is
    * untouched; the next connect requires auth again.
    */
   async logout(nameOrId: string): Promise<boolean> {
@@ -755,7 +755,7 @@ export class McpManager {
     return this.applyTools(managed, raw);
   }
 
-  /** Phase 78.3/78.5 — Streamable HTTP first, SSE fallback, both exclusive. */
+ /** /78.5 — Streamable HTTP first, SSE fallback, both exclusive. */
   private async connectRemoteInternal(managed: ManagedServer): Promise<boolean> {
     const remote = managed.remote;
     if (!remote) {
@@ -767,7 +767,7 @@ export class McpManager {
 
     this.setStatus(managed, "connecting");
 
-    // Bounded refresh before dialing: one attempt, never a loop (Phase 78.15).
+ // Bounded refresh before dialing: one attempt, never a loop ().
     const refreshOutcome = await refreshAccessTokenIfNeeded({
       name: managed.server.name,
       serverUrl: remote.config.url,
@@ -859,7 +859,7 @@ export class McpManager {
   }
 
   /**
-   * Phase 78.5 — re-list tools after `tools/list_changed`: unregister the old
+ * re-list tools after `tools/list_changed`: unregister the old
    * generation, register the current one. The agent engine is never restarted
    * and the registry remains the single source of model-visible tools.
    */
@@ -890,7 +890,7 @@ export class McpManager {
   }
 
   /**
-   * Phase 78.6/78.30 — the transport dropped. Withdraw the server's tools so the
+ * /78.30 — the transport dropped. Withdraw the server's tools so the
    * model cannot keep calling into a dead remote, and keep the process alive.
    */
   private async handleRemoteClose(managed: ManagedServer): Promise<void> {
@@ -1032,7 +1032,7 @@ export class McpManager {
 
   /**
    * Remote tool call. Same result envelope, redaction and byte bound as the
-   * stdio path, with a dedicated tool-call timeout (Phase 78.18).
+ * stdio path, with a dedicated tool-call timeout ().
    */
   private async callRemoteTool(
     managed: ManagedServer,
@@ -1082,7 +1082,7 @@ export class McpManager {
       if (!timedOut) {
         // A transport-level throw (network failure, closed socket, torn-down
         // session) means the connection is no longer usable. Withdraw the tools
-        // so the model cannot keep calling into a dead remote (Phase 78.6/78.30).
+ // so the model cannot keep calling into a dead remote (/78.30).
         await this.handleRemoteClose(managed);
       }
       return JSON.stringify({

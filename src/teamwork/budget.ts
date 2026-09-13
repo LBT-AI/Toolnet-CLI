@@ -19,7 +19,7 @@ export type BudgetExhaustionReason =
   | "TOOL_CALLS";
 
 /**
- * BudgetManager — Layer 4 Phase 2
+ * BudgetManager — Layer 4
  *
  * Real enforcement primitive consumed by DynamicScheduler at dispatch gates:
  *   A. before processQueue dispatch loop

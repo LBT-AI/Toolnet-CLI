@@ -1,5 +1,5 @@
 /**
- * Phase 76A.1 — Canonical Background Job Contract
+ * Canonical Background Job Contract
  *
  * ONE job shape for every asynchronous unit of work in ToolNet: a delegated
  * subagent, a long-running tool, or a whole teamwork DAG. Subsystems must not

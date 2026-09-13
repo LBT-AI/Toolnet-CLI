@@ -58,7 +58,7 @@ function toModelCapabilities(
     reasoningStream: reasoning ? true : false,
     reasoningEffort: Boolean(c.reasoningEffort) || false,
     reasoningTokens: reasoning ? true : false,
-    // §13 — pass through tool-calling metadata from the gateway. When the
+ // — pass through tool-calling metadata from the gateway. When the
     // gateway explicitly declares tools/nativeToolCalls these drive the agent
     // loop's capability gate; undefined keeps the "assume capable" default.
     ...(c.tools !== undefined ? { tools: Boolean(c.tools) } : {}),

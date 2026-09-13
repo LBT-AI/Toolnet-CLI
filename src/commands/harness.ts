@@ -2,7 +2,7 @@ import type { Command, CommandContext } from "./index";
 import { getHarness } from "../lib/harness";
 import { contextEngine } from "../lib/context";
 import { sessionTrust } from "../lib/security/sessionTrust";
-// Phase 81 §19 — the TUI is a CONSUMER of the canonical harness registry and
+// — the TUI is a CONSUMER of the canonical harness registry and
 // config owner. It implements no policy and never constructs a harness of its
 // own; selection uses the same API as `toolnet harness use`.
 import {

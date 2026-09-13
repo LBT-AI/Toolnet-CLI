@@ -14,7 +14,7 @@ function model(providerId: string, apiModelId: string, extra: Partial<ModelDefin
   };
 }
 
-describe("Phase 79 — ModelCatalog", () => {
+describe("ModelCatalog", () => {
   let catalog: ModelCatalog;
 
   beforeEach(() => {

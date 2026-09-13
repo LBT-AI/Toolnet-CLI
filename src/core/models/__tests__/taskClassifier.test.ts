@@ -5,7 +5,7 @@ import {
   classifyTask,
 } from "../taskClassifier";
 
-describe("Phase 80 — TaskClassifier", () => {
+describe("TaskClassifier", () => {
   it("classifies a fix-and-test prompt as coding with debugging and tool use", () => {
     const result = classifyTask({ prompt: "fix TypeScript error and run tests" });
 

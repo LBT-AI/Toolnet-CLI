@@ -1,7 +1,7 @@
 import { tuiState } from "../state";
 import { scrollUp, scrollDown, scrollPage } from "../viewport";
 import { getAllCommands } from "../../commands";
-import { providerPicker } from "../../components/ProviderPicker";
+import { providerPicker } from "../providerPicker";
 import { startOAuthDeviceFlow } from "../events/agentWiring";
 import { MultilineInputBuffer } from "./multilineInput";
 import { getKeyManagerProviders } from "../renderers/keyManagerRenderer";
@@ -9,6 +9,7 @@ import { saveCliKey, deleteCliKey, getCliKey } from "../../lib/keys";
 import { syncProviderOnKeySave, setActiveProvider } from "../../providers";
 import { BRACKETED_PASTE_START, parseBracketedPaste, stripBracketedPaste } from "../../lib/bracketedPaste";
 import { statusManager } from "../statusService";
+import { cancelPendingApproval } from "../permissions/permissionModal";
 import { messageQueue } from "../../lib/messageQueue";
 import { overlayIsActive, handleOverlayKey } from "./overlayInput";
 import { workspaceAccessAnimation } from "../animations/modalAnimation";
@@ -1003,6 +1004,11 @@ function _handleKeyInternal(
 
   // 6. Ctrl+C (1st aborts running stream/tool/teamwork; 2nd exits)
   if (hex === "03") {
+    // An open approval dialog must not swallow the abort: deny the pending
+    // request so the awaiting backend unwinds, then continue to stream abort.
+    if (tuiState.pendingConfirmation) {
+      cancelPendingApproval();
+    }
     if (tuiState.isStreaming) {
       tuiState.abortController?.abort();
       statusManager.cancel();

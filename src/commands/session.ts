@@ -6,7 +6,7 @@ import {
   createNewSession,
   loadSession,
 } from "../lib/sessionPersistence";
-import { formatRelativeTime } from "../tui/renderers/sessionPickerRenderer";
+import { formatRelativeTime } from "../lib/text";
 import { messageQueue } from "../lib/messageQueue";
 
 async function listSessions(ctx: CommandContext) {

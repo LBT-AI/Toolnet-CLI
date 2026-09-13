@@ -23,7 +23,7 @@ function sample(overrides: Partial<PerformanceSample> = {}): PerformanceSample {
   };
 }
 
-describe("Phase 80 — performance profiles", () => {
+describe("performance profiles", () => {
   it("returns null for an empty sample set", () => {
     expect(aggregatePerformance([])).toBeNull();
   });

@@ -28,12 +28,13 @@ export interface SessionPickerModalState {
 
 const MAX_DISPLAY = 10;
 
+// Canonical relative-time formatting lives in `src/lib/text` (CLI shares it);
+// this wrapper preserves the picker's legacy "unknown"/"just now" wording.
 export function formatRelativeTime(timestamp: string | number): string {
   const time = typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
   if (isNaN(time)) return "unknown";
-  const diffMs = Date.now() - time;
-  if (diffMs < 5000) return "just now";
-  const diffSec = Math.floor(diffMs / 1000);
+  if (Date.now() - time < 5000) return "just now";
+  const diffSec = Math.floor(time ? (Date.now() - time) / 1000 : 0);
   if (diffSec < 60) return `${diffSec}s ago`;
   const diffMin = Math.floor(diffSec / 60);
   if (diffMin < 60) return `${diffMin}m ago`;

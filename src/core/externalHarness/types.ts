@@ -1,11 +1,11 @@
 /**
- * Phase 83 §2 — Canonical external harness types.
+ * — Canonical external harness types.
  *
  * An external harness is an INDEPENDENT EXECUTABLE (OpenCode, Codex, …). It is
  * not a ToolNet agent loop, and ToolNet's permission engine does NOT govern the
  * tools an external harness runs inside its own process. Every definition is
- * therefore explicit about trust (§6) and about what ToolNet actually knows
- * (tri-state capabilities — §2: never assume support).
+ * therefore explicit about trust () and about what ToolNet actually knows
+ * (tri-state capabilities — : never assume support).
  *
  * This module is POLICY AND CONTRACT ONLY: no process spawning, no provider
  * calls, no ToolGateway, no ModelRouter imports.
@@ -16,10 +16,10 @@ import type { ModelCapabilities } from "../models/types";
 /** Tri-state capability: true (verified), false (verified absent), unknown (not verified). */
 export type TriState = true | false | "unknown";
 
-/** §6 — who governs what the harness executes. */
+/** — who governs what the harness executes. */
 export type ExecutionTrust = "external_managed" | "toolnet_managed";
 
-/** §2 — what ToolNet has verified (or not) about an external harness. */
+/** — what ToolNet has verified (or not) about an external harness. */
 export interface ExternalHarnessCapabilities {
   /** Machine-readable structured output (JSON events / JSONL). */
   structuredOutput: TriState;
@@ -47,7 +47,7 @@ export interface ExternalHarnessCapabilities {
   nativePermissions: TriState;
 }
 
-/** §7 — normalized events. Not every harness emits every event. */
+/** — normalized events. Not every harness emits every event. */
 export type HarnessEventKind =
   | "started"
   | "output"
@@ -94,10 +94,10 @@ export interface NormalizedUsage {
   totalTokens?: number;
 }
 
-/** §8 — normalized terminal statuses. */
+/** — normalized terminal statuses. */
 export type HarnessStatus = "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED" | "TIMEOUT";
 
-/** Failure classes for external runs (§29 classification, harness subset). */
+/** Failure classes for external runs ( classification, harness subset). */
 export type HarnessFailureClass =
   | "CORE_RUNTIME"
   | "HARNESS_PROTOCOL"
@@ -106,7 +106,7 @@ export type HarnessFailureClass =
   | "CANCELLED"
   | "ENVIRONMENT";
 
-/** §13 — a model selection resolved by the ModelRouter, handed to the adapter. */
+/** — a model selection resolved by the ModelRouter, handed to the adapter. */
 export interface ExternalModelSelection {
   /** Logical model (provider-native id or canonical `provider/model`). */
   logicalModel: string;
@@ -115,13 +115,13 @@ export interface ExternalModelSelection {
   apiModelId?: string;
 }
 
-/** §15 — namespaced external session identity. */
+/** — namespaced external session identity. */
 export interface ExternalHarnessSession {
   harnessId: string;
   externalSessionId: string;
 }
 
-/** §8 — normalized execution result. */
+/** — normalized execution result. */
 export interface ExternalHarnessResult {
   harnessId: string;
   harnessVersion?: string;
@@ -166,7 +166,7 @@ export interface HarnessRunContext {
   /** Detection-time version, when known. */
   version?: string;
   model?: ExternalModelSelection;
-  /** §15 — resume/fork a previously captured external session. */
+ /** — resume/fork a previously captured external session. */
   resume?: ExternalHarnessSession;
   forkSession?: boolean;
   /** Extra harness-native args, forwarded verbatim as argv elements. */
@@ -174,23 +174,23 @@ export interface HarnessRunContext {
   signal?: AbortSignal;
 }
 
-/** §2 — the adapter contract. Harness-specific behavior lives ONLY here. */
+/** — the adapter contract. Harness-specific behavior lives ONLY here. */
 export interface ExternalHarnessDefinition {
   id: string;
   displayName: string;
   /** Executable name resolved on PATH (never a shell string). */
   executable: string;
   capabilities: ExternalHarnessCapabilities;
-  /** §6 — all Phase 83 adapters are `external_managed`. */
+ /** — all adapters are `external_managed`. */
   executionTrust: ExecutionTrust;
   /**
-   * §14 — env var names the runner MAY pass through if present in the parent
+ * — env var names the runner MAY pass through if present in the parent
    * environment. Operational vars only; secret-looking names are rejected by
    * the runner regardless of this list. Values are never logged.
    */
   envAllowlist: string[];
   /**
-   * Phase 84 §18 — env var names this harness reads for PROVIDER CREDENTIALS.
+ * — env var names this harness reads for PROVIDER CREDENTIALS.
    *
    * ToolNet injects a resolved secret into one of these names ONLY when the
    * user explicitly asked for a profile (`--auth-profile`). The list is never
@@ -200,7 +200,7 @@ export interface ExternalHarnessDefinition {
    */
   credentialEnvAllowlist?: string[];
   /**
-   * §12 — verify availability. Bounded, offline, side-effect-free; may be
+ * — verify availability. Bounded, offline, side-effect-free; may be
    * cached by the registry. Returns the version string when determinable.
    */
   detect: () => Promise<{ available: boolean; version?: string; detail?: string }>;
@@ -211,7 +211,7 @@ export interface ExternalHarnessDefinition {
   /** True when the chunk completes a JSONL/JSON-event frame. */
   isFrameComplete?: (buffer: string) => boolean;
   /**
-   * §8 — terminal verdict from STRUCTURED events + process outcome. Exit code
+ * — terminal verdict from STRUCTURED events + process outcome. Exit code
    * alone must not produce SUCCESS when a terminal event reported failure.
    */
   normalizeResult: (input: {

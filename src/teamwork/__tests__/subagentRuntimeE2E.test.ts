@@ -1,11 +1,11 @@
 /**
- * Phase 75 — Subagent runtime E2E (deterministic).
+ * Subagent runtime E2E (deterministic).
  *
  * Drives the REAL Agent Engine + REAL ToolRegistry + REAL permission derivation
  * against a SCRIPTED model (globalThis.fetch), so the suite can never be flaky
  * because of model compliance. A failure here is always a CORE_RUNTIME defect.
  *
- * Scenarios (§75.20–75.24):
+ * Scenarios (–75.24):
  *   A. plan-bypass blocked           — release blocker
  *   B. explore delegation + isolation
  *   C. coder self-repair inside a child (read → fail → edit → pass)
@@ -88,7 +88,7 @@ function toolMessages(messages: Array<{ role: string; content: string }> | undef
 
 // ── Suite ────────────────────────────────────────────────────────────────────
 
-describe.serial("Phase 75 — subagent runtime E2E", () => {
+describe.serial("subagent runtime E2E", () => {
   const originalFetch = globalThis.fetch;
   let workspace: string;
   const runtime = process.execPath; // the running JS runtime (bun)

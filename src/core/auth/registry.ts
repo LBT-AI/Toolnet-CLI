@@ -1,12 +1,12 @@
 /**
- * Phase 84 §7 — THE AuthProfileRegistry.
+ * — THE AuthProfileRegistry.
  *
  * Exactly one. Owns profile METADATA (identity, type, timestamps) and the
  * per-provider ACTIVE profile pointer. It never returns a secret: credential
  * payloads live in the CredentialStore, and secret access goes exclusively
  * through the CredentialResolver.
  *
- * Persistence rides on the canonical AppConfig (§5 separation): profiles and
+ * Persistence rides on the canonical AppConfig ( separation): profiles and
  * active pointers are config, not secrets. Backward compatible — an absent
  * `auth` section behaves as "no profiles yet".
  *
@@ -15,9 +15,9 @@
  *  - a profile references a credential that exists in the store at write time
  *    (env profiles are the exception — they reference the environment);
  *  - removing a profile clears the active pointer if it pointed at it, so no
- *    stale pointer survives a logout (§33 defect: "logout active profile
+ * stale pointer survives a logout ( defect: "logout active profile
  *    leaves stale pointer");
- *  - switching the active profile never deletes another credential (§14).
+ * - switching the active profile never deletes another credential ().
  */
 
 import { getAppConfig, updateAppConfig, type AppAuthSettings, type AppConfig } from "../../lib/appConfig";
@@ -132,7 +132,7 @@ export class AuthProfileRegistry {
     return { ...profile };
   }
 
-  /** §14 — switching profiles never deletes other credentials. */
+ /** — switching profiles never deletes other credentials. */
   setActive(providerId: string, profileId: string): void {
     const id = profileId.trim();
     if (!this.has(id)) throw new AuthProfileNotFoundError(id);
@@ -175,9 +175,9 @@ export class AuthProfileRegistry {
   }
 
   /**
-   * §16 — remove profile metadata. `removeCredential` also deletes the stored
+ * — remove profile metadata. `removeCredential` also deletes the stored
    * secret. Clearing the active pointer when the removed profile was active is
-   * handled here so no stale pointer ever survives (§33).
+ * handled here so no stale pointer ever survives ().
    */
   async remove(profileId: string, options: { removeCredential?: boolean } = {}): Promise<boolean> {
     const id = profileId.trim();

@@ -1,5 +1,5 @@
 /**
- * Layer 4 — Phase 4: ContextRegistry + SessionContext primitives
+ * Layer 4 — : ContextRegistry + SessionContext primitives
  *
  * Every conversation owns a SessionContext keyed by sessionId. The registry
  * lives at module scope (so the live process can find it) but the entries

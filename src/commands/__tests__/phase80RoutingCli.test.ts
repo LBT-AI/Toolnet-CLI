@@ -36,14 +36,14 @@ afterEach(() => {
   } catch {}
 });
 
-describe("Phase 80 — `toolnet routing`", () => {
+describe("`toolnet routing`", () => {
   it("shows the active profile and policy", async () => {
     const { io, stdout } = capture();
     const code = await runModelsCli(["routing", "show"], { io });
     expect(code).toBe(0);
     expect(stdout()).toContain("Routing profile:    auto");
     expect(stdout()).toContain("Routing policy:     priority");
-    // Phase 82 separates model profiles from provider policies in the view.
+ // separates model profiles from provider policies in the view.
     expect(stdout()).toContain("Model profiles:");
     expect(stdout()).toContain("Provider policies:");
     expect(stdout()).toContain("Provider policy:    priority");

@@ -1,5 +1,5 @@
 /**
- * Phase 82 §14 — Deterministic routing eval.
+ * — Deterministic routing eval.
  *
  * These cases exercise the SAME production routing API the agent uses
  * (`ModelRouter.explain` over a real `ProviderRegistry` + `ModelCatalog`). The

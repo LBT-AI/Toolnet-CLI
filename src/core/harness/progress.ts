@@ -1,5 +1,5 @@
 /**
- * Phase 81 §9 — deterministic progress detection.
+ * — deterministic progress detection.
  *
  * No LLM judge. Progress is a comparison of OBSERVABLE counters between two
  * turns: a new tool call, a new mutation, a new command result, a new

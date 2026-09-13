@@ -1,5 +1,5 @@
 /**
- * Phase 77.12/77.15/77.18 — MCP → ToolRegistry adapter.
+ * /77.15/77.18 — MCP → ToolRegistry adapter.
  *
  * An MCP tool becomes an ordinary registry entry. That is the entire point:
  * the model cannot tell an MCP tool from a built-in, and it travels the same

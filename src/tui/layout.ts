@@ -1,6 +1,16 @@
 import { getSize, A } from "../term";
-import stripAnsiPackage from "strip-ansi";
 import stringWidth from "string-width";
+import {
+  stripAnsi,
+  visibleWidth,
+  padVisible,
+  truncateVisible,
+  tailByCells,
+} from "../lib/text";
+
+// Canonical cell-math lives in `src/lib/text` so non-TUI code never imports
+// from `src/tui`; these re-exports keep the renderers' import paths stable.
+export { stripAnsi, visibleWidth, padVisible, truncateVisible, tailByCells };
 
 export const ANSI_REGEX = /\x1b\[[^m]*m/g;
 
@@ -9,56 +19,7 @@ export const INPUT_AREA_ROWS = 2;    // Input divider + input line
 export const FOOTER_ROWS = 1;        // Bottom footer line
 export const RESERVED = HEADER_ROWS + INPUT_AREA_ROWS + FOOTER_ROWS; // 5
 
-export function stripAnsi(text: string): string {
-  return stripAnsiPackage(text);
-}
 
-/** Width occupied by a string in terminal cells, excluding ANSI sequences. */
-export function visibleWidth(value: string): number {
-  if (!value) return 0;
-  return stringWidth(stripAnsi(value));
-}
-
-/** Pad a string to an exact visible terminal-cell width. */
-export function padVisible(value: string, width: number): string {
-  const current = visibleWidth(value);
-  if (current >= width) return value;
-  return value + " ".repeat(width - current);
-}
-
-/**
- * Truncate to terminal cells without slicing through a Unicode code point or
- * ANSI escape sequence. The ellipsis itself occupies one cell.
- */
-export function truncateVisible(value: string, width: number): string {
-  if (!value || width <= 0) return "";
-  if (visibleWidth(value) <= width) return value;
-  if (width === 1) return "…";
-
-  let out = "";
-  let cells = 0;
-  let i = 0;
-  while (i < value.length && cells < width - 1) {
-    if (value.charCodeAt(i) === 0x1b) {
-      const match = value.slice(i).match(/^\x1b(?:\[[0-?]*[ -\/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/);
-      if (match) {
-        out += match[0];
-        i += match[0].length;
-        continue;
-      }
-    }
-
-    const codePoint = String.fromCodePoint(value.codePointAt(i)!);
-    const codePointWidth = stringWidth(codePoint);
-    if (cells + codePointWidth > width - 1) break;
-    out += codePoint;
-    cells += codePointWidth;
-    i += codePoint.length;
-  }
-
-  // Reset protects the rest of the frame when the source was colored.
-  return out + "…" + (visibleWidth(value) > width ? "\x1b[0m" : "");
-}
 
 /**
  * Truncate a string to `maxLen` terminal cells. Kept as the existing public
@@ -66,21 +27,6 @@ export function truncateVisible(value: string, width: number): string {
  */
 export function truncate(s: string, maxLen: number): string {
   return truncateVisible(s, maxLen);
-}
-
-/** Keep the trailing `maxWidth` terminal cells of a string (cell-safe). */
-export function tailByCells(value: string, maxWidth: number): string {
-  if (maxWidth <= 0) return "";
-  const cps = Array.from(value);
-  const out: string[] = [];
-  let cells = 0;
-  for (let i = cps.length - 1; i >= 0; i--) {
-    const w = stringWidth(cps[i]);
-    if (cells + w > maxWidth) break;
-    out.unshift(cps[i]);
-    cells += w;
-  }
-  return out.join("");
 }
 
 /** Wrap on words where possible, then break long tokens by terminal cells. */
@@ -137,25 +83,81 @@ export function wrapText(text: string, width: number): string[] {
   return wrapVisible(text, width);
 }
 
+export type TerminalBreakpoint = "wide" | "normal" | "small" | "narrow";
+
 export interface LayoutInfo {
   cols: number;
   rows: number;
+  breakpoint: TerminalBreakpoint;
   hasPanel: boolean;
   panelWidth: number;
   chatCols: number;
   chatRows: number;
+  /** Terminal rows the prompt composer occupies, including its divider. */
+  inputRows: number;
   popupRows: number;
   cursorRow: number;
   cursorCol: number;
 }
 
-export function computeLayout(activeSuggestsCount = 0, inputPromptLen = 2, cursorPos = 0, statusActive = false): LayoutInfo {
+/** Smallest geometry the frame math stays coherent at. */
+export const MIN_COLS = 40;
+export const MIN_ROWS = 15;
+
+/**
+ * The composer shows at most this many buffer lines; longer drafts scroll
+ * inside the composer (statusRenderer trims from the top) instead of eating
+ * the transcript. +1 covers the divider line that opens the input area.
+ */
+export const COMPOSER_MAX_BUFFER_LINES = 5;
+
+function breakpointFor(cols: number): TerminalBreakpoint {
+  if (cols >= 120) return "wide";
+  if (cols >= 80) return "normal";
+  if (cols >= 60) return "small";
+  return "narrow";
+}
+
+export function computeLayout(
+  activeSuggestsCount = 0,
+  inputPromptLen = 2,
+  cursorPos = 0,
+  statusActive = false,
+  /** How many lines the composer buffer currently wraps to. */
+  inputLineCount = 1,
+): LayoutInfo {
   const { cols, rows } = getSize();
-  // Sidebar panel is only shown on very wide screens (>= 120 cols)
-  const hasPanel = cols >= 120;
+  return computeLayoutGeometry(cols, rows, activeSuggestsCount, inputPromptLen, cursorPos, statusActive, inputLineCount);
+}
+
+/**
+ * Pure geometry math over explicit dimensions — no terminal access. `computeLayout`
+ * clamps the live terminal size into the minimum envelope and delegates here so
+ * tests and headless tools can evaluate the same layout the frame renders.
+ */
+export function computeLayoutGeometry(
+  rawCols: number,
+  rawRows: number,
+  activeSuggestsCount = 0,
+  inputPromptLen = 2,
+  cursorPos = 0,
+  statusActive = false,
+  inputLineCount = 1,
+): LayoutInfo {
+  const cols = Math.max(MIN_COLS, rawCols);
+  const rows = Math.max(MIN_ROWS, rawRows);
+  const breakpoint = breakpointFor(cols);
+  // Sidebar panel is only shown on wide screens; a narrow viewport keeps the
+  // prompt at full width so decorative chrome can never squeeze it out.
+  const hasPanel = breakpoint === "wide";
   const panelWidth = hasPanel ? 36 : 0;
-  const chatCols = hasPanel ? cols - panelWidth : cols;
+  const chatCols = cols - panelWidth;
   const statusRows = statusActive ? 1 : 0;
+  const inputRows =
+    Math.min(
+      COMPOSER_MAX_BUFFER_LINES + 1,
+      Math.max(2, inputLineCount + 1),
+    );
   // Command palette: a large sheet anchored above the composer — roughly
   // 65-75% of the content viewport (never a tiny centered popup).
   const contentRows = Math.max(6, rows - RESERVED - statusRows);
@@ -163,17 +165,22 @@ export function computeLayout(activeSuggestsCount = 0, inputPromptLen = 2, curso
     activeSuggestsCount > 0
       ? Math.max(6, Math.min(contentRows - 1, Math.floor(contentRows * 0.72)))
       : 0;
-  const chatRows = Math.max(1, contentRows - popupRows);
+  // Prompt squeeze protection: the composer keeps inputRows even on the
+  // smallest layout; the transcript absorbs the remainder and never drops
+  // below two rows so at least a couple of context lines stay readable.
+  const chatRows = Math.max(2, contentRows - popupRows - inputRows);
   const cursorRow = rows - FOOTER_ROWS; // Input prompt line (footer line is the last row)
   const cursorCol = Math.min(inputPromptLen + 1 + cursorPos, cols - 1);
 
   return {
     cols,
     rows,
+    breakpoint,
     hasPanel,
     panelWidth,
     chatCols,
     chatRows,
+    inputRows,
     popupRows,
     cursorRow,
     cursorCol,

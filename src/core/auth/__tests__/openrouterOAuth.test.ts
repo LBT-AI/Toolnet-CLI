@@ -1,5 +1,5 @@
 /**
- * Phase 84 §11/§12/§24/§33 — OpenRouter OAuth PKCE tests.
+ * — OpenRouter OAuth PKCE tests.
  *
  * The loopback tests use a REAL HTTP callback server; the exchange tests use an
  * injected fetch so no network or credential is required.

@@ -1,5 +1,5 @@
 /**
- * Phase 75.1 / 75.6 / 75.10 / 75.11 — Subagent Manager
+ * / 75.6 / 75.10 / 75.11 — Subagent Manager
  *
  * The ONLY way a subagent is created. It owns the lifecycle around a child run
  * — depth guard, child session, scoped tool set, derived permission, result
@@ -107,7 +107,7 @@ export class SubagentManager {
     const maxDepth = request.maxDepth ?? DEFAULT_SUBAGENT_MAX_DEPTH;
     const childDepth = request.parentDepth + 1;
 
-    // ── Depth guard (§75.11): no unbounded recursion. ──────────────────────
+ // ── Depth guard (): no unbounded recursion. ──────────────────────
     if (childDepth > maxDepth) {
       return this.errorResult(
         request.taskId || "(not-created)",

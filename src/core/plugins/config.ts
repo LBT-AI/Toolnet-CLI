@@ -1,5 +1,5 @@
 /**
- * Phase 77.4 — Plugin configuration.
+ * Plugin configuration.
  *
  * ONE config source. The runtime reads plugin declarations from a single
  * canonical file and normalizes them into `PluginConfigEntry[]`; nothing else

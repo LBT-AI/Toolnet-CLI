@@ -1,5 +1,5 @@
 /**
- * Phase 83 — External harness interoperability (barrel).
+ * External harness interoperability (barrel).
  *
  * Import from here. The external harness layer is an INTEROPERABILITY
  * boundary: external harnesses are independent executables, not ToolNet

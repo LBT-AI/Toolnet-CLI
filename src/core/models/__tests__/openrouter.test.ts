@@ -19,7 +19,7 @@ const REAL_RECORD = {
   supported_parameters: ["tools", "tool_choice", "reasoning", "response_format", "structured_outputs"],
 };
 
-describe("Phase 79 — OpenRouter normalization", () => {
+describe("OpenRouter normalization", () => {
   it("normalizes a real record without losing tool capabilities", () => {
     const model = normalizeOpenRouterModel(REAL_RECORD, "openrouter");
     expect(model).not.toBeNull();
@@ -77,7 +77,7 @@ describe("Phase 79 — OpenRouter normalization", () => {
   });
 });
 
-describe("Phase 79 — OpenRouter discovery", () => {
+describe("OpenRouter discovery", () => {
   const originalFetch = globalThis.fetch;
 
   afterEach(() => {

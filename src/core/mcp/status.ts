@@ -1,5 +1,5 @@
 /**
- * Phase 78.4 — Deterministic MCP status state machine.
+ * Deterministic MCP status state machine.
  *
  * A single boolean can express neither "reachable but unauthenticated" nor
  * "registered but unknown", so the manager carries an explicit state and every
@@ -97,7 +97,7 @@ export function isToolWithdrawingStatus(status: McpServerStatus): boolean {
   );
 }
 
-/** Map any canonical status onto the narrow diagnostic enum (Phase 78.31). */
+/** Map any canonical status onto the narrow diagnostic enum (). */
 export function toDiagnosticStatus(
   status: McpServerStatus,
 ): "connected" | "disabled" | "failed" | "needs_auth" | "needs_client_registration" | "disconnected" {

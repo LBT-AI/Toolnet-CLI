@@ -1,5 +1,5 @@
 /**
- * Phase 81 §8 — continuation policy.
+ * — continuation policy.
  *
  * One place decides whether the loop continues, finishes, or terminates with a
  * structured failure. All four bounds come from the profile's

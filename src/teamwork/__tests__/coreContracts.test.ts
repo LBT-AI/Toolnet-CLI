@@ -1,10 +1,10 @@
 /**
- * Unit tests for the Phase 73 core modules.
+ * Unit tests for the core modules.
  *
- *   §73.1  contracts (ToolResult builders)
- *   §73.4  ToolCallStateStore lifecycle (pending → running → completed/error)
- *   §73.7  capability resolution (native | structured | none)
- *   §73.9  Completion Gate (requirements, evidence, corrective turns)
+ * contracts (ToolResult builders)
+ * ToolCallStateStore lifecycle (pending → running → completed/error)
+ * capability resolution (native | structured | none)
+ * Completion Gate (requirements, evidence, corrective turns)
  */
 
 import { test, expect, describe } from "bun:test";
@@ -31,7 +31,7 @@ import {
   recordEvidence,
 } from "../../core/agent/completionGate";
 
-// ── §73.1 Contracts ─────────────────────────────────────────────────────────
+// ── Contracts ─────────────────────────────────────────────────────────
 
 describe("contracts — ToolResult builders", () => {
   test("okToolResult defaults ok=true and merges partial fields", () => {
@@ -56,7 +56,7 @@ describe("contracts — ToolResult builders", () => {
   });
 });
 
-// ── §73.4 Tool Call State ───────────────────────────────────────────────────
+// ── Tool Call State ───────────────────────────────────────────────────
 
 describe("ToolCallStateStore — lifecycle", () => {
   test("begin starts a call in pending state", () => {
@@ -124,7 +124,7 @@ describe("ToolCallStateStore — lifecycle", () => {
   });
 });
 
-// ── §73.7 Capability resolution ─────────────────────────────────────────────
+// ── Capability resolution ─────────────────────────────────────────────
 
 describe("capability resolution — native | structured | none", () => {
   test("explicit toolCalling mode always wins", () => {
@@ -169,7 +169,7 @@ describe("capability resolution — native | structured | none", () => {
   });
 });
 
-// ── §73.9 Completion Gate ───────────────────────────────────────────────────
+// ── Completion Gate ───────────────────────────────────────────────────
 
 describe("parseTaskRequirements", () => {
   test("create/write prompts require a mutation", () => {

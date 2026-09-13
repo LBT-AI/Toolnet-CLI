@@ -1,5 +1,5 @@
 /**
- * Phase 82 — unit tests for the provider-routing layer.
+ * unit tests for the provider-routing layer.
  *
  * Covers the modules with no other direct coverage: route identity, provider
  * policy resolution, resolver guard clauses, scorer ordering/tie-breaks,
@@ -66,7 +66,7 @@ function fakeHealth(state: ProviderHealth["state"] = "healthy"): ProviderHealth 
   return { state, requestCount: 0, successCount: 0, failureCount: 0, consecutiveFailures: 0 };
 }
 
-describe("Phase 82 §1 — route identity", () => {
+describe(" — route identity", () => {
   it("formats route ids deterministically with a default upstream", () => {
     expect(routeIdOf("OpenRouter", "anthropic/claude-sonnet")).toBe("openrouter::default::anthropic/claude-sonnet");
     expect(routeIdOf("openrouter", "m", "Together")).toBe("openrouter::together::m");
@@ -89,7 +89,7 @@ describe("Phase 82 §1 — route identity", () => {
   });
 });
 
-describe("Phase 82 §3 — provider routing policies", () => {
+describe(" — provider routing policies", () => {
   it("resolves every canonical policy by name", () => {
     const names = ["priority", "cheapest", "fastest", "balanced", "reliability-first"] as const;
     for (const name of names) {
@@ -108,7 +108,7 @@ describe("Phase 82 §3 — provider routing policies", () => {
   });
 });
 
-describe("Phase 82 §4/§5 — failure classification and health", () => {
+describe(" — failure classification and health", () => {
   it("classifies provider-attributable failures as retryable + health-affecting", () => {
     for (const message of ["HTTP 429: slow down", "HTTP 503: upstream", "request timed out", "ECONNRESET"]) {
       const c = classifyProviderFailure(new Error(message));
@@ -129,7 +129,7 @@ describe("Phase 82 §4/§5 — failure classification and health", () => {
   });
 });
 
-describe("Phase 82 §5 — route performance is bounded and honest", () => {
+describe(" — route performance is bounded and honest", () => {
   it("withholds latency until the sample floor is met", () => {
     const tracker = new RoutePerformanceTracker();
     const id = "p::default::m";
@@ -173,7 +173,7 @@ describe("Phase 82 §5 — route performance is bounded and honest", () => {
   });
 });
 
-describe("Phase 82 §6 — deterministic route scoring", () => {
+describe(" — deterministic route scoring", () => {
   const policy = resolveProviderRoutingPolicy("cheapest");
 
   function fakeHealth(state: "healthy" | "degraded" | "unavailable" | "unknown" = "healthy"): ProviderHealth {
@@ -229,7 +229,7 @@ describe("Phase 82 §6 — deterministic route scoring", () => {
   });
 });
 
-describe("Phase 82 §2 — resolver guard clauses", () => {
+describe(" — resolver guard clauses", () => {
   it("records provider-disabled rejections before scoring", () => {
     const { router } = harness([
       makeProvider({ id: "off", priority: 1, enabled: false, models: [makeModel("off", "m", { capabilities: TOOL })] }),
@@ -271,7 +271,7 @@ describe("Phase 82 §2 — resolver guard clauses", () => {
   });
 });
 
-describe("Phase 82 §17 — router defect regressions", () => {
+describe(" — router defect regressions", () => {
   afterEachLike();
 
   function afterEachLike(): void {

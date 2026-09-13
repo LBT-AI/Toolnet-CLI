@@ -46,11 +46,11 @@ export interface CompactionOptions {
   preserveSystemPrompt?: boolean;
   customSummaryPrefix?: string;
   model?: string;
-  /** Phase 4: session binding for memory access. */
+ /** : session binding for memory access. */
   sessionId?: string;
-  /** Phase 4: explicit memory store override (tests, subagent isolation). */
+ /** : explicit memory store override (tests, subagent isolation). */
   memory?: any;
-  /** Phase 4: summary message role. Default is "user" for provider compatibility. */
+ /** : summary message role. Default is "user" for provider compatibility. */
   summaryRole?: "user" | "system" | "assistant";
 }
 

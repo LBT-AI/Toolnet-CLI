@@ -1,5 +1,5 @@
 /**
- * Phase 77.3 — Plugin loader.
+ * Plugin loader.
  *
  * The pipeline is deliberately staged so a failure is always attributable:
  *
@@ -7,7 +7,7 @@
  *
  * No stage throws to its caller: each returns a discriminated failure carrying
  * the stage and a human reason. That is what lets the runtime skip one broken
- * plugin and keep the other nine working (§77.3 "missing package → báo rõ →
+ * plugin and keep the other nine working ( "missing package → báo rõ →
  * không crash CLI").
  */
 
@@ -94,7 +94,7 @@ function resolveNpmPlugin(entry: PluginConfigEntry, workspaceRoot: string): Reso
     const target = requireFromWorkspace.resolve(entry.spec);
     return { ok: true, value: { entry, target, root: path.dirname(target) } };
   } catch {
-    // Not installed. Phase 77 deliberately does NOT auto-install arbitrary
+ // Not installed. deliberately does NOT auto-install arbitrary
     // packages at runtime — report it so the user can install intentionally.
     return fail(
       "resolve",

@@ -52,7 +52,7 @@ function call(name: string, args: unknown = {}, ok = true): ObservedToolCall {
   return { id: `${name}-${Math.random()}`, name, arguments: args, ok };
 }
 
-describe("Phase 80 — deterministic graders", () => {
+describe("deterministic graders", () => {
   it("exact match ignores case and whitespace by default", () => {
     expect(exactMatchGrader(observation({ output: "  PoNg \n" }), { kind: "exact", value: "pong" }).pass).toBe(true);
     expect(exactMatchGrader(observation({ output: "pong!" }), { kind: "exact", value: "pong" }).pass).toBe(false);

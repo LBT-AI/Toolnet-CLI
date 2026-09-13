@@ -1,13 +1,13 @@
 /**
- * Phase 82 §3 — Canonical ProviderRoutingPolicy.
+ * — Canonical ProviderRoutingPolicy.
  *
  * This is the *route* policy layer: it decides WHICH provider/upstream serves a
- * model. It is deliberately separate from the Phase 79/80 model-selection policy
+ * model. It is deliberately separate from the /80 model-selection policy
  * (`RoutingPolicy` / `RoutingProfile`), which decides WHICH model to use:
  *
  *   ModelRouter
- *     ├─ model selection          → RoutingProfile        (Phase 80)
- *     └─ provider/upstream choice → ProviderRoutingPolicy (Phase 82)
+ * ├─ model selection → RoutingProfile ()
+ * └─ provider/upstream choice → ProviderRoutingPolicy ()
  *
  * No policy here names a concrete vendor. `priority` reads the provider's
  * declared priority, `cheapest` reads declared pricing, `fastest` reads observed

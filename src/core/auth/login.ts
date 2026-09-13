@@ -1,5 +1,5 @@
 /**
- * Phase 84 §11/§12/§14 — OpenRouter login orchestration.
+ * — OpenRouter login orchestration.
  *
  * One function drives the whole PKCE lifecycle and, critically, stores the
  * credential ONLY after every validation has passed:
@@ -136,7 +136,7 @@ export async function loginOpenRouter(options: OpenRouterLoginOptions = {}): Pro
   try {
     const { code, state } = await waitForCode;
 
-    // §11 — state is validated BEFORE the exchange. `consume` throws on any
+ // — state is validated BEFORE the exchange. `consume` throws on any
     // mismatch/expiry/reuse, and the catch below stores nothing.
     const consumed = pending.consume(state);
 
@@ -178,13 +178,13 @@ export async function loginOpenRouter(options: OpenRouterLoginOptions = {}): Pro
     };
   } finally {
     await loopback?.close();
-    // §24 — a failed attempt must not leave a usable verifier behind.
+ // — a failed attempt must not leave a usable verifier behind.
     flow.consumed = true;
   }
 }
 
 /**
- * §12 — complete a HEADLESS login from a code the user pasted, using a flow
+ * — complete a HEADLESS login from a code the user pasted, using a flow
  * that was created earlier in this same process. Kept separate so tests can
  * exercise state validation without a loopback server.
  */

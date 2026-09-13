@@ -1,5 +1,5 @@
 /**
- * Phase 76A.4 / 76A.6 — Session Inbox
+ * / 76A.6 — Session Inbox
  *
  * The notification channel that replaces polling. When background work settles,
  * a synthetic message is pushed into the owning session's inbox. The agent loop

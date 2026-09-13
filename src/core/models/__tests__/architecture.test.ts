@@ -33,7 +33,7 @@ function productionFiles(dir: string): string[] {
   return sourceFiles(dir).filter((file) => !file.includes("__tests__") && !file.endsWith(".test.ts"));
 }
 
-describe("Phase 79 — architecture guards", () => {
+describe("architecture guards", () => {
   it("exposes exactly one canonical ProviderRegistry / ModelCatalog / ModelRouter", () => {
     expect(providerRegistry).toBeInstanceOf(ProviderRegistry);
     expect(modelCatalog).toBeInstanceOf(ModelCatalog);
@@ -100,7 +100,7 @@ describe("Phase 79 — architecture guards", () => {
   });
 });
 
-describe("Phase 79 — runtime integration", () => {
+describe("runtime integration", () => {
   const TEST_PROVIDER = "phase79selftest";
   const API_MODEL_ID = "phase79-selftest-model";
 
@@ -112,7 +112,7 @@ describe("Phase 79 — runtime integration", () => {
     providerRegistry.register(
       {
         id: TEST_PROVIDER,
-        name: "Phase 79 Self Test",
+ name: " Self Test",
         kind: "openai-compatible",
         baseURL: "https://selftest.invalid/v1",
         models: [

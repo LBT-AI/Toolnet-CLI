@@ -1,5 +1,5 @@
 /**
- * Phase 74 — Canonical LSP manager.
+ * Canonical LSP manager.
  *
  * One manager per workspace. It is the only component that spawns language
  * servers, and it does so lazily: a server starts the first time code

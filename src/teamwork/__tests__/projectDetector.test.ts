@@ -404,7 +404,7 @@ describe("detectProjectFramework – Scala", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Multi-language monorepo (§7/§8/§36)
+// Multi-language monorepo ()
 // ---------------------------------------------------------------------------
 
 describe("Multi-language monorepo detection", () => {

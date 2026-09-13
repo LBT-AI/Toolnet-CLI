@@ -1,5 +1,5 @@
 /**
- * Phase 73.9 — Completion Gate
+ * Completion Gate
  *
  * The agent loop must NOT treat "the model stopped calling tools" as success.
  * A task that requires a mutation, execution, verification, or test run is only
@@ -8,7 +8,7 @@
  * required work is still outstanding, the gate returns "continue" plus a
  * corrective instruction to feed back into the next model turn.
  *
- * This is the primary layer against fake success — the ClaimGuard (§20) is
+ * This is the primary layer against fake success — the ClaimGuard () is
  * only the last-resort backstop on top of this gate.
  */
 

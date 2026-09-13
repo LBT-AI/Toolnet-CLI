@@ -3,7 +3,7 @@ import { HookRegistry } from "../../core/hooks/registry";
 import { HOOK_CLASS, HOOK_NAMES, isHookName } from "../../core/hooks/types";
 
 /**
- * Phase 77.6–77.9 — hook lifecycle contract.
+ * 77.9 — hook lifecycle contract.
  *
  * These tests pin the properties the runtime depends on: deterministic order,
  * class-enforced decisions, fail-closed security hooks, and clean disposal.

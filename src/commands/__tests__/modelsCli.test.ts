@@ -20,7 +20,7 @@ function registerFixture(): void {
   providerRegistry.register(
     {
       id: TEST_PROVIDER,
-      name: "Phase 79 CLI Fixture",
+ name: " CLI Fixture",
       kind: "openai-compatible",
       baseURL: "https://fixture.invalid/v1",
       authentication: { apiKeyEnv: ENV_VAR, scheme: "bearer", hasApiKey: true },
@@ -61,7 +61,7 @@ afterEach(() => {
   delete process.env[ENV_VAR];
 });
 
-describe("Phase 79 — `toolnet providers`", () => {
+describe("`toolnet providers`", () => {
   it("lists a registered provider with status, model count and key presence", async () => {
     const { io, stdout } = capture();
     const code = await runModelsCli(["providers"], { io });
@@ -101,7 +101,7 @@ describe("Phase 79 — `toolnet providers`", () => {
   });
 });
 
-describe("Phase 79 — `toolnet models`", () => {
+describe("`toolnet models`", () => {
   it("lists catalog models with tri-state capability rendering", async () => {
     const { io, stdout } = capture();
     const code = await runModelsCli(["models", "--provider", TEST_PROVIDER], { io });
@@ -129,7 +129,7 @@ describe("Phase 79 — `toolnet models`", () => {
   });
 });
 
-describe("Phase 79 — `toolnet model`", () => {
+describe("`toolnet model`", () => {
   it("prints the resolved reference, capabilities and pricing", async () => {
     const { io, stdout } = capture();
     const code = await runModelsCli(["model", `${TEST_PROVIDER}/tool-model`], { io });
@@ -151,7 +151,7 @@ describe("Phase 79 — `toolnet model`", () => {
   });
 });
 
-describe("Phase 79 — `toolnet routing`", () => {
+describe("`toolnet routing`", () => {
   it("prints the active policy and fallback chain", async () => {
     setRoutingConfig({ policy: "cheapest", fallback: [], maxAttempts: 2 });
     const { io, stdout } = capture();
@@ -170,7 +170,7 @@ describe("Phase 79 — `toolnet routing`", () => {
   });
 });
 
-describe("Phase 79 — CLI surface", () => {
+describe("CLI surface", () => {
   it("prints usage for --help", async () => {
     const { io, stdout } = capture();
     const code = await runModelsCli(["providers", "--help"], { io });

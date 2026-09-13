@@ -1,5 +1,5 @@
 /**
- * Layer 4 — Phase 1: Execution Integrity + ToolGateway Convergence
+ * Layer 4 — : Execution Integrity + ToolGateway Convergence
  *
  * Regression suite proving:
  *  1. ToolGateway is the single security chokepoint (ALLOW/ASK/DENY/CRITICAL_DENY).
@@ -27,7 +27,7 @@ const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "layer4-phase1-outside-
 // ALLOW matrix test reads must actually live in tmpBase (not the repo root).
 fs.writeFileSync(
   path.join(tmpBase, "package.json"),
-  JSON.stringify({ name: "layer4-phase1-fixture" }, null, 2),
+ JSON.stringify({ name: "layer4-fixture" }, null, 2),
   "utf8"
 );
 
@@ -101,7 +101,7 @@ describe("PHASE1 ToolGateway decision matrix", () => {
       if (!res.needsApproval) return;
     }
     const res = await ToolGateway.execute(
-      { name: "shell", args: { command: "echo phase1-approved" } },
+ { name: "shell", args: { command: "echo approved" } },
       { cwd, workspaceRoot: wsRoot, sandboxMode: "ask", userApproved: true }
     );
     expect(res.allowed).toBe(true);
@@ -485,7 +485,7 @@ describe("PHASE1 call graph assertions", () => {
 
   test("TUI agentWiring delegates the turn to agentEngine (no direct tool routing)", () => {
     const src = read("../../tui/events/agentWiring.ts");
-    // Phase 73.6: tool routing + permission live in the agent engine/harness.
+ // : tool routing + permission live in the agent engine/harness.
     expect(src).toMatch(/agentEngine\.run\(/);
     expect(src).not.toMatch(/ToolGateway\.execute/);
     expect(src).not.toMatch(/executeTool\(name,\s*args,\s*\{/);

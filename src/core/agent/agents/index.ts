@@ -1,5 +1,5 @@
 /**
- * Phase 75 — Scoped Subagents
+ * Scoped Subagents
  *
  * Public surface of the subagent subsystem. Import from here rather than deep
  * paths so the module can be reorganised without touching every consumer.

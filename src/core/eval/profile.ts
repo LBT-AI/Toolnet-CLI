@@ -1,5 +1,5 @@
 /**
- * Phase 80 §16 — Model performance profiles from eval results.
+ * — Model performance profiles from eval results.
  *
  * Thin projection layer: the aggregation rules live in
  * `src/core/models/performance.ts` (deterministic and unit-tested); this module

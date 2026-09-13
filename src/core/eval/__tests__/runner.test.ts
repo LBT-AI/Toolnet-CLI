@@ -50,7 +50,7 @@ beforeAll(() => {
   providerRegistry.register(
     {
       id: PROVIDER,
-      name: "Phase 80 Eval Fixture",
+ name: " Eval Fixture",
       kind: "openai-compatible",
       baseURL: server.url,
       authentication: { apiKeyEnv: "PHASE80_EVAL_KEY", scheme: "bearer", hasApiKey: false },
@@ -87,7 +87,7 @@ function newServer(script: (turn: number, body: any) => any): FakeOpenAiServer {
   providerRegistry.register(
     {
       id: PROVIDER,
-      name: "Phase 80 Eval Fixture",
+ name: " Eval Fixture",
       kind: "openai-compatible",
       baseURL: created.url,
       authentication: { apiKeyEnv: "PHASE80_EVAL_KEY", scheme: "bearer", hasApiKey: false },
@@ -107,7 +107,7 @@ function newServer(script: (turn: number, body: any) => any): FakeOpenAiServer {
   return created;
 }
 
-describe("Phase 80 — EvalRunner on the production path", () => {
+describe("EvalRunner on the production path", () => {
   it("records a run with real provider/model identity, usage and metrics", async () => {
     const local = newServer(scripts.alwaysText("pong"));
     try {
@@ -241,7 +241,7 @@ describe("Phase 80 — EvalRunner on the production path", () => {
   it("classifies a terminal provider rejection as PROVIDER_PROTOCOL, not a model-quality failure", async () => {
     // 4xx is used rather than 5xx because the provider retries 5xx with
     // exponential backoff; retry classification itself is covered by the
-    // Phase 79 fallback suite.
+ // fallback suite.
     const local = createFakeOpenAiServer({ models: [MODEL_ID], script: scripts.alwaysText("ignored"), failWithStatus: 400 });
     providerRegistry.register(
       {
@@ -303,7 +303,7 @@ describe("Phase 80 — EvalRunner on the production path", () => {
   });
 });
 
-describe("Phase 80 — runner internals", () => {
+describe("runner internals", () => {
   it("counts duplicate tool calls", async () => {
     const { countDuplicateToolCalls } = await import("../runner");
     expect(

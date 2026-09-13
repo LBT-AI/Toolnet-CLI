@@ -1,5 +1,5 @@
 /**
- * Task Understanding Layer — §1 + §2
+ * Task Understanding Layer — +
  *
  * Normalizes a raw user prompt into a structured TaskContext before the
  * AgentLoop runs. The goal is to give the model (and the harness) a clear

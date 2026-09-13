@@ -1,5 +1,5 @@
 /**
- * Phase 81 §2/§3 — HarnessProfile contract.
+ * — HarnessProfile contract.
  *
  * A HarnessProfile is POLICY for the one AgentHarness, not a second runtime.
  * It owns no provider instance, no model reference, and no execution loop. The
@@ -15,10 +15,10 @@
  * Every policy below is deliberately incapable of changing a security verdict:
  * `ToolPolicy` may only choose a SUBSET of already-allowed tools, and
  * `ContextPolicy` may only change how aggressively history is compressed. A
- * profile can never turn DENY into ALLOW (see §7 and the invariant test).
+ * profile can never turn DENY into ALLOW (see and the invariant test).
  *
  * `default` is an IDENTITY profile: with it selected, the harness behaves
- * exactly as it did before Phase 81. That is what makes this layer safe to
+ * exactly as it did before . That is what makes this layer safe to
  * enable incrementally.
  */
 
@@ -85,7 +85,7 @@ export interface ContextPolicy {
 
 /** When a run may be reported as complete, and with what verdict. */
 export interface CompletionPolicy {
-  /** Run the Phase 73.9 evidence gate before accepting a text-only answer. */
+ /** Run the evidence gate before accepting a text-only answer. */
   enforceEvidence: boolean;
   /**
    * A task that required a mutation cannot be SUCCESS when the workspace was
@@ -107,7 +107,7 @@ export interface HarnessProfile {
   continuationPolicy: ContinuationPolicy;
   contextPolicy: ContextPolicy;
   completionPolicy: CompletionPolicy;
-  /** Task types this profile is auto-selected for (§17). */
+ /** Task types this profile is auto-selected for (). */
   autoFor?: string[];
 }
 

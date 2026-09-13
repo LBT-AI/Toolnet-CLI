@@ -1,5 +1,5 @@
 /**
- * Phase 78.3/78.18 — Guarded fetch for remote MCP traffic.
+ * /78.18 — Guarded fetch for remote MCP traffic.
  *
  * The MCP transports need protocol headers (`Accept:
  * application/json, text/event-stream`, `Mcp-Session-Id`) that `safeFetch`'s

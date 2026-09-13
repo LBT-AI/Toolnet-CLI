@@ -1,5 +1,5 @@
 /**
- * Phase 84 §29 — live acceptance.
+ * — live acceptance.
  *
  * Never requires a credential: with no `OPENROUTER_API_KEY` these cases pass as
  * explicit ENVIRONMENT skips (reported, never faked). The billed/network smoke
@@ -44,7 +44,7 @@ function harness() {
 const LIVE = process.env.TOOLNET_AUTH_LIVE_TEST === "1";
 const HAS_ENV_KEY = Boolean(process.env.OPENROUTER_API_KEY?.trim());
 
-describe("Phase 84 §29 — live acceptance", () => {
+describe(" — live acceptance", () => {
   test("environment credential is recognized without being persisted", async () => {
     const { store, profiles } = harness();
     const resolver = new CredentialResolver({ store, profiles, env: process.env });

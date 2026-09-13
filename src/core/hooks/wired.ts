@@ -1,5 +1,5 @@
 /**
- * Phase 77.12 — canonical wired-hook inventory.
+ * canonical wired-hook inventory.
  *
  * This file is the machine-readable counterpart of the "Where hooks actually
  * fire" table in docs/phase-77-plugins-mcp-hooks.md. Every hook name exported
@@ -30,7 +30,7 @@ export interface WiredHookInfo {
 /**
  * Every production hook edge. Order matches the contract table in the docs.
  * `session.start` is wired in `AgentHarness.fireSessionStart`; `shell.after`
- * was removed in 77.12 as redundant with `tool.after` (see docs §1).
+ * was removed in 77.12 as redundant with `tool.after` (see docs ).
  */
 export const WIRED_HOOKS: Record<HookName, WiredHookInfo> = {
   "agent.start": {

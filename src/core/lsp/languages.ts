@@ -1,5 +1,5 @@
 /**
- * Phase 74 — Language identification.
+ * Language identification.
  *
  * Maps a file extension to the LSP `languageId` used in `textDocument/didOpen`.
  * The table is intentionally a curated subset of the languages ToolNet detects

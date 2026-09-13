@@ -402,7 +402,7 @@ describe("P1 — Routing: real paths dispatch through executeToolBatch", () => {
 describe("P1 — TUI routing (terminal app; static verification)", () => {
   it("tui.ts is a pure UI surface and never re-exports a tool execution path", () => {
     const src = fs.readFileSync(path.join(__dirname, "../../tui.ts"), "utf8");
-    // Phase 73.11: the historical executeToolBatch re-export was removed so the
+ // : the historical executeToolBatch re-export was removed so the
     // UI cannot be mistaken for an execution path. Tool routing happens only in
     // the shared Agent Engine / AgentHarness kernel.
     expect(src).not.toMatch(/from\s+"\.\/lib\/harness\/toolExecutor"/);

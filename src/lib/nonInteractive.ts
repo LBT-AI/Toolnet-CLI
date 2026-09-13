@@ -39,7 +39,7 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
   const writer = format === "jsonl" ? new JsonlWriter() : null;
   const sessionId = `sess_${Date.now()}`;
 
-  // Phase 77: headless runs use the same extension bootstrap as the TUI, so a
+ // : headless runs use the same extension bootstrap as the TUI, so a
   // plugin/MCP tool behaves identically in both front-ends.
   await initializeExtensions({ workspaceRoot: process.cwd() });
 
@@ -70,7 +70,7 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
       }
     }
 
-    // Phase 73.5 — headless runs through the SHARED agent engine, the same
+ // headless runs through the SHARED agent engine, the same
     // single execution path the TUI and Simple REPL use.
     let accumulatedOutput = "";
     let toolCallIndex = 0;

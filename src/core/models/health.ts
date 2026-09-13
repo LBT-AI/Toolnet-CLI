@@ -1,5 +1,5 @@
 /**
- * Phase 79 §12 — Lightweight provider health.
+ * — Lightweight provider health.
  *
  * In-memory only (no distributed state): counters, an EMA latency and a
  * consecutive-failure streak. Health is derived from OBSERVED request
@@ -11,7 +11,7 @@
  *   >= FAILURE_THRESHOLD consecutive     → unavailable
  *   a success anywhere                   → healthy again
  *
- * Phase 82 §4 tightens WHICH failures count: only provider-attributable
+ * tightens WHICH failures count: only provider-attributable
  * failures move the needle. A permission denial, a user cancellation, a
  * malformed request or an invalid tool schema is recorded as an observation but
  * can never degrade a provider — see `recordOutcome` and `failureKind.ts`.
@@ -110,7 +110,7 @@ export class ProviderHealthTracker {
   }
 
   /**
-   * Phase 82 §4 — classification-aware outcome recording. Never throws.
+ * — classification-aware outcome recording. Never throws.
    *
    * A caller-fault failure (permission, cancellation, bad request, schema) is
    * counted in `requestCount` only: it cannot degrade or improve health.

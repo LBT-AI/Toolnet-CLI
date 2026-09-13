@@ -1,5 +1,5 @@
 /**
- * Phase 84 §15 — session auth pinning context.
+ * — session auth pinning context.
  *
  * A running session must not silently change the account it spends from just
  * because a global `toolnet auth use` happened mid-request. This module holds

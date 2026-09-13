@@ -1,5 +1,5 @@
 /**
- * Deterministic in-memory language server used by the Phase 74 tests.
+ * Deterministic in-memory language server used by the tests.
  *
  * It speaks the same JSON-RPC the real servers do, over the in-memory transport,
  * so the production `LspClient`/`LspManager` code paths are exercised without a

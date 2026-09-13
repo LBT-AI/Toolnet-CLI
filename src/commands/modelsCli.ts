@@ -1,5 +1,5 @@
 /**
- * Phase 79 §15/§16 — `toolnet models`, `toolnet model`, `toolnet providers`.
+ * — `toolnet models`, `toolnet model`, `toolnet providers`.
  *
  * Formatting only. Every fact printed here comes from the canonical layer
  * (`ProviderRegistry`, `ModelCatalog`, `ModelRouter`); this module never
@@ -325,7 +325,7 @@ async function refresh(
     ? [await refreshProvider(target)]
     : await refreshAllProviders();
 
-  // Phase 80.6 — persist discovery so the next CLI invocation does not need the
+ // persist discovery so the next CLI invocation does not need the
   // network. Provider-isolated: each success writes only its own entry, and a
   // failure leaves every other provider's cached models intact.
   for (const result of results) {
@@ -477,7 +477,7 @@ function showRouting(io: ModelsCliIO, json: boolean): number {
 }
 
 /**
- * Phase 82 §11 — `routing explain|providers|simulate`.
+ * — `routing explain|providers|simulate`.
  *
  * All three are PURE reads of the decision path: no provider call, no billing,
  * no health mutation, no config write. `simulate` differs only in accepting a

@@ -1,5 +1,5 @@
 /**
- * Integration tests for critical Agent Runtime scenarios (spec §15 A–G).
+ * Integration tests for critical Agent Runtime scenarios (spec A–G).
  *
  * A. create file → file exists → assistant success      (covered in codingAgentIntegration)
  * B. deny permission → no file                           (covered in codingAgentIntegration)
@@ -223,7 +223,7 @@ describe.serial("Agent Runtime Critical Scenarios (C/E/G)", () => {
     const harness = makeHarness();
 
     // Model claims it created a file, but there is no structured tool call.
-    // Phase 73.9 Golden E2E #4: a text-only answer for a mutation task must
+ // Golden E2E #4: a text-only answer for a mutation task must
     // NOT be accepted as success — the Completion Gate keeps the loop going
     // and, with no tool ever running, the run fails instead of faking it.
     globalThis.fetch = createMockProvider([
@@ -296,7 +296,7 @@ describe.serial("Agent Runtime Critical Scenarios (C/E/G)", () => {
     expect(result.error).toContain("Infinite loop detected");
   });
 
-  test("§30: execute() flows through understanding → gathering-context states", async () => {
+ test(": execute() flows through understanding → gathering-context states", async () => {
     setModelCapabilities([{
       id: "test-model",
       capabilities: { tools: true, nativeToolCalls: true, reasoning: false, vision: false, streaming: true },

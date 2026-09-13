@@ -1,5 +1,5 @@
 /**
- * Phase 76A.2 — Background Job Service
+ * Background Job Service
  *
  * THE single job registry. Everything asynchronous in ToolNet registers here:
  * background subagents (`task` with `background: true`) and teamwork plans.
@@ -357,7 +357,7 @@ export class BackgroundJobService {
     this.emit(record, "background-job-started");
     this.persist();
 
-    // Phase 77.6 — `background.started` observer edge. Fired detached: a plugin
+ // `background.started` observer edge. Fired detached: a plugin
     // must never be able to delay or fail job startup.
     this.notifyHook("background.started", record);
 
@@ -480,7 +480,7 @@ export class BackgroundJobService {
     this.emit(record, eventType);
     this.persist();
 
-    // Phase 77.6 — `background.completed` observer edge (fires for every
+ // `background.completed` observer edge (fires for every
     // terminal state, with `status` telling the plugin which one).
     this.notifyHook("background.completed", record);
 

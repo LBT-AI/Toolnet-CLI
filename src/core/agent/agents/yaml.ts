@@ -1,5 +1,5 @@
 /**
- * Phase 75.15 — Minimal YAML subset parser for `.toolnet/agents.yaml`.
+ * Minimal YAML subset parser for `.toolnet/agents.yaml`.
  *
  * ToolNet ships exactly four runtime dependencies and deliberately avoids
  * pulling in a full YAML engine for one small config file. This parser covers

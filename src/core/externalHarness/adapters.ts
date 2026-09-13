@@ -1,5 +1,5 @@
 /**
- * Phase 83 §9/§10/§11 — Built-in external harness adapters.
+ * — Built-in external harness adapters.
  *
  * All harness-specific behavior lives here: invocation shape, event parsing,
  * terminal-verdict semantics. The runner contains none of it.
@@ -12,7 +12,7 @@
  *    agent_message, reasoning, command_execution, file_change, mcp_tool_call,
  *    error). Terminal semantics: turn.completed ⇒ success evidence,
  *    turn.failed / `error` ⇒ structured failure — exit code alone is never
- *    trusted (§8: exit 0 + structured failure must stay FAILED).
+ * trusted (: exit 0 + structured failure must stay FAILED).
  *
  *  - OpenCode (`packages/opencode/src/cli/cmd/run.ts`): non-interactive
  *    `opencode run [message..]`, `--format json` (raw JSON events),
@@ -21,7 +21,7 @@
  *    slashes — same parsing rule as ToolNet's ref parser (first segment is the
  *    provider only when it names one).
  *
- *  - Claude / Hermes (§11): conservative definitions. Only capabilities that
+ * - Claude / Hermes (): conservative definitions. Only capabilities that
  *    can be verified from the installed CLI's `--help`/`--version` are marked
  *    true; everything else stays `false`/`unknown` and result parsing is
  *    text-only. No invented JSON schemas.
@@ -91,7 +91,7 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-// ── OpenCode adapter (§9) ───────────────────────────────────────────────────
+// ── OpenCode adapter () ───────────────────────────────────────────────────
 
 export function createOpenCodeAdapter(): ExternalHarnessDefinition {
   return {
@@ -99,11 +99,11 @@ export function createOpenCodeAdapter(): ExternalHarnessDefinition {
     displayName: "OpenCode",
     executable: "opencode",
     executionTrust: "external_managed",
-    // §14 — operational env only. Credential-bearing names are NOT part of the
-    // pass-through allowlist; Phase 84 injects them explicitly (below) and
+ // — operational env only. Credential-bearing names are NOT part of the
+ // pass-through allowlist; injects them explicitly (below) and
     // only when the user asked for a profile.
     envAllowlist: ["NO_COLOR", "CI"],
-    // Phase 84 §18 — names OpenCode itself reads for provider credentials.
+ // — names OpenCode itself reads for provider credentials.
     credentialEnvAllowlist: ["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
     capabilities: {
       structuredOutput: true,
@@ -136,7 +136,7 @@ export function createOpenCodeAdapter(): ExternalHarnessDefinition {
         argv.push("--model", ref);
       }
 
-      // Session resume/fork (§15 — identity already validated by the runner).
+ // Session resume/fork ( — identity already validated by the runner).
       if (context.resume) {
         argv.push("--session", context.resume.externalSessionId);
         if (context.forkSession) argv.push("--fork");
@@ -245,7 +245,7 @@ export function createOpenCodeAdapter(): ExternalHarnessDefinition {
   };
 }
 
-// ── Codex adapter (§10) ─────────────────────────────────────────────────────
+// ── Codex adapter () ─────────────────────────────────────────────────────
 
 export function createCodexAdapter(): ExternalHarnessDefinition {
   return {
@@ -254,7 +254,7 @@ export function createCodexAdapter(): ExternalHarnessDefinition {
     executable: "codex",
     executionTrust: "external_managed",
     envAllowlist: ["NO_COLOR", "CI", "CODEX_HOME"],
-    // Phase 84 §18 — Codex authenticates with an OpenAI key.
+ // — Codex authenticates with an OpenAI key.
     credentialEnvAllowlist: ["OPENAI_API_KEY"],
     capabilities: {
       structuredOutput: true,
@@ -414,11 +414,11 @@ export function createCodexAdapter(): ExternalHarnessDefinition {
   };
 }
 
-// ── Conservative Claude adapter (§11) ───────────────────────────────────────
+// ── Conservative Claude adapter () ───────────────────────────────────────
 
 /**
  * Claude Code supports `-p` (print/non-interactive) and `--output-format json`
- * in practice, but §11 says: only what is verifiable from the installed CLI.
+ * in practice, but says: only what is verifiable from the installed CLI.
  * The adapter is conservative — structured output stays `unknown` until
  * verified, so the runner falls back to text-only parsing.
  */
@@ -429,7 +429,7 @@ export function createClaudeAdapter(): ExternalHarnessDefinition {
     executable: "claude",
     executionTrust: "external_managed",
     envAllowlist: ["NO_COLOR", "CI"],
-    // Phase 84 §18 — Claude Code reads an Anthropic key from the environment.
+ // — Claude Code reads an Anthropic key from the environment.
     credentialEnvAllowlist: ["ANTHROPIC_API_KEY"],
     capabilities: {
       structuredOutput: "unknown",
@@ -479,7 +479,7 @@ export function createClaudeAdapter(): ExternalHarnessDefinition {
   };
 }
 
-// ── Conservative Hermes adapter (§11) ───────────────────────────────────────
+// ── Conservative Hermes adapter () ───────────────────────────────────────
 
 export function createHermesAdapter(): ExternalHarnessDefinition {
   return {
@@ -488,7 +488,7 @@ export function createHermesAdapter(): ExternalHarnessDefinition {
     executable: "hermes",
     executionTrust: "external_managed",
     envAllowlist: ["NO_COLOR", "CI"],
-    // §11/§18 — no verified credential env contract: injection is impossible
+ // — no verified credential env contract: injection is impossible
     // for Hermes rather than guessed.
     credentialEnvAllowlist: [],
     capabilities: {

@@ -1,5 +1,5 @@
 /**
- * Phase 81 §6/§7/§8/§9/§10/§11/§12 — policy modules.
+ * — policy modules.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -63,9 +63,9 @@ function evidence(partial: Partial<ExecutionEvidence> = {}): ExecutionEvidence {
   return { ...emptyExecutionEvidence(), ...partial };
 }
 
-// ── §6 prompt policy ─────────────────────────────────────────────────────────
+// ── prompt policy ─────────────────────────────────────────────────────────
 
-describe("Phase 81 §6 — prompt policy", () => {
+describe(" — prompt policy", () => {
   it("default is a prompt pass-through", () => {
     expect(isPassthroughPromptPolicy(defaultProfile.promptPolicy)).toBe(true);
   });
@@ -125,9 +125,9 @@ describe("Phase 81 §6 — prompt policy", () => {
   });
 });
 
-// ── §7 tool policy ───────────────────────────────────────────────────────────
+// ── tool policy ───────────────────────────────────────────────────────────
 
-describe("Phase 81 §7 — tool policy (exposure, never permission)", () => {
+describe(" — tool policy (exposure, never permission)", () => {
   const all = ["read_file", "shell", "write_file", "grep", "glob"];
 
   it("default exposes every registered tool", () => {
@@ -186,9 +186,9 @@ describe("Phase 81 §7 — tool policy (exposure, never permission)", () => {
   });
 });
 
-// ── §8 continuation policy ───────────────────────────────────────────────────
+// ── continuation policy ───────────────────────────────────────────────────
 
-describe("Phase 81 §8 — bounded continuation", () => {
+describe(" — bounded continuation", () => {
   it("uses the canonical repeat bound and reports the historical loop message", () => {
     expect(exceedsRepeatedToolCalls(defaultProfile.continuationPolicy, 2)).toBe(false);
     expect(exceedsRepeatedToolCalls(defaultProfile.continuationPolicy, 3)).toBe(true);
@@ -204,7 +204,7 @@ describe("Phase 81 §8 — bounded continuation", () => {
     expect(resolveMaxTurns(undefined, 16, 10, 10)).toBe(16);
     expect(resolveMaxTurns(undefined, undefined, 7, 10)).toBe(7);
     expect(resolveMaxTurns(undefined, undefined, undefined, 10)).toBe(10);
-    // `0` is falsy, exactly like the pre-Phase-81 `||` chain.
+ // `0` is falsy, exactly like the legacy `||` chain.
     expect(resolveMaxTurns(0, undefined, undefined, 10)).toBe(10);
   });
 
@@ -214,9 +214,9 @@ describe("Phase 81 §8 — bounded continuation", () => {
   });
 });
 
-// ── §9 progress detection ────────────────────────────────────────────────────
+// ── progress detection ────────────────────────────────────────────────────
 
-describe("Phase 81 §9 — deterministic progress detection", () => {
+describe(" — deterministic progress detection", () => {
   it("the first turn counts as progress", () => {
     expect(detectProgress(null, emptySignals()).progressed).toBe(true);
   });
@@ -278,9 +278,9 @@ describe("Phase 81 §9 — deterministic progress detection", () => {
   });
 });
 
-// ── §10 context policy ───────────────────────────────────────────────────────
+// ── context policy ───────────────────────────────────────────────────────
 
-describe("Phase 81 §10 — context policy and permission retention", () => {
+describe(" — context policy and permission retention", () => {
   it("default forwards the existing pipeline settings unchanged", () => {
     expect(prepareOptionsFor(defaultProfile.contextPolicy)).toEqual({
       autoPrune: true,
@@ -335,9 +335,9 @@ describe("Phase 81 §10 — context policy and permission retention", () => {
   });
 });
 
-// ── §11 completion verdict ───────────────────────────────────────────────────
+// ── completion verdict ───────────────────────────────────────────────────
 
-describe("Phase 81 §11 — completion verdict", () => {
+describe(" — completion verdict", () => {
   const requirements = {
     mutationRequired: false,
     executionRequired: false,

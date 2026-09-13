@@ -1,5 +1,5 @@
 /**
- * Phase 78.31/78.33 — Extension diagnostics.
+ * /78.33 — Extension diagnostics.
  *
  * One canonical, secret-free view of every extension. The model is deliberately
  * narrow: there is no field a token, client secret, code verifier, or header

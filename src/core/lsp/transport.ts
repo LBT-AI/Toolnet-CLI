@@ -1,5 +1,5 @@
 /**
- * Phase 74 — JSON-RPC transport.
+ * JSON-RPC transport.
  *
  * The LSP base protocol frames messages with `Content-Length` headers over
  * stdio. We implement the framing directly instead of pulling in a JSON-RPC

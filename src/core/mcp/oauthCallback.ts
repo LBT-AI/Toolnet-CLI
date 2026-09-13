@@ -1,5 +1,5 @@
 /**
- * Phase 78.11 — Loopback OAuth callback server.
+ * Loopback OAuth callback server.
  *
  * Binds 127.0.0.1 ONLY (never 0.0.0.0), on a dynamic or configured port, with a
  * bounded lifetime. It answers the canonical route and nothing else; the

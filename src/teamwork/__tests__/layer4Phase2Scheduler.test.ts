@@ -1,5 +1,5 @@
 /**
- * Layer 4 — Phase 2: Dynamic Scheduler Correctness + Budget Enforcement
+ * Layer 4 — : Dynamic Scheduler Correctness + Budget Enforcement
  *
  * Regression suite proving:
  *  A. NO fake success: provider/network/auth failures are typed failures

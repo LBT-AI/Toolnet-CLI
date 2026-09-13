@@ -9,7 +9,7 @@
  *     → display verification URL + user code (caller renders the modal)
  *     → poll with the SAME device_code
  *         pending      → keep polling at `interval`
- *         slow_down    → increase interval by 5s (RFC 8628 §3.5)
+ * slow_down → increase interval by 5s (RFC 8628 )
  *         success      → resolve with the saved connection
  *         expired/denied → typed recoverable error
  *   Esc / Ctrl+C → abort polling via the provided AbortSignal
@@ -156,7 +156,7 @@ export async function runDeviceFlow(
 
     if (!poll.success) {
       const err = (poll.error || "").toLowerCase();
-      // RFC 8628 §3.5: slow_down → increase interval by 5 seconds.
+ // RFC 8628 : slow_down → increase interval by 5 seconds.
       if (err.includes("slow_down")) {
         // RFC 8628 adds five seconds to a normal polling interval. Keep the
         // same proportional increment for deliberately sub-second test

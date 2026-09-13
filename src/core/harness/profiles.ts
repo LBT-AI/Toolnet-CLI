@@ -1,19 +1,19 @@
 /**
- * Phase 81 §4 — built-in harness profiles.
+ * — built-in harness profiles.
  *
  * All five profiles are POLICY ONLY. None of them names a model, constructs a
  * provider, or changes a security rule. `default` is an identity profile: with
- * it selected the harness does exactly what it did before Phase 81, which is
+ * it selected the harness does exactly what it did before , which is
  * what makes this layer safe to adopt profile by profile.
  *
- * Auto-resolution mappings live here and ONLY here (§17) so no CLI/TUI/harness
+ * Auto-resolution mappings live here and ONLY here () so no CLI/TUI/harness
  * branch has to know which profile suits which task.
  */
 
 import type { HarnessProfile } from "./types";
 
 /**
- * §8 — canonical loop bounds. Nothing else in the codebase may invent its own
+ * — canonical loop bounds. Nothing else in the codebase may invent its own
  * repeat/progress limits; a profile either uses one of these or disables the
  * bound explicitly.
  */
@@ -26,7 +26,7 @@ export const NO_PROGRESS_BOUND_DISABLED = 0;
 
 export const DEFAULT_HARNESS_PROFILE_ID = "default";
 
-/** Prompt policy that reproduces the pre-Phase-81 prompt exactly. */
+/** Prompt policy that reproduces the legacy prompt exactly. */
 const FULL_PROMPT = {
   includeCodingPolicy: true,
   includeToolUseGuidance: true,
@@ -35,7 +35,7 @@ const FULL_PROMPT = {
   verbosity: "full",
 } as const;
 
-/** Context policy that reproduces the pre-Phase-81 context pipeline exactly. */
+/** Context policy that reproduces the legacy context pipeline exactly. */
 const FULL_CONTEXT = {
   mode: "full",
   autoPrune: true,
@@ -57,7 +57,7 @@ export const defaultProfile: HarnessProfile = {
     "Identity profile. Full prompt, every registered tool, pre-Phase-81 loop bounds.",
   promptPolicy: { ...FULL_PROMPT },
   // No allow/deny/prefer and no guidance: every registered tool is exposed
-  // exactly as before Phase 81.
+ // exactly as before .
   toolPolicy: {},
   continuationPolicy: {
     // No turn override: the caller's existing default (10 / 5 / 8) still wins.
@@ -184,7 +184,7 @@ export const BUILTIN_HARNESS_PROFILES: HarnessProfile[] = [
 ];
 
 /**
- * §17 — the ONE auto-resolution table.
+ * — the ONE auto-resolution table.
  *
  * Deterministic and total: every task type maps to a profile, unknown types map
  * to `default`. Nothing here may reference a model or provider id.

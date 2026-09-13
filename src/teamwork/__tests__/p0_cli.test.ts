@@ -77,7 +77,7 @@ describe("P0 — AppConfig defaults", () => {
     const { loadAppConfig, CURRENT_SCHEMA_VERSION } = require("../../lib/appConfig");
     const { config, created } = loadAppConfig();
     expect(config.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
-    // Phase 80 — routing settings default to auto/priority.
+ // routing settings default to auto/priority.
     expect(config.routing.profile).toBe("auto");
     expect(config.routing.fallback).toEqual([]);
     expect(config.sandboxMode).toBe("workspace");

@@ -1,5 +1,5 @@
 /**
- * Phase 80 §18/§19 — `toolnet eval`.
+ * — `toolnet eval`.
  *
  * Formatting + orchestration only. Every measurement comes from the canonical
  * eval layer, which itself runs through the production AgentHarness path. This
@@ -37,7 +37,7 @@ USAGE:
   toolnet eval results [--limit <n>]      Show stored run history.
   toolnet eval show <runId>               Show one run's per-case detail.
 
-  # Phase 81 — cross-harness measurement (same model, different policy)
+  # cross-harness measurement (same model, different policy)
   toolnet eval harnesses                  List harness profiles and run counts.
   toolnet eval run <suite> --harness <id> Run a suite under one harness profile.
   toolnet eval compare-harness --model <m> <h1> <h2> [...]
@@ -153,7 +153,7 @@ async function runSuiteCommand(
     return 1;
   }
 
-  // Phase 81 §14 — an explicit profile is validated before anything runs.
+ // — an explicit profile is validated before anything runs.
   const harness = resolveHarnessId(flagValue(args, "--harness") ?? currentHarnessSettings().profile);
   if (!harnessRegistry.has(harness)) {
     io.err(`Unknown harness profile '${harness}'. Known: ${harnessRegistry.ids().join(", ")}.`);
@@ -354,7 +354,7 @@ function showRun(runId: string | undefined, io: EvalCliIO, json: boolean, store:
   return 0;
 }
 
-// ── Phase 81 §14/§15 — cross-harness comparison ──────────────────────────────
+// ── — cross-harness comparison ──────────────────────────────
 
 interface HarnessAggregate {
   harness: string;
@@ -582,7 +582,7 @@ async function harnessMatrix(
     return 1;
   }
 
-  // §15 — executing cells is opt-in; the default is a report over stored data.
+ // — executing cells is opt-in; the default is a report over stored data.
   if (args.includes("--run")) {
     const runner = deps.runner ?? new EvalRunner({ store });
     for (const model of modelIds) {

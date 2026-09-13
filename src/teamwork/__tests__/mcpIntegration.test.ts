@@ -15,7 +15,7 @@ import { getMergedAgentTools, executeTool } from "../../lib/agentTools";
 import { setSandboxMode } from "../../lib/permissions";
 
 /**
- * Layer 4 Phase 3 updated integration flow:
+ * Layer 4 updated integration flow:
  *  - workspace mcp.json is DISCOVERED but NOT auto-spawned (untrusted);
  *  - explicit trust (enableServer) is required before spawn;
  *  - tools appear under canonical names mcp__<serverId>__<tool>;

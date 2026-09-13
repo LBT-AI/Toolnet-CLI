@@ -1,5 +1,5 @@
 /**
- * Phase 79 §20 — Structured provider/routing errors.
+ * — Structured provider/routing errors.
  *
  * Every failure the model layer raises carries the same fields so callers can
  * branch on `retryable` without string-matching a message:
@@ -156,7 +156,7 @@ const SECRET_PATTERNS: RegExp[] = [
  * key; this is the last line of defence for provider-supplied error text.
  */
 /**
- * Phase 84 §19 — dynamic resolved-secret set.
+ * — dynamic resolved-secret set.
  *
  * Pattern-based redaction cannot know user-typed API keys. Every credential
  * the CredentialResolver hands out (or the CredentialStore persists) is

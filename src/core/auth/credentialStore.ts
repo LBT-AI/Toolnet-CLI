@@ -1,11 +1,11 @@
 /**
- * Phase 84 §6 — THE provider CredentialStore.
+ * — THE provider CredentialStore.
  *
  * Exactly one. Holds ONLY typed secret payloads (`CredentialData`), keyed by
  * canonical profile id. Profile METADATA lives in the AuthProfileRegistry, not
  * here; secrets never flow the other way either.
  *
- * Hardening is inherited from the Phase 78 MCP auth store pattern:
+ * Hardening is inherited from the MCP auth store pattern:
  *  - file mode 0600 (re-asserted on every write, verified on load),
  *  - atomic temp-write + rename (no half-written JSON, no permissive temp),
  *  - serialized mutations (no lost updates under concurrency),
@@ -121,7 +121,7 @@ export class CredentialStore {
    * Mutation core. Persistence is fully synchronous (writeFileSync + rename),
    * so each call's read-modify-write is atomic within the single-threaded
    * runtime: two concurrent `set()` calls can never interleave or lose an
-   * update (§24 is proven by the concurrency tests, which fire overlapping
+ * update ( is proven by the concurrency tests, which fire overlapping
    * async invocations at these methods). Async read-modify-write sequences
    * (e.g. OAuth flows) must go through `mutate()` to stay serialized.
    */
@@ -165,7 +165,7 @@ export class CredentialStore {
       return this.credentials;
     }
 
-    // §25 — a store that exists but is broader than 0600 is repaired before
+ // — a store that exists but is broader than 0600 is repaired before
     // its contents are trusted (doctor also reports this).
     try {
       const stat = fs.statSync(this.path());
@@ -191,7 +191,7 @@ export class CredentialStore {
       }
       this.credentials = credentials;
     } catch (error) {
-      // §26 — quarantine, do not log contents, continue empty.
+ // — quarantine, do not log contents, continue empty.
       const quarantinedPath = `${this.path()}.corrupt-${Date.now()}`;
       let moved = false;
       try {
@@ -218,7 +218,7 @@ export class CredentialStore {
     const dir = path.dirname(this.path());
     ensureToolnetDir(dir);
 
-    // §6 — refuse to write through a symlink planted on the target path.
+ // — refuse to write through a symlink planted on the target path.
     try {
       const target = fs.lstatSync(this.path());
       if (target.isSymbolicLink()) {

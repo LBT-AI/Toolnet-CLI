@@ -1,5 +1,5 @@
 import { toolRegistry, type ToolDefinition as RegistryTool } from "./harness/toolRegistry";
-import type { ListItem } from "../tui/renderers/listPanelRenderer";
+import type { ListItem } from "./text";
 
 export interface ToolParameter {
   type: string;
@@ -43,7 +43,7 @@ export function classifyTool(name: string): string {
 /**
  * Project a canonical registry entry into the UI view model.
  *
- * The registry is the single definition source — including Phase 77 plugin and
+ * The registry is the single definition source — including plugin and
  * MCP tools, which register INTO it — so the catalog never grows a schema of
  * its own. Ownership decides the `source` label shown in `/tools`.
  */

@@ -1,12 +1,12 @@
 /**
- * Phase 83 §23 — Adapter protocol tests.
+ * — Adapter protocol tests.
  *
  * Fixtures mirror the REAL event schemas from source:
  *  - Codex: `codex-rs/exec/src/exec_events.rs` ThreadEvent JSONL;
  *  - OpenCode: `packages/opencode/src/cli/cmd/run.ts --format json`, plus the
  *    live `error` event observed against opencode 1.18.30.
  *
- * §26 defect hunt: exit-0 + structured failure, partial JSON lines, unknown
+ * defect hunt: exit-0 + structured failure, partial JSON lines, unknown
  * additive fields, prose where JSON was promised, stderr floods.
  */
 
@@ -17,7 +17,7 @@ import { namespacedSession, parseNamespacedSession } from "../runner";
 
 // ── Codex (exec_events.rs ThreadEvent JSONL) ────────────────────────────────
 
-describe("Phase 83 §10 — Codex parser", () => {
+describe(" — Codex parser", () => {
   const adapter = createCodexAdapter();
 
   it("parses thread.started and captures the thread id", () => {
@@ -87,7 +87,7 @@ describe("Phase 83 §10 — Codex parser", () => {
     expect(adapter.parseEvent('{"type":"turn.comp')).toEqual([]);
   });
 
-  it("§8 — exit 0 + structured failure stays FAILED (never trust exit code alone)", () => {
+ it(" — exit 0 + structured failure stays FAILED (never trust exit code alone)", () => {
     const verdict = adapter.normalizeResult({
       events: [{ kind: "failed", terminalFailure: true, text: "boom" }],
       exitCode: 0,
@@ -97,7 +97,7 @@ describe("Phase 83 §10 — Codex parser", () => {
     expect(verdict.status).toBe("FAILED");
   });
 
-  it("§8 — exit nonzero without structured failure is FAILED with protocol class", () => {
+ it(" — exit nonzero without structured failure is FAILED with protocol class", () => {
     const verdict = adapter.normalizeResult({
       events: [],
       exitCode: 1,
@@ -121,7 +121,7 @@ describe("Phase 83 §10 — Codex parser", () => {
 
 // ── OpenCode (run --format json) ────────────────────────────────────────────
 
-describe("Phase 83 §9 — OpenCode parser", () => {
+describe(" — OpenCode parser", () => {
   const adapter = createOpenCodeAdapter();
 
   it("parses the live error event (auth failure) as a terminal failure", () => {
@@ -184,9 +184,9 @@ describe("Phase 83 §9 — OpenCode parser", () => {
   });
 });
 
-// ── Conservative Claude / Hermes (§11) ──────────────────────────────────────
+// ── Conservative Claude / Hermes () ──────────────────────────────────────
 
-describe("Phase 83 §11 — conservative Claude/Hermes definitions", () => {
+describe(" — conservative Claude/Hermes definitions", () => {
   it("claude keeps unverified capabilities unknown and does not invent a JSON schema", () => {
     const adapter = createClaudeAdapter();
     expect(adapter.capabilities.structuredOutput).toBe("unknown");
@@ -206,7 +206,7 @@ describe("Phase 83 §11 — conservative Claude/Hermes definitions", () => {
 
 // ── Runner integration: line buffering + full normalization ─────────────────
 
-describe("Phase 83 §26 — runner-level protocol defect hunt", () => {
+describe(" — runner-level protocol defect hunt", () => {
   const codex = createCodexAdapter();
 
   it("parseAll skips malformed lines and still parses the good ones", () => {
@@ -231,9 +231,9 @@ describe("Phase 83 §26 — runner-level protocol defect hunt", () => {
   });
 });
 
-// ── §15 session namespace ───────────────────────────────────────────────────
+// ── session namespace ───────────────────────────────────────────────────
 
-describe("Phase 83 §15 — external session identity", () => {
+describe(" — external session identity", () => {
   it("namespaces and round-trips", () => {
     const sessionId = namespacedSession("opencode", "ses_1");
     expect(sessionId).toBe("external:opencode:ses_1");

@@ -1,5 +1,5 @@
 /**
- * Phase 79 §5 — Canonical ModelCatalog.
+ * — Canonical ModelCatalog.
  *
  * The single owner of model metadata. Providers never store model lists that
  * the runtime reads; discovery writes here, and the registry/router read here.

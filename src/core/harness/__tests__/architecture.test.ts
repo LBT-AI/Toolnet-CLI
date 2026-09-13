@@ -1,5 +1,5 @@
 /**
- * Phase 81 §22 — architecture guards.
+ * — architecture guards.
  *
  * The harness compatibility layer is POLICY. These static checks prove it:
  *
@@ -59,7 +59,7 @@ function countMatches(haystack: string, pattern: RegExp): number {
   return (haystack.match(global) ?? []).length;
 }
 
-describe("Phase 81 §22 — architecture guards", () => {
+describe(" — architecture guards", () => {
   it("keeps exactly one harness, engine, router, tool registry and gateway", () => {
     const wholeSrc = productionFiles("src").map(readSource).join("\n");
     expect(countMatches(wholeSrc, /class AgentHarness\b/)).toBe(1);

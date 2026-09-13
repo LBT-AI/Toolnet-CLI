@@ -1,5 +1,5 @@
 /**
- * Phase 83 §4 — THE ExternalHarnessRunner.
+ * — THE ExternalHarnessRunner.
  *
  * Exactly one. Owns the process lifecycle for external harness execution:
  * resolve adapter → detect → build invocation → spawn → consume output →
@@ -36,7 +36,7 @@ export interface ExternalRunRequest {
   signal?: AbortSignal;
   timeoutMs?: number;
   /**
-   * Phase 84 §18 — EXPLICIT credential injection.
+ * — EXPLICIT credential injection.
    *
    * The caller resolves an auth profile through the CredentialResolver and
    * passes the resulting `ENV_NAME -> secret` map here. Keys MUST be declared
@@ -169,7 +169,7 @@ export class ExternalHarnessRunner {
   }
 
   /**
-   * §18/§31 — credential injection is impossible unless the adapter declared
+ * — credential injection is impossible unless the adapter declared
    * the name, and is refused outright for harnesses with no declaration. This
    * is the single gate that keeps secrets out of unauthorized env names.
    */
@@ -196,7 +196,7 @@ export class ExternalHarnessRunner {
     return Object.keys(out).length > 0 ? out : undefined;
   }
 
-  /** §15 — resume must target the same harness it came from. */
+ /** — resume must target the same harness it came from. */
   assertSameHarness(definition: ExternalHarnessDefinition, resumeHarnessId: string): void {
     if (definition.id !== resumeHarnessId.trim().toLowerCase().replace(/^external:/, "")) {
       throw new HarnessProtocolError(
@@ -217,7 +217,7 @@ export class ExternalHarnessRunner {
   }
 }
 
-/** Namespaced external session identity (§15). */
+/** Namespaced external session identity (). */
 export function namespacedSession(harnessId: string, externalSessionId: string): string {
   return `external:${harnessId}:${externalSessionId}`;
 }

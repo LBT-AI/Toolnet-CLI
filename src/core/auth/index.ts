@@ -1,5 +1,5 @@
 /**
- * Phase 84 — canonical provider auth surface.
+ * canonical provider auth surface.
  *
  * One store, one profile registry, one resolver, one operations facade; this
  * barrel is the only import path production code needs.

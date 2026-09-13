@@ -1,5 +1,5 @@
 /**
- * Layer 4 — Phase 3: MCP Supply-Chain Hardening + Canonical User-Data Dir
+ * Layer 4 — : MCP Supply-Chain Hardening + Canonical User-Data Dir
  *
  * Suites:
  *  MCP ENV      — scrubbed child env (no host secrets), explicit config.env works

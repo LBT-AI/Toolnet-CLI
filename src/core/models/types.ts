@@ -1,5 +1,5 @@
 /**
- * Phase 79 — Canonical Provider / Model / Routing contracts.
+ * Canonical Provider / Model / Routing contracts.
  *
  * One schema for every cross-cutting type in the model layer. The AgentHarness,
  * the ModelAdapter, the CLI and the TUI all speak these shapes; provider
@@ -142,14 +142,14 @@ export interface ProviderHealth {
   latencyMs?: number;
   lastSuccessAt?: number;
   lastErrorAt?: number;
-  /** Phase 82 §4 — when the last provider-attributable failure was observed. */
+ /** — when the last provider-attributable failure was observed. */
   lastFailureAt?: number;
   /**
-   * Phase 82 §4 — successCount / (successCount + failureCount), i.e. availability
+ * — successCount / (successCount + failureCount), i.e. availability
    * over provider-attributable outcomes only. Undefined until enough samples.
    */
   availability?: number;
-  /** Phase 82 §4 — failure kinds observed, most recent last (bounded). */
+ /** — failure kinds observed, most recent last (bounded). */
   recentFailures?: string[];
   /** Human-readable, already-redacted. Never contains credentials. */
   lastError?: string;
@@ -224,7 +224,7 @@ export interface RoutingRequest {
   excludedProviders?: string[];
   policy?: RoutingPolicy;
   /**
-   * Phase 80 — named routing profile (`auto`, `quality`, `coding`, ...).
+ * named routing profile (`auto`, `quality`, `coding`, ...).
    * A profile supplies the scorer weights and default policy; an explicit
    * `policy` on the request still wins for ordering.
    */
@@ -234,7 +234,7 @@ export interface RoutingRequest {
   /** Upper bound on the estimated blended price (USD per 1M tokens). */
   costLimit?: number;
   /**
-   * Phase 80 — minimum acceptable context window. Models that DECLARE a
+ * minimum acceptable context window. Models that DECLARE a
    * smaller window are filtered; models that declare none are kept (unknown is
    * not proof of insufficiency).
    */
@@ -242,7 +242,7 @@ export interface RoutingRequest {
   timeout?: number;
   signal?: AbortSignal;
   /**
-   * Phase 82 §3 — hard provider/upstream constraints for this request
+ * — hard provider/upstream constraints for this request
    * (`allowProviders`, `denyProviders`, price caps, context floor,
    * `allowFallback`). Ordering is chosen by the configured provider policy.
    */
@@ -257,17 +257,17 @@ export interface ResolvedModel {
   routingReason: string;
   /** The full ordered candidate chain, resolved head first. */
   candidates: ModelDefinition[];
-  /** Phase 80 — the routing profile that produced this decision. */
+ /** the routing profile that produced this decision. */
   profile?: string;
-  /** Phase 80 — scorer total for the head candidate, when score-ranked. */
+ /** scorer total for the head candidate, when score-ranked. */
   score?: number;
   /**
-   * Phase 82 — the same chain expressed as provider ROUTES. `candidates` stays
+ * the same chain expressed as provider ROUTES. `candidates` stays
    * for backward compatibility (it is a model list); `routes` carries the
    * provider/upstream identity that bounded fallback actually needs.
    */
   routes?: import("./route").ProviderRoute[];
-  /** Phase 82 — the selected route (head of `routes`). */
+ /** the selected route (head of `routes`). */
   route?: import("./route").ProviderRoute;
 }
 

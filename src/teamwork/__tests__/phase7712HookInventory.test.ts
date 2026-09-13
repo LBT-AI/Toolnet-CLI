@@ -1,5 +1,5 @@
 /**
- * Phase 77.12 — dead-hook cleanup.
+ * dead-hook cleanup.
  *
  * Two guarantees live here:
  *
@@ -114,7 +114,7 @@ function call(id: string, name: string, args: Record<string, unknown>) {
 
 // ── 1. Static inventory guard ────────────────────────────────────────────────
 
-describe("Phase 77.12 — hook inventory guard", () => {
+describe("hook inventory guard", () => {
   const srcRoot = path.resolve(__dirname, "..", "..");
   // Manifest call-site paths are repo-rooted ("src/lib/...").
   const repoRoot = path.resolve(srcRoot, "..");
@@ -204,7 +204,7 @@ describe("Phase 77.12 — hook inventory guard", () => {
 
 // ── 2. session.start cardinality (real AgentEngine + scripted model) ─────────
 
-describe("Phase 77.12 — session.start fires exactly once per session", () => {
+describe("session.start fires exactly once per session", () => {
   function trackSessionStart(): void {
     hookRegistry.register({
       name: "session.start",

@@ -1,5 +1,5 @@
 /**
- * Phase 80 §3 — Canonical routing profiles.
+ * — Canonical routing profiles.
  *
  * A profile is a NAMED weighting over the deterministic ModelScorer. It never
  * names a concrete model: "coding" means "weight capability and eval evidence
@@ -7,7 +7,7 @@
  * data-driven instead of hard-coded to a leaderboard.
  *
  * `ranking` decides how a profile orders candidates:
- *   "policy" — reuse the Phase 79 policy comparator (priority/cheapest/fastest).
+ * "policy" — reuse the policy comparator (priority/cheapest/fastest).
  *              `auto` and `balanced` stay here so existing installs keep the
  *              exact ordering they had before this phase.
  *   "score"  — sort by ModelScorer total, with the same deterministic
@@ -83,14 +83,14 @@ const NEUTRAL_WEIGHTS: ScoreWeights = {
 };
 
 /**
- * The default profile is `auto`, which ranks exactly like Phase 79's `priority`
+ * The default profile is `auto`, which ranks exactly like 's `priority`
  * policy. Nothing about an existing install changes unless a profile is chosen.
  */
 export const ROUTING_PROFILES: Record<RoutingProfileName, RoutingProfileDefinition> = {
   auto: {
     id: "auto",
     label: "Auto",
-    description: "Phase 79 priority ordering; capability requirements still filter.",
+ description: " priority ordering; capability requirements still filter.",
     ranking: "policy",
     policy: "priority",
     weights: { ...NEUTRAL_WEIGHTS, capability: 1, health: 1 },
@@ -117,7 +117,7 @@ export const ROUTING_PROFILES: Record<RoutingProfileName, RoutingProfileDefiniti
   balanced: {
     id: "balanced",
     label: "Balanced",
-    description: "Capability, health and cost weighted evenly (Phase 79 ordering).",
+ description: "Capability, health and cost weighted evenly ( ordering).",
     ranking: "policy",
     policy: "priority",
     weights: { capability: 1, preference: 1, eval: 1, health: 1, latency: 1, cost: 1, context: 1 },

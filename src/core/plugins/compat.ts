@@ -1,5 +1,5 @@
 /**
- * Phase 77.5 — Plugin compatibility gate.
+ * Plugin compatibility gate.
  *
  * npm plugins may declare `compatibleToolNet: ">=1.2.0 <2"`. An incompatible
  * plugin is SKIPPED with a structured warning — it never aborts startup.

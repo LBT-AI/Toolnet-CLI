@@ -9,7 +9,7 @@ import {
 import { runMcpCli } from "./mcpCli";
 
 /**
- * Phase 78.34 — the TUI is a CONSUMER of the canonical MCP manager. These
+ * the TUI is a CONSUMER of the canonical MCP manager. These
  * subcommands delegate to the same headless CLI so the TUI never connects or
  * authenticates a transport itself.
  */
@@ -47,7 +47,7 @@ async function showMcpStatus(ctx: CommandContext) {
   const localMcpNames = Object.keys(localMcpConfig);
   const combinedLocal = Array.from(new Set([...localPlugins, ...localMcpNames]));
 
-  // Phase 3: per-server trust state in the status listing.
+ // : per-server trust state in the status listing.
   const trustLines: string[] = [];
   for (const server of getLocalMcpServers()) {
     const trust = mcpTrustManager.getTrustState(
@@ -205,7 +205,7 @@ async function removeMcp(args: string[], ctx: CommandContext) {
 }
 
 /**
- * Phase 3: explicit trust decision — the ONLY way a workspace-discovered
+ * : explicit trust decision — the ONLY way a workspace-discovered
  * server becomes spawnable. Trust is bound to the command fingerprint;
  * changing the command later re-requires approval.
  */
@@ -267,7 +267,7 @@ export const mcpCommand: Command = {
       case "remove":    await removeMcp(subArgs, ctx); break;
       case "enable":    await enableMcp(subArgs, ctx); break;
       case "disable":   await disableMcp(subArgs, ctx); break;
-      // Phase 78 — remote MCP + auth, delegated to the one manager via the CLI.
+ // remote MCP + auth, delegated to the one manager via the CLI.
       case "list":      await delegateToCli(["list", ...subArgs], ctx); break;
       case "show":      await delegateToCli(["status", ...subArgs], ctx); break;
       case "connect":   await delegateToCli(["connect", ...subArgs], ctx); break;

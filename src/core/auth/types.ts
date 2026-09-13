@@ -1,5 +1,5 @@
 /**
- * Phase 84 §3/§4 — Canonical provider auth types.
+ * — Canonical provider auth types.
  *
  * Two hard separations govern this module:
  *
@@ -10,17 +10,17 @@
  *  2. PROFILE vs CREDENTIAL — a profile is a stable NAMED IDENTITY; the
  *     credential under it can be replaced (re-login) without changing the id.
  *
- * A provider route (Phase 82) is NOT a credential and a credential is NOT a
+ * A provider route () is NOT a credential and a credential is NOT a
  * route: routes pick which upstream serves a model, profiles pick WHICH
  * account pays for it.
  *
  * This module is contract-only: no filesystem, no network, no provider calls.
  */
 
-/** §4 — supported credential types. Deliberately closed. */
+/** — supported credential types. Deliberately closed. */
 export type CredentialType = "env" | "api_key" | "oauth_exchanged_key";
 
-/** §3 — profile identity: `<providerId>/<profileName>`, both validated. */
+/** — profile identity: `<providerId>/<profileName>`, both validated. */
 export interface AuthProfile {
   id: string;
   providerId: string;
@@ -33,7 +33,7 @@ export interface AuthProfile {
   updatedAt: number;
 }
 
-/** §4 — typed credential payloads. Exactly one shape per `type`. */
+/** — typed credential payloads. Exactly one shape per `type`. */
 export type CredentialData =
   | EnvCredential
   | ApiKeyCredential
@@ -52,7 +52,7 @@ export interface ApiKeyCredential {
   secret: string;
 }
 
-/** Key obtained via OpenRouter OAuth PKCE code exchange (§11). */
+/** Key obtained via OpenRouter OAuth PKCE code exchange (). */
 export interface OAuthExchangedKeyCredential {
   type: "oauth_exchanged_key";
   secret: string;
@@ -63,7 +63,7 @@ export interface OAuthExchangedKeyCredential {
   obtainedAt: number;
 }
 
-/** §8 — where a resolved credential came from (status/diagnostics). */
+/** — where a resolved credential came from (status/diagnostics). */
 export type CredentialSource =
   | "explicit_profile"
   | "session_profile"
@@ -73,7 +73,7 @@ export type CredentialSource =
   | "config"
   | "unavailable";
 
-/** §8 — resolver output. The raw secret is present but must never be logged. */
+/** — resolver output. The raw secret is present but must never be logged. */
 export interface ResolvedCredential {
   providerId: string;
   /** Profile id when resolved through one; absent for env/legacy sources. */
@@ -102,7 +102,7 @@ export interface AuthProfileStatus {
   updatedAt?: number;
 }
 
-/** §22 — status vocabulary. Existence of a string is never "valid". */
+/** — status vocabulary. Existence of a string is never "valid". */
 export type AuthStatusKind =
   | "configured"
   | "environment"

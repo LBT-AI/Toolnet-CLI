@@ -1,5 +1,5 @@
 /**
- * Phase 75.2 / 75.14 — Canonical Agent Registry
+ * / 75.14 — Canonical Agent Registry
  *
  * ONE registry for every agent ToolNet knows about — built-in and user-defined.
  * There is deliberately no second "agent catalog": the `task` tool, the UI, the
@@ -56,14 +56,14 @@ const MUTATION_TOOLS = ["write_file", "edit_file", "replace_all", "apply_patch"]
 const PROCESS_TOOLS = ["shell", "bash", "run_command"] as const;
 
 /**
- * Built-in agents. Scope (per §75.3):
+ * Built-in agents. Scope (per ):
  *   general  → inherits the parent's scope (no allowlist)
  *   explore  → read + search + LSP + network fetch, never writes
  *   coder    → full workspace editing + shell
  *   tester   → read + shell (to run tests), never writes source
  *   reviewer → read + search + LSP only
  *   plan     → primary, read-only: cannot mutate or execute, and cannot launder
- *              a write through a subagent (see §75.5)
+ * a write through a subagent (see )
  */
 export const BUILTIN_AGENTS: AgentDefinition[] = [
   {

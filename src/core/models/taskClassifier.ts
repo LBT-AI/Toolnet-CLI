@@ -1,5 +1,5 @@
 /**
- * Phase 80 §2 — Deterministic TaskClassifier.
+ * — Deterministic TaskClassifier.
  *
  * NO LLM call. Classification is a pure function of the request's own signals
  * (prompt text, requested tools, attachments, context size, agent role, mode),

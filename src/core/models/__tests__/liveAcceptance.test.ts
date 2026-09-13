@@ -5,7 +5,7 @@ import { classifyLiveFailure, runLiveAcceptance } from "../liveAcceptance";
 
 const HAS_KEY = Boolean(process.env.OPENROUTER_API_KEY?.trim());
 
-describe("Phase 79 — live acceptance classification", () => {
+describe("live acceptance classification", () => {
   it("classifies a missing credential as an environment limitation", () => {
     expect(classifyLiveFailure(new Error("HTTP 401: unauthorized"))).toBe("ENVIRONMENT");
     expect(classifyLiveFailure(new Error("missing OPENROUTER_API_KEY"))).toBe("ENVIRONMENT");
@@ -22,7 +22,7 @@ describe("Phase 79 — live acceptance classification", () => {
   });
 });
 
-describe("Phase 79 — live acceptance without credentials", () => {
+describe("live acceptance without credentials", () => {
   it("reports skipped rather than a fake pass", async () => {
     const registry = new ProviderRegistry(new ModelCatalog());
     const catalog = new ModelCatalog();
@@ -42,7 +42,7 @@ describe("Phase 79 — live acceptance without credentials", () => {
  */
 const liveIt = HAS_KEY ? it : it.skip;
 
-describe("Phase 79 — live OpenRouter acceptance", () => {
+describe("live OpenRouter acceptance", () => {
   liveIt(
     "discovers models, normalizes capabilities and binds the ModelAdapter path",
     async () => {

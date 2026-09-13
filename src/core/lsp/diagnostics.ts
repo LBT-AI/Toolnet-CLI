@@ -1,5 +1,5 @@
 /**
- * Phase 74 — Diagnostics normalization.
+ * Diagnostics normalization.
  *
  * Diagnostics are a *supplementary* feedback layer: they never replace a
  * compiler, a typecheck or a test run. This module only turns LSP diagnostics

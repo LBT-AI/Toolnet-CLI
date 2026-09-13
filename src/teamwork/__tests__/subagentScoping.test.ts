@@ -1,5 +1,5 @@
 /**
- * Phase 75 — Scoped subagent unit tests.
+ * Scoped subagent unit tests.
  *
  * Covers the pieces that must hold regardless of model quality:
  *   - the canonical AgentRegistry (built-in + custom config)

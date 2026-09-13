@@ -1,12 +1,12 @@
 /**
- * Phase 78.32/78.33 — `toolnet mcp ...` headless CLI.
+ * /78.33 — `toolnet mcp ...` headless CLI.
  *
- * The core API comes first (Phase 78.32): this module only formats output and
+ * The core API comes first (): this module only formats output and
  * sequences calls on the ONE `McpManager`. It never constructs a transport, an
  * OAuth provider, or a second registry, and it never prints a token or header
  * value.
  *
- * Manual-code fallback (Phase 78.12): `auth <name> --no-wait` prints the
+ * Manual-code fallback (): `auth <name> --no-wait` prints the
  * authorization URL and exits, so a headless/VPS operator can complete the flow
  * on another machine; `auth <name> --code <code> --state <state>` finishes it.
  */

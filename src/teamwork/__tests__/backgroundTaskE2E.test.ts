@@ -1,12 +1,12 @@
 /**
- * Phase 76A — Background task E2E (deterministic).
+ * Background task E2E (deterministic).
  *
  * Drives the REAL engine + registry + permission derivation + job service
  * against a LANE-AWARE scripted model, so a parent and its background child can
  * both consume scripted responses concurrently without the test depending on
  * how they interleave.
  *
- * Scenarios (§76A.11–76A.13):
+ * Scenarios (–76A.13):
  *   A. background task returns immediately; the parent keeps working; the
  *      result is injected as a notification on the next turn (no polling).
  *   B. cancelling a background job kills the running shell and the child.
@@ -113,7 +113,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ── Suite ────────────────────────────────────────────────────────────────────
 
-describe.serial("Phase 76A — background task E2E", () => {
+describe.serial("background task E2E", () => {
   const originalFetch = globalThis.fetch;
   const SESSION = "bg-e2e-session";
   let workspace: string;

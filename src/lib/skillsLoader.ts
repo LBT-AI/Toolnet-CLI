@@ -36,7 +36,7 @@ export function clearSkillsMemoryCache(): void {
 }
 
 function getToolnetCliDir(): string {
-  // Phase 3: canonical home module (DATA_DIR still honored for tests).
+ // : canonical home module (DATA_DIR still honored for tests).
   const dir = process.env.DATA_DIR || getToolnetHome();
   return dir;
 }
@@ -258,7 +258,7 @@ export function loadWorkspaceSkills(baseDir: string = process.cwd()): SkillInfo[
 
 /**
  * Loads Global local skills: <canonical-home>/cache/skills/{name}/SKILL.md
- * (Phase 3: legacy ~/.toolnet-cli/skills & ~/.toolnet/skills migrate into the
+ * (: legacy ~/.toolnet-cli/skills & ~/.toolnet/skills migrate into the
  * canonical cache dir; legacy dirs kept as read-only discovery fallbacks.)
  */
 export function loadGlobalLocalSkills(): SkillInfo[] {

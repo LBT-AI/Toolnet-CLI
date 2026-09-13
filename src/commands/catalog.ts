@@ -1,5 +1,5 @@
 /**
- * Phase 80 §8 — `/catalog`, the read-only Model Catalog view in the TUI.
+ * — `/catalog`, the read-only Model Catalog view in the TUI.
  *
  * The TUI is a CONSUMER here: it reads the canonical ModelCatalog,
  * ProviderRegistry and ProviderHealth through the shared `buildCatalogRows`

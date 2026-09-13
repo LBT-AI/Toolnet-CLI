@@ -1,5 +1,5 @@
 /**
- * Phase 81 §10 — context policy.
+ * — context policy.
  *
  * A profile chooses how aggressively history is compressed. It does NOT get its
  * own token estimator: the options produced here are handed to the existing

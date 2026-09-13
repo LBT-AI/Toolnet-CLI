@@ -1,5 +1,5 @@
 /**
- * Phase 78.3/78.5/78.6/78.18/78.19/78.37 — Remote MCP transports.
+ * /78.5/78.6/78.18/78.19/78.37 — Remote MCP transports.
  *
  * This is the ONLY module that constructs remote MCP transports. It is not a
  * second runtime: it hands a connected `Client` back to the one `McpManager`,
@@ -35,14 +35,14 @@ export interface RemoteConnectOptions {
   url: string;
   /** Connect + initialize timeout. */
   timeoutMs: number;
-  /** Already-merged, credential-safe headers (Phase 78.17). */
+ /** Already-merged, credential-safe headers (). */
   headers: Record<string, string>;
   authProvider?: OAuthClientProvider;
   fetchFn: FetchLike;
   signal?: AbortSignal;
   /** Called when the server announces `notifications/tools/list_changed`. */
   onToolsChanged?: () => void;
-  /** Called when the transport drops (Phase 78.6). */
+ /** Called when the transport drops (). */
   onClose?: () => void;
 }
 

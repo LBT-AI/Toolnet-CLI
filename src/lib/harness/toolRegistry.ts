@@ -1,5 +1,5 @@
 /**
- * Tool Registry — §4  Single source of truth for every tool in ToolNet.
+ * Tool Registry — Single source of truth for every tool in ToolNet.
  *
  * Every consumer — provider schema, TUI overlay, harness loop, security
  * classifier — reads from this registry. There is no second definition.
@@ -557,7 +557,7 @@ Alias for shell. Use for tests, builds, typechecks, linting and project inspecti
     },
   }),
   tool({
-    // Phase 75.7 — legacy spawn entry. `task` is the canonical, model-visible
+ // legacy spawn entry. `task` is the canonical, model-visible
     // way to delegate; this name stays resolvable for back-compat (old
     // sessions, structured protocols) but is never advertised to the model, so
     // there is exactly ONE subagent capability in the schema set.
@@ -592,16 +592,16 @@ Alias for shell. Use for tests, builds, typechecks, linting and project inspecti
     },
   }),
 
-  // Phase 75.7 — canonical subagent delegation. Registered like every other
+ // canonical subagent delegation. Registered like every other
   // tool, so it flows through permission → execute → verify unchanged.
   taskToolDefinition,
 
-  // Phase 76B.11 — canonical teamwork DAG submission. The tool only submits a
+ // canonical teamwork DAG submission. The tool only submits a
   // plan; execution stays in the shared scheduler.
   teamworkToolDefinition,
 ];
 
-// ── Dynamic registrations (Phase 77: plugins + MCP) ──────────────────────────
+// ── Dynamic registrations (: plugins + MCP) ──────────────────────────
 //
 // External tool sources register HERE, not into a parallel catalog. Each entry
 // records its `owner` ("plugin:<id>" / "mcp:<serverId>") so a plugin or server

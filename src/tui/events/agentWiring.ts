@@ -11,7 +11,7 @@ import { supportsReasoning } from "../../lib/reasoning";
 import { securityEngine } from "../../lib/security/securityEngine";
 import { toolRegistry } from "../../lib/harness/toolRegistry";
 import { agentEngine } from "../../core/agent/agentEngine";
-import { requestApprovalModal } from "../permissions/permissionModal";
+import { requestApprovalModal, requestConfirmation } from "../permissions/permissionModal";
 import { dispatchCommand } from "../../commands";
 import { loadSession, formatExitMessage } from "../../lib/sessionPersistence";
 import { A } from "../../term";
@@ -21,7 +21,7 @@ import { pinToTail } from "../viewport";
 import { getActiveProvider, getActiveDefaultModel } from "../../providers";
 import { statusManager } from "../statusService";
 import { messageQueue } from "../../lib/messageQueue";
-import { providerPicker } from "../../components/ProviderPicker";
+import { providerPicker } from "../providerPicker";
 import { assertPrimarySystemMessageInvariant } from "../../lib/context";
 import { getToolById } from "../../lib/toolsCatalog";
 import { normalizeSectionId } from "../../lib/harnessCatalog";
@@ -34,7 +34,7 @@ async function handleSavePlan(parsedArgs: any): Promise<string> {
   if (!fs.existsSync(toolnetDir)) fs.mkdirSync(toolnetDir);
   const planPath = path.join(toolnetDir, "plan.md");
 
-  // Layer 4 Phase 1: save_plan is a model-callable MUTATING tool — its file
+ // Layer 4 : save_plan is a model-callable MUTATING tool — its file
   // write goes through the security-evaluated toolWrite (workspace invariant,
   // history snapshot) instead of a raw fs.writeFileSync bypass.
   const { toolWrite } = await import("../../lib/codingAgent");
@@ -43,10 +43,7 @@ async function handleSavePlan(parsedArgs: any): Promise<string> {
     return JSON.stringify({ stdout: "", stderr: writeRes.error || "Failed to save plan", exitCode: 1 });
   }
 
-  const confirmed = await new Promise<boolean>((resolve) => {
-    tuiState.pendingConfirmation = { prompt: "Plan generated. Approve and switch to Build mode?", resolve };
-    tuiState.requestRender();
-  });
+  const confirmed = await requestConfirmation("Plan generated. Approve and switch to Build mode?");
   if (confirmed) {
     tuiState.agentMode = "Build";
     return JSON.stringify({ stdout: "Plan saved to .toolnet/plan.md. Switched to Build mode.", exitCode: 0 });
@@ -63,7 +60,7 @@ async function handleSavePlan(parsedArgs: any): Promise<string> {
  * second, divergent schema set.
  */
 function buildToolsForMode(mode: "Build" | "Plan"): any[] | undefined {
-  // Phase 77: plugin and MCP tools are registered INTO the canonical registry,
+ // : plugin and MCP tools are registered INTO the canonical registry,
   // so `schemas()` already contains them. The TUI must not concatenate a second
   // tool source — doing so previously exposed plugin tools that no dispatcher
   // could execute.
@@ -141,7 +138,7 @@ export async function sendMessage(text: string): Promise<void> {
 
 
   try {
-    // ── Phase 73.6 — Shared Agent Engine ──────────────────────────────────
+ // ── Shared Agent Engine ──────────────────────────────────
     // The TUI no longer holds an agent loop. It builds the transcript, calls
     // the ONE engine, and renders the normalized AgentEvent stream: no
     // tool_calls parsing, no direct tool execution, no provider-specific code.

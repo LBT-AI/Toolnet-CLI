@@ -6,7 +6,7 @@ afterEach(() => {
   resetRoutingConfig();
 });
 
-describe("Phase 82 §14 — deterministic routing eval", () => {
+describe(" — deterministic routing eval", () => {
   it("has a non-trivial case set with unique ids", () => {
     expect(ROUTING_EVAL_CASES.length).toBeGreaterThanOrEqual(18);
     const ids = ROUTING_EVAL_CASES.map((entry) => entry.id);

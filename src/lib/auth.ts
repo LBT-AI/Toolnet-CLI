@@ -3,7 +3,7 @@ import path from "node:path";
 import { getActiveBaseUrl } from "../providers";
 import { getToolnetAuthTokenPath } from "./toolnetHome";
 
-// Phase 3: canonical home — legacy ~/.toolnet/auth_token migrated by toolnetHome.
+// : canonical home — legacy ~/.toolnet/auth_token migrated by toolnetHome.
 const TOKEN_FILE = getToolnetAuthTokenPath();
 
 export function getStoredToken(): string | null {

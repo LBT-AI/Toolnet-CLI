@@ -1,5 +1,5 @@
 /**
- * Phase 84 §24/§25/§26 — CredentialStore hardening tests.
+ * — CredentialStore hardening tests.
  *
  * These run against the REAL filesystem in a temp directory: permissions are
  * asserted with `stat`, concurrency is exercised with genuinely overlapping

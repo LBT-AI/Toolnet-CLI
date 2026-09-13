@@ -1,5 +1,5 @@
 /**
- * Phase 79 §22 — Live acceptance probe.
+ * — Live acceptance probe.
  *
  * Proves the real path when credentials exist, and reports honestly when they
  * do not. It never fakes a green result: a missing key is an ENVIRONMENT
@@ -40,7 +40,7 @@ export interface LiveAcceptanceReport {
   capabilities?: ModelCapabilities;
   routingReason?: string;
   adapterBound?: boolean;
-  /** Phase 82 §15 — provider candidates + dry decision evidence, secret-free. */
+ /** — provider candidates + dry decision evidence, secret-free. */
   providerCandidates?: number;
   fallbackChain?: number;
   dryDecision?: string[];
@@ -136,7 +136,7 @@ export async function runLiveAcceptance(options: LiveAcceptanceOptions = {}): Pr
     const adapterBound = instance instanceof OpenRouterProvider && Boolean(new ModelAdapter(instance).providerId);
     steps.push(`adapter bound (${adapterBound ? "yes" : "no"})`);
 
-    // 6 — Phase 82 §15: dry provider-routing decision. No provider call, no
+ // 6 — : dry provider-routing decision. No provider call, no
     // health mutation, no billing — `explain` is read-only by contract.
     const decision = router.explain({ model: formatModelRef("openrouter", sample.apiModelId) });
     steps.push(

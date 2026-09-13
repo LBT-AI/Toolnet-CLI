@@ -4,7 +4,7 @@ import { InvalidModelReferenceError } from "../errors";
 
 const KNOWN = ["openrouter", "toolnet", "openai"];
 
-describe("Phase 79 — model reference parser", () => {
+describe("model reference parser", () => {
   it("parses provider/model without splitting on the model's own slashes", () => {
     const ref = parseModelRef("openrouter/anthropic/claude-sonnet", { knownProviders: KNOWN });
     expect(ref.providerId).toBe("openrouter");

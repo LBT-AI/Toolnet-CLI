@@ -111,7 +111,7 @@ export function validateAndLoadImage(filePath: string, cwd = process.cwd(), maxS
     };
   }
 
-  // Layer 4 Phase 1: sandbox boundary via SecurityEngine (single policy source).
+ // Layer 4 : sandbox boundary via SecurityEngine (single policy source).
   // Image reading is a model-driven file read — it must respect the same
   // workspace policy as the read_file tool.
   const sandboxMode = getSandboxMode();

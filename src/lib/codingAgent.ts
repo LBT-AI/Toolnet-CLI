@@ -108,7 +108,7 @@ export function initWorkspace(customPath?: string, customRoots?: string[]) {
 }
 
 /**
- * DEPRECATED (Layer 4 Phase 1): kept for API compatibility only. Setting this
+ * DEPRECATED (Layer 4 ): kept for API compatibility only. Setting this
  * flag NO LONGER bypasses any filesystem invariant — workspace boundary checks
  * run regardless of its value (they were already keyed on sandboxMode).
  */
@@ -117,7 +117,7 @@ export function setBypassPolicy(enabled: boolean) {
 }
 
 /**
- * DEPRECATED (Layer 4 Phase 1): `bypassPolicy` is no longer a second security
+ * DEPRECATED (Layer 4 ): `bypassPolicy` is no longer a second security
  * state machine. File tool invariants (realpath + workspace boundary) are now
  * gated ONLY by sandboxMode via SecurityEngine. This flag purely reflects the
  * active sandbox mode for UI display and can never widen filesystem access.
@@ -628,7 +628,7 @@ export async function toolBash(command: string, timeoutMs = 30000, execCtx?: She
   const { getSandboxMode } = require("./permissions");
   const { classifyShellCommand } = require("./security/commandClassifier");
 
-  // ── ABSOLUTE VETO FLOOR (Layer 4 Phase 1) ────────────────────────────────
+ // ── ABSOLUTE VETO FLOOR (Layer 4 ) ────────────────────────────────
   // CRITICAL_DENY commands are permanently blocked at the executor level.
   // This is NOT an approval gate: no sandbox mode, session trust, or
   // userApproved flag can override it. The SecurityEngine (via ToolGateway)

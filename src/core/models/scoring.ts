@@ -1,5 +1,5 @@
 /**
- * Phase 80 §4/§5 — Deterministic ModelScorer.
+ * — Deterministic ModelScorer.
  *
  * Every weight lives in the RoutingProfile; there are no magic numbers scattered
  * in the comparator. Each component is normalized to 0..1 and combined as a

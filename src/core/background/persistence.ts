@@ -1,5 +1,5 @@
 /**
- * Phase 76A.10 — Background Job Persistence
+ * Background Job Persistence
  *
  * Jobs are persisted as one snapshot file so a restarted process never reports
  * a stale `running` job: on load, anything that was pending, queued or running

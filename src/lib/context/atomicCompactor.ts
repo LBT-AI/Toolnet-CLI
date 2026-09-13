@@ -66,7 +66,7 @@ function groupIntoAtomicTurns(messages: ContextMessage[]): {
 }
 
 /**
- * Layer 4 — Phase 4: compactMessagesAtomically
+ * Layer 4 — : compactMessagesAtomically
  *
  * Atomicity contract:
  *   - Every assistant tool_call in the input MUST be followed by its tool

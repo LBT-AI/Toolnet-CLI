@@ -1,5 +1,5 @@
 /**
- * Agent Loop — §1  Lifecycle wrapper around AgentHarness.
+ * Agent Loop — Lifecycle wrapper around AgentHarness.
  *
  * The AgentHarness owns the execution logic (executeLoop). AgentLoop is the
  * lightweight lifecycle manager: start/stop, event framing, abort propagation.

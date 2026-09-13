@@ -1,5 +1,5 @@
 /**
- * Phase 84 §8 — THE CredentialResolver.
+ * — THE CredentialResolver.
  *
  * One canonical path from "who is calling?" to "which secret do we use?".
  * Resolution is deterministic and documented; the ORDER is the contract:
@@ -15,10 +15,10 @@
  *
  *  - **No hidden fallback after an explicit profile failure.** If the caller
  *    named a profile and it is unknown or has no credential, that is an ERROR —
- *    we never quietly fall through to `OPENROUTER_API_KEY` (§8/§33).
+ * we never quietly fall through to `OPENROUTER_API_KEY` ().
  *  - **Exactly one redaction registration point.** Every secret this resolver
  *    hands out is registered with the shared redactor, so provider errors,
- *    fetch failures, logs and TUI output cannot echo it (§19).
+ * fetch failures, logs and TUI output cannot echo it ().
  *
  * The resolver is deliberately free of provider-registry imports: it reads
  * config + env + stores only, which keeps `providers/registry.ts` able to

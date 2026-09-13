@@ -1,19 +1,19 @@
 /**
- * Phase 77.13/77.14 — Canonical MCP manager types.
- * Phase 78.4/78.31 — Remote status machine + extension diagnostics.
+ * /77.14 — Canonical MCP manager types.
+ * /78.31 — Remote status machine + extension diagnostics.
  */
 
 import type { McpConfigSourceKind } from "../../lib/mcpRunner";
 import type { NormalizedMcpTool } from "./schema";
 
 /**
- * Canonical status machine (Phase 78.4).
+ * Canonical status machine ().
  *
  * `connected: boolean` is deliberately NOT the source of truth: a remote server
  * can be reachable but unauthenticated (`needs_auth`), registered-but-unknown
  * (`needs_client_registration`), or simply not attempted (`disabled`). The
  * legacy stdio states (`untrusted`, `not-installed`, `unavailable`) are kept so
- * the Phase 77 surface stays source-compatible.
+ * the surface stays source-compatible.
  */
 export type McpServerStatus =
   | "connected"
@@ -98,7 +98,7 @@ export interface DiscoveredMcpTool {
   warnings: string[];
 }
 
-// ── Phase 78.31 — extension diagnostics ─────────────────────────────────────
+// ── extension diagnostics ─────────────────────────────────────
 
 /**
  * Canonical diagnostic model surfaced by `toolnet mcp status` / the TUI.
@@ -114,7 +114,7 @@ export interface ExtensionStatus {
   authenticated?: boolean;
 }
 
-/** Structured MCP lifecycle event emitted by the manager (Phase 78.6). */
+/** Structured MCP lifecycle event emitted by the manager (). */
 export interface McpServerEvent {
   type: "tools-changed" | "status-changed";
   serverId: string;

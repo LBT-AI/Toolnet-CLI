@@ -1,5 +1,5 @@
 /**
- * Phase 77.6 — Canonical Hook Contract
+ * Canonical Hook Contract
  *
  * A hook is a deterministic observation/decision point in the agent lifecycle.
  * Plugins register hooks through the PluginContext; the runtime fires them from

@@ -1,5 +1,5 @@
 /**
- * Phase 73 — Core layer public surface.
+ * Core layer public surface.
  *
  * Everything outside `src/core` imports from here (or from the specific
  * module) rather than reaching into internals. The core owns contracts, the

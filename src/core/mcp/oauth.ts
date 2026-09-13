@@ -1,5 +1,5 @@
 /**
- * Phase 78.9/78.10/78.13/78.14/78.15 — OAuth lifecycle for remote MCP.
+ * /78.10/78.13/78.14/78.15 — OAuth lifecycle for remote MCP.
  *
  * The heavy protocol work (RFC 9728 resource discovery, RFC 8414 authorization
  * server metadata, RFC 7591 dynamic client registration, PKCE, token exchange
@@ -128,7 +128,7 @@ export class McpOAuthProvider {
     if (stored) {
       return { client_id: stored.clientId, client_secret: stored.clientSecret };
     }
-    // Static config (Phase 78.14) is a legitimate pre-registration.
+ // Static config () is a legitimate pre-registration.
     if (this.client?.clientId) {
       return { client_id: this.client.clientId, client_secret: this.client.clientSecret };
     }
@@ -253,7 +253,7 @@ export type BeginAuthResult =
   | { status: "NEEDS_CLIENT_REGISTRATION"; reason: string };
 
 /**
- * Phase 78.9/78.13.
+ * /78.13.
  *
  * Discovery runs first so `needs_client_registration` is a DETERMINISTIC answer
  * (no registration endpoint, no static client, no stored client) rather than an
@@ -310,7 +310,7 @@ export interface CompleteAuthOptions extends BeginAuthOptions {
 }
 
 /**
- * Phase 78.10/78.23.
+ * /78.23.
  *
  * The `state` check happens BEFORE the code is exchanged. A mismatch throws and
  * persists nothing: no token is saved and the caller must not connect.
@@ -358,7 +358,7 @@ export interface RefreshOptions {
 export type RefreshOutcome = "fresh" | "refreshed" | "no-refresh-token" | "refresh-failed";
 
 /**
- * Phase 78.15 — bounded refresh. Exactly ONE attempt; a failure clears the
+ * bounded refresh. Exactly ONE attempt; a failure clears the
  * access token so the caller transitions to `needs_auth` instead of looping.
  */
 export async function refreshAccessTokenIfNeeded(options: RefreshOptions): Promise<RefreshOutcome> {

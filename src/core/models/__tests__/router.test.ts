@@ -26,7 +26,7 @@ function registration(overrides: Partial<ProviderRegistration> = {}): ProviderRe
   };
 }
 
-describe("Phase 79 — ModelRouter", () => {
+describe("ModelRouter", () => {
   let catalog: ModelCatalog;
   let registry: ProviderRegistry;
   let router: ModelRouter;

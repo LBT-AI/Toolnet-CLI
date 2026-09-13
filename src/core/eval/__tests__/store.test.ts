@@ -63,7 +63,7 @@ afterEach(() => {
   } catch {}
 });
 
-describe("Phase 80 — EvalStore", () => {
+describe("EvalStore", () => {
   it("appends and reads back records in order", () => {
     const first = record({ runId: "run-1" });
     const second = record({ runId: "run-2" });

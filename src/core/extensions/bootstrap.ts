@@ -1,5 +1,5 @@
 /**
- * Phase 77 — Extension bootstrap.
+ * Extension bootstrap.
  *
  * Front-ends call this ONCE at startup. It is the only place that turns
  * configuration on disk into registered capabilities, which keeps the invariant

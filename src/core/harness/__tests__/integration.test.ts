@@ -1,12 +1,12 @@
 /**
- * Phase 81 §20/§23/§24 — controlled harness experiment, security invariants
+ * — controlled harness experiment, security invariants
  * across profiles, and bounded loop / failure behaviour.
  *
  * Everything here runs the REAL `AgentHarness` against a stubbed provider, so
  * the thing under test is the production loop with a different policy contract —
  * not a stand-in for it.
  *
- * The controlled experiment is deliberately structured the way §20 asks:
+ * The controlled experiment is deliberately structured the way asks:
  *
  *   same fixture + same model responses + same tools + same permissions
  *   + same task  ×  different harness profile
@@ -149,9 +149,9 @@ function makeHarness(harness?: string, sandboxMode = "full-access") {
   });
 }
 
-// ── §20 controlled experiment ────────────────────────────────────────────────
+// ── controlled experiment ────────────────────────────────────────────────
 
-describe("Phase 81 §20 — controlled experiment: same model, different harness", () => {
+describe(" — controlled experiment: same model, different harness", () => {
   const writeResponses: MockResponse[] = [
     callTool("c1", "write_file", { path: "out.txt", content: "hello\n" }),
     { content: "Wrote out.txt." },
@@ -236,9 +236,9 @@ describe("Phase 81 §20 — controlled experiment: same model, different harness
   });
 });
 
-// ── §23 security invariants across profiles ──────────────────────────────────
+// ── security invariants across profiles ──────────────────────────────────
 
-describe("Phase 81 §23 — a harness profile can never change a security verdict", () => {
+describe(" — a harness profile can never change a security verdict", () => {
   const allProfileIds = ["default", "minimal", "coding", "tool-heavy", "reasoning"];
 
   const FIXTURE_ID = "test-permissive";
@@ -369,9 +369,9 @@ describe("Phase 81 §23 — a harness profile can never change a security verdic
   });
 });
 
-// ── §24 bounded loop / failure behaviour ─────────────────────────────────────
+// ── bounded loop / failure behaviour ─────────────────────────────────────
 
-describe("Phase 81 §24 — loops terminate deterministically", () => {
+describe(" — loops terminate deterministically", () => {
   test("the repeat bound is policy-driven: default aborts at 3, tool-heavy at 2", async () => {
     const repeated = [
       callTool("a", "shell", { command: "bun test" }),
@@ -483,9 +483,9 @@ describe("Phase 81 §24 — loops terminate deterministically", () => {
   });
 });
 
-// ── §11 completion contract against the real loop ────────────────────────────
+// ── completion contract against the real loop ────────────────────────────
 
-describe("Phase 81 §11 — fake success is not SUCCESS", () => {
+describe(" — fake success is not SUCCESS", () => {
   test("a prose-only answer to a mutation task never reports SUCCESS", async () => {
     stubModel([{ content: "Done! I created the file." }]);
     const result = await makeHarness("coding").run("create hello.py", { maxTurns: 3 });

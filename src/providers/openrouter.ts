@@ -1,5 +1,5 @@
 /**
- * Phase 79 §7 — OpenRouter provider adapter.
+ * — OpenRouter provider adapter.
  *
  * Built ON the existing OpenAI-compatible abstraction (OpenRouter's chat
  * surface is OpenAI-shaped), adding only what is genuinely OpenRouter-specific:

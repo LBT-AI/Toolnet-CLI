@@ -245,7 +245,7 @@ export async function generateTaskGraph(
   }
 
   try {
-    // Phase 73.3 — the planner is a model caller too: it goes through the SAME
+ // the planner is a model caller too: it goes through the SAME
     // ModelAdapter normalization path as the agent loop, never raw provider.chat.
     const { ModelAdapter } = await import("../lib/harness/modelAdapter");
     const response = await new ModelAdapter(provider).complete({

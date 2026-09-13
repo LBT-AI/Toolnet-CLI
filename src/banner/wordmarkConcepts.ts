@@ -1,6 +1,6 @@
 import { renderB2Banner, b2BannerMetrics, B2_TIMELINE } from "./b2Banner";
 import { isNoColor } from "../term";
-import { visibleWidth } from "../tui/layout";
+import { visibleWidth } from "../lib/text";
 
 export type WordmarkConceptId = "B2";
 

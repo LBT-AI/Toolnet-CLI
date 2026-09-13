@@ -1,5 +1,5 @@
 /**
- * Phase 84 §20 — `toolnet auth`.
+ * — `toolnet auth`.
  *
  * Formatting + prompts only. Every read and write goes through
  * `authOperations` / `AuthProfileRegistry` / `CredentialResolver`, so the CLI
@@ -279,7 +279,7 @@ async function cmdLogin(args: string[], io: AuthCliIO): Promise<number> {
 
   io.out(`Authenticated. Profile '${result.profileId}' is now active.`);
   io.out("The credential was stored with mode 0600 and is never printed.");
-  // §15 — the running session keeps its identity: pin explicitly to switch it.
+ // — the running session keeps its identity: pin explicitly to switch it.
   if (result.activated) {
     try {
       const { providerId: provider } = parseProfileId(result.profileId);
@@ -301,7 +301,7 @@ async function cmdAdd(args: string[], io: AuthCliIO): Promise<number> {
   const profileName = flagValue(args, "--profile") ?? "default";
   const envFlag = flagValue(args, "--env");
 
-  // §13 — environment-backed profile: no secret is stored at all.
+ // — environment-backed profile: no secret is stored at all.
   if (envFlag !== undefined || hasFlag(args, "--env-profile")) {
     const envName = envFlag ?? providerCredentialEnv(providerId);
     if (!envName) {

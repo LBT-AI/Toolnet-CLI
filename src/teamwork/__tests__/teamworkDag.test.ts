@@ -1,5 +1,5 @@
 /**
- * Phase 76B — Teamwork DAG unit + scheduler semantics.
+ * Teamwork DAG unit + scheduler semantics.
  *
  * The scheduler is driven with a FAKE SubagentManager so ordering, conditions,
  * retries and timeouts are deterministic and independent of any model. A real
@@ -89,7 +89,7 @@ const runOptions = {
 
 // ── Validation ───────────────────────────────────────────────────────────────
 
-describe("Phase 76B — DAG validation", () => {
+describe("DAG validation", () => {
   const agents = [
     { id: "general", mode: "all" },
     { id: "explore", mode: "subagent" },
@@ -176,7 +176,7 @@ describe("Phase 76B — DAG validation", () => {
 
 // ── Scheduling semantics ─────────────────────────────────────────────────────
 
-describe("Phase 76B — DAG scheduling", () => {
+describe("DAG scheduling", () => {
   test("runs a dependency before its dependent and forwards its output", async () => {
     const { engine, state } = engineFor({
       handler: (req) => completed(`${firstTag(req.prompt)} result`),

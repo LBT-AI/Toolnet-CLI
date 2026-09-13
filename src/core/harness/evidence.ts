@@ -1,5 +1,5 @@
 /**
- * Phase 81 §12 — execution evidence.
+ * — execution evidence.
  *
  * Evidence is DERIVED from the harness event stream, not from a parallel
  * bookkeeping system: the collector is just an observer on the existing bus, so
@@ -89,7 +89,7 @@ export interface ExecutionEvidence {
   verificationResults: number;
   /** Turns observed from `agent:thinking` boundaries. */
   turns: number;
-  // Phase 87 — verification pipeline
+ // verification pipeline
   changedFiles: string[];
   verifiedMutations: number;
   diagnosticsBefore: number;
@@ -251,7 +251,7 @@ export class ExecutionEvidenceCollector {
       }
     }
     
-    // Also track Phase 87 verification results
+ // Also track verification results
     if (isMutationTool(name) && !isFailure) {
       this.evidence.verifiedMutations += 1;
     }

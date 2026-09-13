@@ -1,5 +1,5 @@
 /**
- * Phase 81 §16/§17 — harness resolution.
+ * — harness resolution.
  *
  * Harness selection and model routing are INDEPENDENT. This module decides only
  * which policy contract runs; the ModelRouter separately decides which model

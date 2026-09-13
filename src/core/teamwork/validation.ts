@@ -1,5 +1,5 @@
 /**
- * Phase 76B.2 — DAG Validation
+ * DAG Validation
  *
  * A malformed plan must fail BEFORE any node executes. Validation is pure (no
  * registry lookups beyond the passed catalog), so the same rules run in the

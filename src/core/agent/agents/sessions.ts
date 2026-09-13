@@ -1,5 +1,5 @@
 /**
- * Phase 75.6 / 75.9 — Child Session Store
+ * / 75.9 — Child Session Store
  *
  * Every subagent run gets its own session. The child keeps its own transcript
  * so that (a) intermediate tokens never pollute the parent conversation and
@@ -63,7 +63,7 @@ export class SubagentSessionStore {
   /**
    * Reserve a child session id without creating the session yet.
    *
-   * Phase 76A.3 — a background job must know its child session id up front so
+ * a background job must know its child session id up front so
    * the job and the session can be correlated from the moment the job starts.
    */
   allocateId(parentSessionId: string, agentId: string): string {

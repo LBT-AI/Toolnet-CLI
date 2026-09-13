@@ -1,5 +1,5 @@
 /**
- * Phase 80 §7 — Routing config persistence.
+ * — Routing config persistence.
  *
  * Persisted into the CANONICAL config owner (`~/.toolnetcli/config.json`,
  * `src/lib/appConfig.ts`). No second config file is introduced.
@@ -77,7 +77,7 @@ export function applyRoutingSettings(settings: AppRoutingSettings): RoutingConfi
     fallback: settings.fallback,
     maxAttempts: settings.maxAttempts,
     excludedProviders: settings.excludedProviders,
-    // Phase 82 — provider/upstream ordering + fallback veto.
+ // provider/upstream ordering + fallback veto.
     providerPolicy: resolveProviderRoutingPolicy(settings.providerPolicy).name,
     allowProviderFallback: settings.allowProviderFallback,
   });

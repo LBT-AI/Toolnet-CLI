@@ -1,5 +1,5 @@
 /**
- * Phase 84 §18 — auth → external-harness credential bridge.
+ * — auth → external-harness credential bridge.
  *
  * Sits in the AUTH layer on purpose: external harnesses stay credential-agnostic
  * (they only declare which env names they read), and the auth layer decides

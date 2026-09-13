@@ -34,7 +34,7 @@ afterEach(() => {
   } catch {}
 });
 
-describe("Phase 80 — routing config persistence", () => {
+describe("routing config persistence", () => {
   it("defaults to the auto profile and priority policy", () => {
     const settings = currentSettings();
     expect(settings.profile).toBe("auto");

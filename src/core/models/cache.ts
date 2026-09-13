@@ -1,5 +1,5 @@
 /**
- * Phase 80 §6 — Persistent ModelCatalog cache.
+ * — Persistent ModelCatalog cache.
  *
  * Discovery is a network operation and `toolnet models` is a hot CLI path, so
  * the catalog is cached at `~/.toolnetcli/cache/models.json`. Rules:

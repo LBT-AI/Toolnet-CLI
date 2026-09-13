@@ -1,5 +1,5 @@
 /**
- * Phase 76A — Background job unit tests.
+ * Background job unit tests.
  *
  * Covers the job lifecycle that must hold regardless of what any agent does:
  * bounded concurrency, dedupe, wait/timeout, cancellation with process-tree

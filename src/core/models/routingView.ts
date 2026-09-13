@@ -1,5 +1,5 @@
 /**
- * Phase 82 §12 — Read-only routing projection.
+ * — Read-only routing projection.
  *
  * One place that turns a `RoutingDecision` into display rows, so the CLI and the
  * TUI cannot drift apart and neither of them re-implements routing. It reads the

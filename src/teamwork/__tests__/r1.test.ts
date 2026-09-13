@@ -66,7 +66,7 @@ describe("R1 Core Architecture - TurboExecutor", () => {
 
     try {
       // Non-mutating prompt: this test verifies TurboExecutor routing, while
-      // the Phase 73.9 Completion Gate owns mutation-task semantics.
+ // the Completion Gate owns mutation-task semantics.
       const result = await executeTurboTask("explain how the turbo executor routes tiny tasks");
       expect(result.success).toBe(true);
       expect(result.sessionId).toBeDefined();
@@ -289,8 +289,8 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
       createdAt: Date.now(),
     };
 
-    // BEFORE (Phase 1-): unreachable gatewayUrl triggered the removed fake
-    // "Completed in fallback mode" success. AFTER (Phase 2): worker results are
+ // BEFORE (): unreachable gatewayUrl triggered the removed fake
+ // "Completed in fallback mode" success. AFTER (): worker results are
     // structured; we mock the provider HTTP layer so the REAL subagent path
     // (executeSubagentTask → AgentHarness) succeeds honestly.
     const originalFetch = globalThis.fetch;
@@ -405,7 +405,7 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
       createdAt: Date.now(),
     };
 
-    // Phase 2: mock provider HTTP (before: fake-success fallback masked the
+ // : mock provider HTTP (before: fake-success fallback masked the
     // unreachable gateway). Real subagent path must succeed honestly.
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () =>
@@ -442,7 +442,7 @@ describe("R1 Core Architecture - DynamicScheduler", () => {
       createdAt: Date.now(),
     };
 
-    // Phase 2: mock provider HTTP (before: fake-success fallback).
+ // : mock provider HTTP (before: fake-success fallback).
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () =>
       new Response(

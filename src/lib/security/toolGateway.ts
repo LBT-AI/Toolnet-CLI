@@ -61,7 +61,7 @@ function extractStderr(envelope: string): string {
 export class ToolGateway {
   /**
    * Universal Single Chokepoint for all tool executions across ToolNet CLI.
-   * Layer 4 Phase 1 contract:
+ * Layer 4 contract:
    *  - SecurityEngine.evaluate is the ONLY policy decision point.
    *  - CRITICAL_DENY can NEVER be overridden (not by userApproved, not by mode).
    *  - ASK returns needsApproval unless context.userApproved is true.
@@ -166,7 +166,7 @@ export class ToolGateway {
       }
     }
 
-    // 0.7 TOOL HOOKS (Phase 77.6/77.8/77.31)
+ // 0.7 TOOL HOOKS (/77.8/77.31)
     //
     // `tool.before` runs BEFORE the permission decision so that (a) a hook can
     // veto an action before any side effect is possible, and (b) a transform
@@ -465,7 +465,7 @@ export class ToolGateway {
       });
     }
 
-    // 1.5 FILE WRITE HOOK (Phase 77.11)
+ // 1.5 FILE WRITE HOOK ()
     //
     // Placed after the permission decision and immediately before any filesystem
     // mutation, giving the documented order:
@@ -553,7 +553,7 @@ export class ToolGateway {
     const toolCache = getToolCache();
     const cached = toolCache.get(name, args);
     if (cached !== null) {
-      // Phase 77: a cache hit is still a completed execution, so `tool.after`
+ // : a cache hit is still a completed execution, so `tool.after`
       // must fire. Skipping it here would make hook ordering depend on whether
       // the same read happened earlier — exactly the kind of non-determinism
       // the hook contract exists to prevent.
@@ -620,7 +620,7 @@ export class ToolGateway {
         agentRole: context.agentRole,
         agentDepth: context.agentDepth,
         source: context.source,
-        // Phase 75: forwarded so the `task` tool can derive a child scope that
+ // : forwarded so the `task` tool can derive a child scope that
         // can never exceed the spawning turn's permission.
         subagent: context.subagent,
       });
@@ -647,14 +647,14 @@ export class ToolGateway {
         toolCache.set(name, args, sanitizedJson);
       }
 
-      // ── Phase 77: post-execution hooks ─────────────────────────────────────
+ // ── : post-execution hooks ─────────────────────────────────────
       // Exactly one of `tool.after` / `tool.error` runs — a failed execution
-      // never reports a successful after-hook (§77.30).
+ // never reports a successful after-hook ().
       //
       // Nesting order matches the documented lifecycle: the specific
       // `file.afterWrite` edge completes BEFORE the generic `tool.after` edge,
       // so the outer hook observes the same verified result the inner one did
-      // (§77.11).
+ // ().
       let finalOutput = sanitizedJson;
       if (exitCode === 0) {
         if (FILE_WRITE_TOOLS.has(name)) {

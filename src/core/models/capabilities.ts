@@ -1,5 +1,5 @@
 /**
- * Phase 79 §5 — Capability normalization.
+ * — Capability normalization.
  *
  * One direction only: provider metadata → canonical `ModelCapabilities`.
  *
@@ -132,7 +132,7 @@ export function missingCapabilities(
   return missing;
 }
 
-/** Bridge to the Phase 73 legacy shape used by the adapter/reasoning cache. */
+/** Bridge to the legacy shape used by the adapter/reasoning cache. */
 export function toLegacyCapabilities(caps: ModelCapabilities): {
   reasoning: boolean;
   reasoningStream: boolean;

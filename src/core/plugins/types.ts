@@ -1,5 +1,5 @@
 /**
- * Phase 77.1/77.2 — Canonical Plugin Contract
+ * /77.2 — Canonical Plugin Contract
  *
  * A plugin is a small, explicit integration bundle: it declares what it can do
  * (capabilities), registers tools and hooks through the provided context, and

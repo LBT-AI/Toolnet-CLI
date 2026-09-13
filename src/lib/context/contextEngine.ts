@@ -16,7 +16,7 @@ import { getSessionContext } from "./contextRegistry";
 import { estimateMessageChars, estimateTotalTokens } from "./tokenEstimator";
 
 /**
- * Layer 4 — Phase 4: ContextEngine is a per-harness/per-loop instance.
+ * Layer 4 — : ContextEngine is a per-harness/per-loop instance.
  *
  * Production call sites MUST pass an explicit sessionId. The class
  * retains an instance-level `compactionCount` (no global counter) and
@@ -264,7 +264,7 @@ export class ContextEngine {
     return this.compactionCount;
   }
 
-  /** Token-accounting surface for Phase 4. */
+ /** Token-accounting surface for . */
   getTokenBudget(sessionId?: string) {
     const sid = this.resolveSessionId(sessionId);
     if (sid) return getSessionContext(sid).tokenBudgetState;

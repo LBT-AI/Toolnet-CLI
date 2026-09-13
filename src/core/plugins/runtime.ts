@@ -1,5 +1,5 @@
 /**
- * Phase 77.1/77.10/77.11/77.25 — The one PluginRuntime.
+ * /77.10/77.11/77.25 — The one PluginRuntime.
  *
  * Responsibilities are narrow and explicit:
  *   - load configured plugins through the staged loader

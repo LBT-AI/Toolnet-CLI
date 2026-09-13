@@ -1,5 +1,5 @@
 /**
- * Phase 80 §11 — Deterministic graders.
+ * — Deterministic graders.
  *
  * No LLM judge. Each grader inspects evidence the runtime actually produced:
  * the final text, the observed tool-call stream, the real filesystem and real
@@ -204,7 +204,7 @@ export const jsonSchemaGrader: Grader = (observation, spec) => {
  *
  * Checks selection, count bounds, duplicate invocations, and (optionally) that
  * every call succeeded. A case that requires a tool call FAILS when the model
- * only narrated (§13).
+ * only narrated ().
  */
 export const toolCallGrader: Grader = (observation, spec) => {
   const calls = observation.toolCalls ?? [];

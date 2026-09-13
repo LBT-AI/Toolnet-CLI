@@ -1,5 +1,5 @@
 /**
- * Phase 73.5 — Shared Agent Engine tests.
+ * Shared Agent Engine tests.
  *
  * Verifies the engine is a real single entry point: it drives the actual loop,
  * translates harness events into the AgentEvent contract, and returns verified

@@ -20,7 +20,7 @@ export interface SubagentOptions {
   eventBus?: EventBus;
   sessionId?: string;
   onEvent?: (event: string, data: any) => void;
-  /** Phase 2 policy propagation: child sandbox mode (clamped <= parent inside harness). */
+ /** policy propagation: child sandbox mode (clamped <= parent inside harness). */
   sandboxMode?: SandboxMode;
   workspaceRoot?: string;
   cwd?: string;
@@ -44,7 +44,7 @@ export interface SubagentResult {
 }
 
 /**
- * Phase 4: derive a stable child sessionId for a subagent. The child
+ * : derive a stable child sessionId for a subagent. The child
  * inherits the parent's workspace and sandbox mode but its memory,
  * file-access list, token budget, and compaction state are entirely
  * independent. The child NEVER writes back to the parent memory —
@@ -241,7 +241,7 @@ export async function executeSubagentTask(
     onEvent("subagent:start", { nodeId: node.id, role, title: node.title });
   }
 
-  // Phase 4: bind a fresh child SessionContext with deterministic id.
+ // : bind a fresh child SessionContext with deterministic id.
   // The child NEVER mutates parent memory. Only the explicit result
   // (harnessResult) is observable from the parent.
   const childId = deriveSubagentChildSessionId(parentSessionId, node.id);
@@ -301,7 +301,7 @@ export async function executeSubagentTask(
     };
   } finally {
     unsubscribe();
-    // Phase 4: cleanup the child's in-memory context once the result
+ // : cleanup the child's in-memory context once the result
     // has been returned. Persisted sessions (saved via saveSession) are
     // never deleted by this path — only the live registry entry.
     try {

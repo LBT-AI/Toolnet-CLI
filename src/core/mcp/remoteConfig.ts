@@ -1,5 +1,5 @@
 /**
- * Phase 78.2/78.17 — Remote MCP configuration + header policy.
+ * /78.17 — Remote MCP configuration + header policy.
  *
  * Remote entries are USER INPUT that name a network destination, so they are
  * validated before anything is constructed:
@@ -22,7 +22,7 @@ export interface McpOAuthConfig {
   scope?: string;
   redirectUri?: string;
   callbackPort?: number;
-  /** Extra scopes are not supported in Phase 78 (kept out on purpose). */
+ /** Extra scopes are not supported in (kept out on purpose). */
 }
 
 export interface McpRemoteConfig {
@@ -179,7 +179,7 @@ export function validateRemoteUrl(input: string): UrlCheckResult {
 }
 
 /**
- * Merge policy (Phase 78.17):
+ * Merge policy ():
  *   user config headers → reserved names dropped → transport/auth headers win.
  * Returns the effective header set plus the names that were dropped so the
  * caller can warn without ever printing a value.

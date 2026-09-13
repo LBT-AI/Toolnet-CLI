@@ -35,7 +35,7 @@ import {
 } from "./helpers/fakeRemoteMcpServer";
 
 /**
- * Phase 78 — remote MCP, OAuth/auth lifecycle, diagnostics and the guards that
+ * remote MCP, OAuth/auth lifecycle, diagnostics and the guards that
  * keep all of it on the ONE canonical pipeline.
  *
  * Nothing about McpManager is mocked: every integration test talks to a real
@@ -88,7 +88,7 @@ async function startFixture(options: Parameters<typeof startRemoteMcpFixture>[0]
 
 // ── 78.2 / 78.17 — remote config + headers ──────────────────────────────────
 
-describe("Phase 78 — remote config validation", () => {
+describe("remote config validation", () => {
   test("a well-formed remote entry normalizes, with safe defaults", () => {
     const result = parseRemoteServerConfig({
       type: "remote",
@@ -148,7 +148,7 @@ describe("Phase 78 — remote config validation", () => {
 
 // ── 78.4 — status machine ───────────────────────────────────────────────────
 
-describe("Phase 78 — status machine", () => {
+describe("status machine", () => {
   test("legal transitions are permitted and illegal ones are refused", () => {
     expect(canTransition("connecting", "connected")).toBe(true);
     expect(canTransition("connecting", "needs_auth")).toBe(true);
@@ -180,7 +180,7 @@ describe("Phase 78 — status machine", () => {
 
 // ── 78.7 / 78.8 / 78.35 / 78.36 — auth storage ──────────────────────────────
 
-describe("Phase 78 — auth store", () => {
+describe("auth store", () => {
   test("credentials are written atomically with mode 0600", async () => {
     const store = newAuthStore();
     await store.setTokens("srv", "https://one.example/mcp", {
@@ -263,7 +263,7 @@ describe("Phase 78 — auth store", () => {
 
 // ── 78.10 / 78.11 — PKCE state + loopback callback ──────────────────────────
 
-describe("Phase 78 — PKCE state and the loopback callback", () => {
+describe("PKCE state and the loopback callback", () => {
   test("a state mismatch is rejected before any token exchange", async () => {
     const store = newAuthStore();
     const url = "https://evil.example/mcp";
@@ -343,7 +343,7 @@ describe("Phase 78 — PKCE state and the loopback callback", () => {
 
 // ── 78.18 / 78.19 — guarded fetch ───────────────────────────────────────────
 
-describe("Phase 78 — guarded fetch", () => {
+describe("guarded fetch", () => {
   test("forbidden schemes and SSRF-into-loopback are refused", async () => {
     const guarded = createGuardedFetch("https://mcp.example.com/mcp", { timeoutMs: 1_000 });
     await expect(guarded("file:///etc/passwd")).rejects.toBeInstanceOf(RemoteFetchError);
@@ -405,7 +405,7 @@ describe("Phase 78 — guarded fetch", () => {
 
 // ── 78.20 / 78.21 — real HTTP transports ────────────────────────────────────
 
-describe("Phase 78 — Streamable HTTP live E2E", () => {
+describe("Streamable HTTP live E2E", () => {
   test("connect → tools/list → canonical registry → permission → call → disconnect", async () => {
     const fixture = await startFixture();
     writeGlobalMcpConfig({ remote: { type: "remote", url: fixture.mcpUrl } });
@@ -478,7 +478,7 @@ describe("Phase 78 — Streamable HTTP live E2E", () => {
   }, 20_000);
 });
 
-describe("Phase 78 — SSE fallback live E2E", () => {
+describe("SSE fallback live E2E", () => {
   test("a server that rejects Streamable HTTP is reached over SSE, and the failed transport is not leaked", async () => {
     const fixture = await startFixture({ mode: "sse-only", name: "sse-fixture" });
     writeGlobalMcpConfig({ remote: { type: "remote", url: fixture.mcpUrl } });
@@ -513,7 +513,7 @@ describe("Phase 78 — SSE fallback live E2E", () => {
 
 // ── 78.22 / 78.23 / 78.13 — OAuth lifecycle ─────────────────────────────────
 
-describe("Phase 78 — OAuth live E2E", () => {
+describe("OAuth live E2E", () => {
   test("needs_auth → authorization URL → PKCE callback → token → connected → tool call", async () => {
     const fixture = await startFixture({ oauth: true, name: "oauth-fixture" });
     writeGlobalMcpConfig({
@@ -614,7 +614,7 @@ describe("Phase 78 — OAuth live E2E", () => {
 
 // ── 78.24 — URL-bound credentials ───────────────────────────────────────────
 
-describe("Phase 78 — token isolation across server URLs", () => {
+describe("token isolation across server URLs", () => {
   test("re-pointing a server at a new URL does not replay the old token", async () => {
     const one = await startFixture({ name: "one" });
     const two = await startFixture({ name: "two" });
@@ -646,7 +646,7 @@ describe("Phase 78 — token isolation across server URLs", () => {
 
 // ── 78.25 / 78.31 / 78.33 — redaction + diagnostics ─────────────────────────
 
-describe("Phase 78 — redaction and diagnostics", () => {
+describe("redaction and diagnostics", () => {
   test("a seeded secret appears only in auth storage, never in status, events or logs", async () => {
     const fixture = await startFixture();
     const store = newAuthStore();
@@ -717,7 +717,7 @@ describe("Phase 78 — redaction and diagnostics", () => {
 
 // ── 78.29 — tools/list_changed ──────────────────────────────────────────────
 
-describe("Phase 78 — tools/list_changed", () => {
+describe("tools/list_changed", () => {
   test("the model-visible schema set is refreshed without restarting anything", async () => {
     const fixture = await startFixture({
       name: "changing",
@@ -760,7 +760,7 @@ describe("Phase 78 — tools/list_changed", () => {
 
 // ── 78.30 — server disconnect ───────────────────────────────────────────────
 
-describe("Phase 78 — remote server death", () => {
+describe("remote server death", () => {
   test("the tools are withdrawn, the status flips, and nothing throws", async () => {
     const fixture = await startFixture({ name: "mortal" });
     writeGlobalMcpConfig({ remote: { type: "remote", url: fixture.mcpUrl } });
@@ -790,7 +790,7 @@ describe("Phase 78 — remote server death", () => {
 
 // ── 78.27 / 78.28 — subagent + teamwork cannot bypass the registry ──────────
 
-describe("Phase 78 — remote MCP stays scoped", () => {
+describe("remote MCP stays scoped", () => {
   test("a subagent cannot escalate to a remote MCP tool the parent denies", () => {
     const mcpName = "mcp__remote__dangerous_write";
     const scope = deriveSubagentPermission({
@@ -825,7 +825,7 @@ describe("Phase 78 — remote MCP stays scoped", () => {
 
 // ── 78.32 / 78.33 — CLI surface ─────────────────────────────────────────────
 
-describe("Phase 78 — mcp CLI", () => {
+describe("mcp CLI", () => {
   test("list, status, connect, disconnect and logout drive the one manager", async () => {
     const fixture = await startFixture();
     writeGlobalMcpConfig({ remote: { type: "remote", url: fixture.mcpUrl } });
@@ -890,7 +890,7 @@ describe("Phase 78 — mcp CLI", () => {
 
 // ── 78.38 — architecture guards ─────────────────────────────────────────────
 
-describe("Phase 78 — architecture guards", () => {
+describe("architecture guards", () => {
   const srcRoot = path.resolve(__dirname, "../..");
 
   function walk(dir: string, out: string[] = []): string[] {

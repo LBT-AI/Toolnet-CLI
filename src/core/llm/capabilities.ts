@@ -1,5 +1,5 @@
 /**
- * Phase 73.7 — Model Capability Normalization
+ * Model Capability Normalization
  *
  * Replaces ambiguous booleans with an explicit toolCalling mode:
  *

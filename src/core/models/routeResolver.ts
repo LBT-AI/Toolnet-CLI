@@ -1,5 +1,5 @@
 /**
- * Phase 82 §2 — Provider candidate resolution.
+ * — Provider candidate resolution.
  *
  * Turns a model reference + constraints into an ORDERED list of provider
  * routes, plus a complete record of everything rejected and why. Resolution is
@@ -279,7 +279,7 @@ interface ModelFilter {
  *  - no reference → every model.
  *
  * There is no prefix/fuzzy matching: `claude-3.5-sonnet` does NOT match
- * `anthropic/claude-3.5-sonnet`. §9 forbids guessing.
+ * `anthropic/claude-3.5-sonnet`. forbids guessing.
  */
 function resolveModelFilter(
   request: RouteResolutionRequest,

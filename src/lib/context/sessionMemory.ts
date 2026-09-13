@@ -4,7 +4,7 @@ import { detectProjectFramework } from "../projectDetector";
 import { workspaceRoot } from "../codingAgent";
 
 /**
- * Layer 4 — Phase 4: SessionMemoryStore is a CLASS that owns its own
+ * Layer 4 — : SessionMemoryStore is a CLASS that owns its own
  * per-session data. There is NO process-wide mutable singleton in
  * production. The exported `sessionMemory` is a thin compatibility
  * accessor that resolves to the *current* explicit session's memory

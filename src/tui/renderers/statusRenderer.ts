@@ -1,5 +1,5 @@
 import { A, T } from "../../term";
-import { stripAnsi, truncate, visibleWidth, tailByCells } from "../layout";
+import { stripAnsi, truncate, visibleWidth, tailByCells, COMPOSER_MAX_BUFFER_LINES } from "../layout";
 import { getCwdInfo } from "../../lib/codingAgent";
 import { SPINNER, tuiState } from "../state";
 import { supportsReasoning, reasoningEffortLabel } from "../../lib/reasoning";
@@ -114,7 +114,9 @@ export function renderInputArea(
   }
 
   const lines = inputBuffer.split("\n");
-  const maxLinesToShow = Math.min(3, lines.length);
+  // The layout budget assumes this exact cap (layout.ts); longer drafts
+  // scroll inside the composer instead of consuming transcript rows.
+  const maxLinesToShow = Math.min(COMPOSER_MAX_BUFFER_LINES, lines.length);
   const outLines: string[] = [divider];
   const startIdx = Math.max(0, lines.length - maxLinesToShow);
 

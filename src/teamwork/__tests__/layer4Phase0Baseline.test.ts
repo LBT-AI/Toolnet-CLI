@@ -1,9 +1,9 @@
 /**
- * Layer 4 — Phase 0: Baseline & Architecture Lock
+ * Layer 4 — : Baseline & Architecture Lock
  *
  * AUDIT + TEST BASELINE only. No production behavior changes.
  * Tests prove current architecture facts and mark genuine defects as
- * EXPECTED CURRENT FAILURE / Phase 1 target (never hacked to pass green).
+ * EXPECTED CURRENT FAILURE / target (never hacked to pass green).
  *
  * Guard Clauses: tests skip when prerequisites are unavailable (sandbox, etc.).
  */
@@ -168,7 +168,7 @@ describe("APPROVAL FLOW AUDIT", () => {
     const result = await executeTool("shell", { command: "rm -rf /" }, { cwd, workspaceRoot: wsRoot });
     const parsed = JSON.parse(result);
     // EXPECTED: This returns Permission Denied because executeTool re-evaluates
-    // and does not carry the userApproved flag. Phase 1 fix required.
+ // and does not carry the userApproved flag. fix required.
     expect(parsed.exitCode).toBe(1);
     expect(parsed.stderr).toMatch(/permission denied|denied by/i);
     // Marker: EXPECTED CURRENT FAILURE — approval does not grant execution
@@ -260,10 +260,10 @@ describe("SHELL EXECUTION BASELINE", () => {
     expect([124, 1].includes(res.exitCode as number)).toBe(true);
   }, 10000);
 
-  // ── Phase 1 update: behavior FIXED (was: env inherits process.env) ──────
-  // Phase 0 observed: child env inherited full process.env (secrets leaked).
-  // Phase 1: toolBash scrubs child env via allowlist (childEnv.scrubChildEnv).
-  test("toolBash: env does NOT inherit host secrets (Phase 1: scrubbed)", async () => {
+ // ── update: behavior FIXED (was: env inherits process.env) ──────
+ // observed: child env inherited full process.env (secrets leaked).
+ // : toolBash scrubs child env via allowlist (childEnv.scrubChildEnv).
+ test("toolBash: env does NOT inherit host secrets (: scrubbed)", async () => {
     const { toolBash } = require("../../lib/codingAgent");
     process.env.LAYER4_TEST_PROBE = "sentinel-12345";
     const res = await toolBash("echo $LAYER4_TEST_PROBE", 5000);
@@ -316,11 +316,11 @@ describe("MCP BASELINE", () => {
 // ── 6. TEAMWORK BASELINE ──────────────────────────────────────────────────
 
 describe("TEAMWORK BASELINE", () => {
-  test("DynamicScheduler: gateway/auth failure is a typed FAILED result (FIXED in Phase 2)", async () => {
+ test("DynamicScheduler: gateway/auth failure is a typed FAILED result (FIXED in )", async () => {
     const { DynamicScheduler } = require("../../teamwork/dynamicScheduler");
-    // BEFORE (Phase 1-): unreachable gateway produced fake success string
+ // BEFORE (): unreachable gateway produced fake success string
     //   "[Subagent ...] Completed '...' in fallback mode." → node COMPLETED.
-    // AFTER (Phase 2): fake-completed fallback removed from production;
+ // AFTER (): fake-completed fallback removed from production;
     //   provider/network/auth failures are typed failures and the node FAILS.
     const graph = {
       sessionId: "layer4-test",
@@ -348,19 +348,19 @@ describe("TEAMWORK BASELINE", () => {
     const node: any = graph.nodes[0];
     expect(node.status).toBe("FAILED");
     expect(node.outputResult?.success).toBe(false);
-    // Phase 2: result stays unset on failure (only real success output lands there).
+ // : result stays unset on failure (only real success output lands there).
     expect(node.result == null || !/fallback mode/.test(String(node.result))).toBe(true);
     expect(["AUTH_REQUIRED", "PROVIDER_NETWORK", "MODEL_NOT_FOUND"]).toContain(node.errorCode);
   });
 
-  test("BudgetManager IS integrated into DynamicScheduler (FIXED in Phase 2)", () => {
+ test("BudgetManager IS integrated into DynamicScheduler (FIXED in )", () => {
     const { BudgetManager } = require("../../teamwork/budget");
     const budget = new BudgetManager({ maxTokens: 100, qualityLevel: "BALANCED" });
     budget.addTokens(1000);
     expect(budget.isTokenBudgetExhausted()).toBe(true);
-    // BEFORE (Phase 1-): DynamicScheduler did not import BudgetManager —
+ // BEFORE (): DynamicScheduler did not import BudgetManager —
     //   budget enforcement never stopped dispatch.
-    // AFTER (Phase 2): scheduler constructs a BudgetManager and checks it at
+ // AFTER (): scheduler constructs a BudgetManager and checks it at
     //   dispatch gates; exhaustion emits scheduler:budget_exhausted and marks
     //   pending tasks SKIPPED(BUDGET_EXCEEDED).
     const schedulerSrc = fs.readFileSync(
@@ -371,14 +371,14 @@ describe("TEAMWORK BASELINE", () => {
     expect(schedulerSrc).toMatch(/scheduler:budget_exhausted/);
   });
 
-  test("Dependency gate uses structured outputResult.success (FIXED in Phase 2)", () => {
+ test("Dependency gate uses structured outputResult.success (FIXED in )", () => {
     const schedulerSrc = fs.readFileSync(
       path.join(__dirname, "../../teamwork/dynamicScheduler.ts"),
       "utf8",
     );
-    // BEFORE (Phase 1-): getReadyNodes trusted completedTaskIds.includes(depId)
+ // BEFORE (): getReadyNodes trusted completedTaskIds.includes(depId)
     //   (status-only; a fake-success COMPLETED unlocked children).
-    // AFTER (Phase 2): readiness requires COMPLETED AND outputResult.success
+ // AFTER (): readiness requires COMPLETED AND outputResult.success
     //   === true via isDependencySuccessful(); failed deps → child SKIPPED.
     expect(schedulerSrc).toMatch(/isDependencySuccessful/);
     expect(schedulerSrc).toMatch(/outputResult\?\.success|outputResult\.success/);
@@ -423,7 +423,7 @@ describe("CONTEXT BASELINE", () => {
     // Marker: EXPECTED CURRENT FAILURE — global singleton leaks across sessions
   });
 
-  test("compaction summary is role='user' (Phase 4: provider-compatible normalization, not mid-conversation system)", async () => {
+ test("compaction summary is role='user' (: provider-compatible normalization, not mid-conversation system)", async () => {
     const { compactMessagesAtomically } = require("../../lib/context/atomicCompactor");
     const messages = [
       { role: "system", content: "You are helpful." },
@@ -440,7 +440,7 @@ describe("CONTEXT BASELINE", () => {
       (m: any) => typeof m.content === "string" && m.content.includes("Compaction Summary"),
     );
     expect(summaryMsg).toBeDefined();
-    // Phase 4: provider-compatible normalization — summary is role "user",
+ // : provider-compatible normalization — summary is role "user",
     // so only the original system instruction remains at index 0.
     expect(summaryMsg.role).toBe("user");
     // And the first message is still the original system message.
@@ -456,12 +456,12 @@ describe("CONTEXT BASELINE", () => {
 // ── 8. TOOLGATEWAY BYPASS PATHS (observation) ─────────────────────────────
 
 describe("TOOLGATEWAY BYPASS PATHS (observation)", () => {
-  // ── Phase 73.6 update: the TUI holds no loop of its own. ──
-  // Phase 0 observed: TUI runTool called executeTool directly.
-  // Phase 1: TUI routed through ToolGateway.execute.
-  // Phase 73.6: the TUI delegates the whole turn to the shared agent engine;
+ // ── update: the TUI holds no loop of its own. ──
+ // observed: TUI runTool called executeTool directly.
+ // : TUI routed through ToolGateway.execute.
+ // : the TUI delegates the whole turn to the shared agent engine;
   // ToolGateway is now reached ONLY through AgentHarness.dispatchTool.
-  test("TUI delegates tool routing to the shared agent engine (Phase 73.6)", () => {
+ test("TUI delegates tool routing to the shared agent engine ()", () => {
     const wiringSrc = fs.readFileSync(
       path.join(__dirname, "../../tui/events/agentWiring.ts"),
       "utf8",
@@ -478,11 +478,11 @@ describe("TOOLGATEWAY BYPASS PATHS (observation)", () => {
     expect(wiringSrc).not.toMatch(/executeTool\(name,\s*args,\s*\{[^}]*cwd/);
   });
 
-  // ── Phase 1 update: bypass REMOVED (was: pluginManager evaluated its own perms) ──
-  // Phase 0 observed: executePluginTool called evaluatePermission directly.
-  // Phase 1: plugin tools are model-callable executables — they MUST go through
+ // ── update: bypass REMOVED (was: pluginManager evaluated its own perms) ──
+ // observed: executePluginTool called evaluatePermission directly.
+ // : plugin tools are model-callable executables — they MUST go through
   // ToolGateway.execute like every other tool.
-  test("pluginManager executePluginTool routes through ToolGateway (Phase 1: converged)", () => {
+ test("pluginManager executePluginTool routes through ToolGateway (: converged)", () => {
     const pmSrc = fs.readFileSync(
       path.join(__dirname, "../../lib/plugins/pluginManager.ts"),
       "utf8",
@@ -499,12 +499,12 @@ describe("TOOLGATEWAY BYPASS PATHS (observation)", () => {
     expect(harnessSrc).toMatch(/ToolGateway\.execute/);
   });
 
-  // ── Phase 1 update: double gate REMOVED (was: toolBash re-evaluated perms) ──
-  // Phase 0 observed: toolBash internally called permissionGate.evaluate("bash"),
+ // ── update: double gate REMOVED (was: toolBash re-evaluated perms) ──
+ // observed: toolBash internally called permissionGate.evaluate("bash"),
   // a second, mismatched permission decision after the gateway.
-  // Phase 1: the executor never re-gates — it only enforces the CRITICAL_DENY
+ // : the executor never re-gates — it only enforces the CRITICAL_DENY
   // veto floor (classification, not an approval decision).
-  test("toolBash no longer re-gates via permissionGate (Phase 1: single gate)", () => {
+ test("toolBash no longer re-gates via permissionGate (: single gate)", () => {
     const codingSrc = fs.readFileSync(
       path.join(__dirname, "../../lib/codingAgent.ts"),
       "utf8",

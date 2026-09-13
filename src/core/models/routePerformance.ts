@@ -1,5 +1,5 @@
 /**
- * Phase 82 §5 — Per-route performance intelligence.
+ * — Per-route performance intelligence.
  *
  * Bounded by construction: counters plus an EWMA plus a fixed-size ring of
  * recent latencies. Nothing unbounded grows, and NO prompt/response content is

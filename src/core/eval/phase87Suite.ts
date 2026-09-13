@@ -4,7 +4,7 @@ const cases: EvalCase[] = [];
 for (let i = 1; i <= 20; i++) {
   cases.push({
     id: `phase87-case-${i}`,
-    name: `Phase 87 Evaluation Case ${i}`,
+ name: ` Evaluation Case ${i}`,
     type: "CODE",
     dimension: "coding",
     prompt: `Analyze the workspace, plan a change for bug ${i}, and verify the fix.`,
@@ -16,7 +16,7 @@ for (let i = 1; i <= 20; i++) {
 export const phase87Suite: EvalSuite = {
   id: "phase87",
   version: "1.0.0",
-  name: "Phase 87 Verified Coding",
+ name: " Verified Coding",
   description: "Suite with 20 specific coding fixtures for edit-verify-test-repair loop.",
   cases,
 };
