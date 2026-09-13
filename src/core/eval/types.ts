@@ -188,6 +188,20 @@ export type Grader = (observation: EvalObservation, spec: EvalGraderSpec) => Gra
 
 // ── Results ─────────────────────────────────────────────────────────────────
 
+/**
+ * What a case's request cost in context terms. `estimatedInputTokens` is the
+ * local estimate taken before the request; `actualInputTokens` is what the
+ * provider reported, when it reported anything. They are kept apart because a
+ * provider measurement describes one request that already happened and must
+ * never be presented as the size of the next one.
+ */
+export interface EvalContextMetrics {
+  estimatedInputTokens: number;
+  actualInputTokens?: number;
+  compactions: number;
+  cacheHits?: number;
+}
+
 export interface EvalCaseResult {
   caseId: string;
   name: string;
@@ -205,6 +219,8 @@ export interface EvalCaseResult {
   costUsd?: number;
   failureClass?: EvalFailureClass;
   output?: string;
+  /** Context footprint of the case, when the case ran a native harness. */
+  context?: EvalContextMetrics;
   /** Phase 81 — the harness profile actually used for this case. */
   harnessId?: string;
   /** Phase 83 §17 — execution target actually used (`native` | external id). */
@@ -227,6 +243,13 @@ export interface EvalRunMetrics {
   totalCostUsd?: number;
   /** Pass rate by case type — the tool-use signal lives here. */
   byType: Record<string, { passed: number; total: number }>;
+  /** Aggregate context footprint across cases that reported one. */
+  context?: {
+    meanEstimatedInputTokens: number;
+    meanActualInputTokens: number;
+    totalCompactions: number;
+    meanCacheHits: number;
+  };
 }
 
 export interface EvalRunRecord {

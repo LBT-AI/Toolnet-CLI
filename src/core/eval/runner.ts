@@ -28,6 +28,8 @@ import { hookRegistry } from "../hooks";
 import type { HookInvocation } from "../hooks/types";
 import { modelRouter } from "../models/router";
 import { harnessRegistry, DEFAULT_HARNESS_PROFILE_ID } from "../harness";
+import { contextEngine } from "../../lib/context/contextEngine";
+import { getSessionContext } from "../../lib/context/contextRegistry";
 import { EVAL_RUN_SCHEMA_VERSION } from "./schema";
 import { graderFor, stableStringify } from "./graders";
 import { EvalStore } from "./store";
@@ -202,6 +204,7 @@ export class EvalRunner {
       return this.runExternalCase(entry, context, executionTarget);
     }
     const startedMs = Date.now();
+    const compactionsBefore = contextEngine.getCompactionCount();
     const workspace = this.createWorkspace(entry);
     const usage: UsageTotals = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     const owner = `eval:${context.runId}:${entry.id}`;
@@ -306,6 +309,20 @@ export class EvalRunner {
       hookRegistry.unregisterOwner(owner);
     }
 
+    // Context is measured from the accounting the production request path
+    // already wrote for this session, not from a second estimator: the case
+    // session id is what AgentHarness passed to the context engine.
+    const caseSessionId = `${context.runId}-${entry.id}`;
+    const sessionContext = getSessionContext(caseSessionId);
+    const contextMetrics: EvalCaseResult["context"] = {
+      estimatedInputTokens: sessionContext.tokenBudgetState.estimatedContextTokens,
+      ...(sessionContext.tokenBudgetState.actualUsagePromptTokens > 0
+        ? { actualInputTokens: sessionContext.tokenBudgetState.actualUsagePromptTokens }
+        : {}),
+      compactions: Math.max(0, contextEngine.getCompactionCount() - compactionsBefore),
+      cacheHits: sessionContext.tokenBudgetState.actualUsageCachedTokens,
+    };
+
     const postCommand = entry.postCommand ? runPostCommand(entry, workspace) : { exitCodes: [], output: [] };
 
     const observation: EvalObservation = {
@@ -341,6 +358,7 @@ export class EvalRunner {
       retries: duplicates,
       ...(graded.pass ? {} : { failureClass: classifyFailure(entry, observation) }),
       output: output.slice(0, 2000),
+      context: contextMetrics,
       // Phase 81 — record the policy contract, so a stored result can be
       // attributed to a harness as well as a model.
       harnessId:
@@ -726,8 +744,20 @@ export function buildMetrics(cases: EvalCaseResult[]): EvalRunRecord["metrics"] 
   let costSeen = false;
   let turns = 0;
   let turnsSeen = 0;
+  let estimatedInput = 0;
+  let actualInput = 0;
+  let compactions = 0;
+  let cacheHits = 0;
+  let contextSeen = 0;
 
   for (const entry of cases) {
+    if (entry.context) {
+      estimatedInput += entry.context.estimatedInputTokens;
+      actualInput += entry.context.actualInputTokens ?? 0;
+      compactions += entry.context.compactions;
+      cacheHits += entry.context.cacheHits ?? 0;
+      contextSeen += 1;
+    }
     duration += entry.durationMs;
     input += entry.inputTokens;
     outputTokens += entry.outputTokens;
@@ -760,5 +790,15 @@ export function buildMetrics(cases: EvalCaseResult[]): EvalRunRecord["metrics"] 
     totalFailedToolCalls: failedToolCalls,
     ...(costSeen ? { totalCostUsd: Math.round(cost * 1e6) / 1e6 } : {}),
     byType,
+    ...(contextSeen > 0
+      ? {
+          context: {
+            meanEstimatedInputTokens: Math.round(estimatedInput / contextSeen),
+            meanActualInputTokens: Math.round(actualInput / contextSeen),
+            totalCompactions: compactions,
+            meanCacheHits: Math.round((cacheHits / contextSeen) * 10) / 10,
+          },
+        }
+      : {}),
   };
 }

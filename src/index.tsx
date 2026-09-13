@@ -461,6 +461,12 @@ if (subCmd === "session" || subCmd === "sessions") {
   process.exit(code);
 }
 
+if (subCmd === "context") {
+  const { runContextCli } = await import("./commands/contextCli");
+  const code = await runContextCli(args.slice(1));
+  process.exit(code);
+}
+
 if (subCmd === "resume") {
   if (args.includes("--help") || args.includes("-h")) {
     console.log(`ToolNet Resume — Resume Previous Session

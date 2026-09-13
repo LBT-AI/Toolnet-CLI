@@ -3,18 +3,18 @@ import { truncate } from "../layout";
 import { getGlobalTracker, getBudgetConfig } from "../../lib/usage";
 import { activeSchedulers } from "../../teamwork/dynamicScheduler";
 import { backgroundTasks } from "../../lib/backgroundTasks";
+import { isCompactionInFlight, resolveModelLimits } from "../../core/context";
+import { getSessionContext, getCurrentSessionId } from "../../lib/context";
 
-const MODEL_CONTEXT_LIMITS: Record<string, number> = {
-  "openai/gpt-4o": 128000,
-  "openai/gpt-4o-mini": 128000,
-  "anthropic/claude-3-5-sonnet": 200000,
-  "anthropic/claude-3-opus": 200000,
-  "google/gemini-2.0-flash": 1000000,
-  "google/gemini-1.5-pro": 2000000,
-  "deepseek/deepseek-chat": 64000,
-};
+/** Context pressure at which the indicator starts warning instead of reporting. */
+const NEAR_LIMIT_PERCENT = 80;
 
-export function renderSidebar(currentModel: string, startTime: number, panelWidth = 40): string[] {
+export function renderSidebar(
+  currentModel: string,
+  startTime: number,
+  panelWidth = 40,
+  sessionId: string | null = getCurrentSessionId(),
+): string[] {
   const panelLines: string[] = [];
   const pad = (str: string) => {
     const stripped = str.replace(/\x1b\[[^m]*m/g, "");
@@ -39,10 +39,23 @@ export function renderSidebar(currentModel: string, startTime: number, panelWidt
   const outTokens = usage.outputTokens || 0;
   panelLines.push(A.bgSurface + pad(` Tokens: ${A.fgYellow}${totalTokens.toLocaleString()}${A.reset} (${inTokens} in / ${outTokens} out)`) + A.reset);
 
-  // Context %
-  const modelLimit = MODEL_CONTEXT_LIMITS[currentModel] || 128000;
-  const contextPct = ((totalTokens / modelLimit) * 100).toFixed(1);
-  panelLines.push(A.bgSurface + pad(` Context: ${A.fgBlue}${contextPct}%${A.reset} of ${(modelLimit / 1000).toFixed(0)}k`) + A.reset);
+  // Context pressure. Window size comes from the model catalog so a new model
+  // does not silently inherit a wrong hard-coded limit; live estimated context
+  // is preferred over the cumulative session counter, which never shrinks after
+  // a compaction and would overstate pressure forever.
+  const limits = resolveModelLimits(isModelValid ? currentModel : undefined);
+  const liveContext = sessionId ? getSessionContext(sessionId).tokenBudgetState.estimatedContextTokens : 0;
+  const contextTokens = liveContext > 0 ? liveContext : totalTokens;
+  const contextPct = limits.contextWindow > 0 ? (contextTokens / limits.contextWindow) * 100 : 0;
+  const remainingK = Math.max(0, limits.contextWindow - contextTokens) / 1000;
+  const compacting = sessionId ? isCompactionInFlight(sessionId) : false;
+  const pressure = compacting ? " · compacting" : contextPct >= NEAR_LIMIT_PERCENT ? " · near limit" : "";
+  const contextColor = contextPct >= NEAR_LIMIT_PERCENT ? A.fgYellow : A.fgBlue;
+  panelLines.push(
+    A.bgSurface +
+      pad(` Context: ${contextColor}${contextPct.toFixed(1)}%${A.reset} · ${remainingK.toFixed(0)}k left${pressure}`) +
+      A.reset,
+  );
 
   // Cost & Budget %
   if (usage.estimatedCostUsd !== null) {

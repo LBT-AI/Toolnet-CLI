@@ -93,6 +93,7 @@ export type SessionEventType =
   | "model.selection"
   | "harness.selection"
   | "auth.pin"
+  | "context.compaction"
   | "checkpoint.created";
 
 export const SESSION_EVENT_TYPES: SessionEventType[] = [
@@ -110,6 +111,7 @@ export const SESSION_EVENT_TYPES: SessionEventType[] = [
   "model.selection",
   "harness.selection",
   "auth.pin",
+  "context.compaction",
   "checkpoint.created",
 ];
 

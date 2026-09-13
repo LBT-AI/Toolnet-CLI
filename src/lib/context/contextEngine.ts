@@ -6,9 +6,11 @@ import type {
   PruneOptions,
   SessionMemoryData,
 } from "./types";
-import { calculateContextBudget, getModelContextSpec } from "./modelBudgets";
+import { calculateContextBudget } from "./modelBudgets";
 import { pruneOldToolResults } from "./toolPruner";
 import { compactMessagesAtomically } from "./atomicCompactor";
+import { contextManager } from "../../core/context/manager";
+import type { SummaryStepResult } from "../../core/context/compaction";
 import { getSessionMemory, SessionMemoryStore } from "./sessionMemory";
 import { getSessionContext } from "./contextRegistry";
 import { estimateMessageChars, estimateTotalTokens } from "./tokenEstimator";
@@ -30,6 +32,34 @@ interface ContextEngineOptions {
   defaultModel?: string;
   /** When provided, memory access is bound to this session. */
   sessionId?: string;
+}
+
+/** Window utilization at which cheap tool-output cleanup starts. */
+const PRUNE_UTILIZATION_PERCENT = 70;
+
+/**
+ * The model-assisted stage of compaction, handed to the context manager rather
+ * than chosen by it: the manager decides WHEN compaction is needed, and holds no
+ * knowledge of how to rewrite a transcript.
+ *
+ * `force` is set because the manager has already made the trigger decision; the
+ * compactor's own size threshold would otherwise second-guess it.
+ */
+function summarizeAtomically(
+  messages: ContextMessage[],
+  options: { model: string; memory: SessionMemoryStore; sessionId?: string },
+): SummaryStepResult {
+  const result = compactMessagesAtomically(messages, {
+    force: true,
+    model: options.model,
+    ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+    memory: options.memory,
+  });
+  return {
+    compacted: result.compacted,
+    messages: result.messages,
+    ...(result.reason ? { reason: result.reason } : {}),
+  };
 }
 
 export class ContextEngine {
@@ -91,7 +121,6 @@ export class ContextEngine {
     prunedCount: number;
   } {
     const model = options?.model || this.defaultModel;
-    const spec = getModelContextSpec(model);
     const memory = this.resolveMemory(options?.sessionId);
     const sessionId = this.resolveSessionId(options?.sessionId);
     let workingMessages = [...messages];
@@ -103,13 +132,15 @@ export class ContextEngine {
       }
     }
 
-    // 2. Priority-based pruning: start at 70% utilization
+    // 2. Bounded cleanup before the budget decision: bulky tool output is the
+    // largest and least durable part of a transcript, and trimming it costs no
+    // model call and rewrites no history. Doing it ahead of the threshold keeps a
+    // large request from reaching the window at all.
     let prunedCount = 0;
     if (options?.autoPrune !== false) {
-      const budgetCheck = calculateContextBudget(workingMessages, model);
-      const utilization = budgetCheck.utilizationPercent;
+      const utilization = calculateContextBudget(workingMessages, model).utilizationPercent;
 
-      if (utilization >= 70) {
+      if (utilization >= PRUNE_UTILIZATION_PERCENT) {
         const pruneResult = pruneOldToolResults(workingMessages, {
           maxToolResultChars: utilization >= 85 ? 400 : 600,
           keepRecentToolsCount: utilization >= 85 ? 2 : 3,
@@ -119,29 +150,46 @@ export class ContextEngine {
       }
     }
 
-    // 3. Check if compaction is needed based on model threshold
-    const budgetBefore = calculateContextBudget(workingMessages, model);
-    let compacted = false;
+    // 3. Budget, plan and compact through the one context manager, which owns the
+    // trigger and the progress guarantee: a compaction that cannot measurably
+    // reduce the request terminates instead of repeating until something breaks.
+    // The compatibility budget owns a trigger for the identities whose cadence
+    // already depends on it; when it fires, compaction is requested explicitly
+    // rather than second-guessed by the derived threshold.
+    const compatibilityNeedsCompaction = calculateContextBudget(workingMessages, model).needsCompaction;
+    const prepared = contextManager.prepare({
+      messages: workingMessages,
+      model,
+      ...(options?.forceCompact || compatibilityNeedsCompaction ? { force: true } : {}),
+      ...(sessionId ? { sessionId } : {}),
+      prune: (current) => {
+        const result = pruneOldToolResults(current as unknown as ContextMessage[], {
+          maxToolResultChars: 600,
+          keepRecentToolsCount: 3,
+        });
+        prunedCount += result.prunedCount;
+        return { messages: result.messages, prunedCount: result.prunedCount };
+      },
+      summarize: (current) =>
+        summarizeAtomically(current as unknown as ContextMessage[], {
+          model,
+          memory,
+          ...(sessionId ? { sessionId } : {}),
+        }),
+    });
 
-    if (options?.forceCompact || budgetBefore.needsCompaction) {
-      const compResult = compactMessagesAtomically(workingMessages, {
-        force: options?.forceCompact || budgetBefore.needsCompaction,
-        model,
-        thresholdChars: spec.autoCompactThresholdTokens * 3.8,
-        sessionId: sessionId || undefined,
-        memory,
-      });
-
-      if (compResult.compacted) {
-        workingMessages = compResult.messages;
-        compacted = true;
-        this.compactionCount++;
-        if (sessionId) {
-          const ctx = getSessionContext(sessionId);
-          ctx.compactionState.count = this.compactionCount;
-          ctx.compactionState.lastCompactedAt = Date.now();
-          ctx.compactionState.lastSummary = (compResult.messages.find(m => m.role === "user" && typeof m.content === "string" && m.content.startsWith("["))?.content as string) || "";
-        }
+    workingMessages = prepared.messages as unknown as ContextMessage[];
+    const compacted = prepared.compacted;
+    if (compacted) {
+      this.compactionCount++;
+      if (sessionId) {
+        const ctx = getSessionContext(sessionId);
+        ctx.compactionState.count = this.compactionCount;
+        ctx.compactionState.lastCompactedAt = Date.now();
+        ctx.compactionState.lastSummary =
+          (workingMessages.find(
+            (m) => m.role === "user" && typeof m.content === "string" && m.content.startsWith("["),
+          )?.content as string) || "";
       }
     }
 
