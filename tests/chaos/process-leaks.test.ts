@@ -102,13 +102,16 @@ describe("listener leaks", () => {
     const { ExternalHarnessRegistry } = await import("../../src/core/externalHarness/registry");
     const { createOpenCodeAdapter } = await import("../../src/core/externalHarness/adapters");
     const registry = new ExternalHarnessRegistry();
-    // A real spawn per cycle: node exits 0 immediately. The adapter id is the
-    // registry key, so a distinct id keeps this isolated from the built-ins.
+    // A real spawn per cycle: node exits 0 immediately. The definition is
+    // hermetic — `detect` never probes a real binary (CI has none) and
+    // `buildInvocation` runs node directly — so listener hygiene is the only
+    // variable under test.
     registry.register({
       ...createOpenCodeAdapter(),
       id: "leak-probe",
       displayName: "leak-probe",
       executable: process.execPath,
+      detect: async () => ({ available: true }),
       buildInvocation: () => ({ argv: ["-e", "process.exit(0)"] }),
     });
     const runner = new ExternalHarnessRunner(registry);
