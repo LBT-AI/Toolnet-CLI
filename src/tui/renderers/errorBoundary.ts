@@ -1,5 +1,9 @@
 import { A } from "../../term";
 import { composeBox } from "./composeBox";
+import { MIN_COLS } from "../layout";
+
+/** Floor for the fault-recovery frame — fits title + instructions + footer. */
+const FALLBACK_MIN_ROWS = 12;
 
 export interface RenderBoundaryResult {
   hasError: boolean;
@@ -29,16 +33,23 @@ export function renderWithErrorBoundary(
   }
 }
 
-/** The actionable frame painted when a render pass faults. */
+/**
+ * The actionable frame painted when a render pass faults.
+ *
+ * The frame is clamped to the smallest readable geometry: a terminal that
+ * reports an absurd size (or a faulting resize race) must not shrink the
+ * recovery frame until its instructions are truncated away — this frame is
+ * the only guidance the user gets when the TUI cannot paint.
+ */
 export function renderFallbackFrame(error: Error, cols = 80, rows = 24): string {
   const message = truncateLine(error.message || "Unknown render fault", 46);
-  return composeBox(cols, rows, {
+  return composeBox(Math.max(cols, MIN_COLS), Math.max(rows, FALLBACK_MIN_ROWS), {
     title: "⚠ ToolNet TUI Render Fault Caught",
     body: [
       `Error: ${message}`,
+      "Press Ctrl+L to redraw or type /exit",
       "The terminal session is intact; rendering was skipped.",
       "",
-      "Press Ctrl+L to redraw or type /exit",
     ],
     footer: "ToolNet · render boundary",
     accent: A.fgRed,

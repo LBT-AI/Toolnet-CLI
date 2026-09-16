@@ -697,6 +697,21 @@ export function classifyFailure(entry: EvalCase, observation: EvalObservation): 
   if (/abort|cancel/i.test(detail)) return "CANCELLED";
   if (entry.cancelAfterMs !== undefined) return "CANCELLED";
   if (observation.runtimeError && /timeout|timed out/i.test(observation.runtimeError)) return "TIMEOUT";
+
+  // Subsystem-specific classes before the generic provider buckets: a truncated
+  // stream, an exhausted quota and an expired credential all surface as HTTP or
+  // transport noise, and lumping them together hides which one to fix.
+  if (/STREAM_INCOMPLETE|truncated stream|stream ended without a terminal/i.test(detail)) return "STREAM_INCOMPLETE";
+  if (/HTTP\s+429|rate.?limit|insufficient[_ ]quota|quota exceeded/i.test(detail)) return "RATE_LIMIT";
+  if (/HTTP\s+40[13]|unauthor|invalid api key/i.test(detail)) return "AUTH";
+  if (/context (window|length|overflow)|maximum context|too many tokens|context-overflow/i.test(detail)) {
+    return "CONTEXT_OVERFLOW";
+  }
+  if (/external harness|harness binary|jsonl parse/i.test(detail)) return "EXTERNAL_HARNESS";
+  if (/mcp (server|call|transport)|mcp disconnect/i.test(detail)) return "MCP";
+  if (/language server|lsp (crash|error|timeout)/i.test(detail)) return "LSP";
+  if (/session store|session (record|journal) corrupt|session lock/i.test(detail)) return "SESSION_STORE";
+  if (/test (runner|command) failed|npm test|bun test failed/i.test(detail)) return "TEST_FAILURE";
  // an unrunnable harness configuration is a RUNTIME problem, not a
   // model-quality signal. Blaming the model here would poison exactly the
   // comparison the harness dimension exists to support.

@@ -41,6 +41,12 @@ const KNOWN_SUBCMDS = new Set([
   "version",
   "repo",
   "verify",
+  "logs",
+  "trace",
+  "health",
+  "auth",
+  "eval",
+  "harness",
 ]);
 
 // ---- Top-level --version / --help (only when not dispatching a known subcommand) ----
@@ -52,6 +58,13 @@ if (!KNOWN_SUBCMDS.has(subCmd)) {
       console.log(getVersionString());
     }
     process.exit(0);
+  }
+  // An unrecognized subcommand must not fall through into the interactive TUI:
+  // scripts calling `toolnet <typo>` would hang waiting on a terminal that is
+  // not there. Fail fast with a usage pointer instead.
+  if (!subCmd.startsWith("-") && args.length > 0 && !args.includes("-p") && !args.includes("--prompt")) {
+    console.error(`Error: unknown command '${subCmd}'. Run 'toolnet --help' for usage.`);
+    process.exit(2);
   }
   if (args.includes("--help") || args.includes("-h") || subCmd === "help") {
     console.log(`
@@ -551,6 +564,21 @@ USAGE:
     process.exit(1);
   }
   process.exit(0);
+}
+
+if (subCmd === "health") {
+  const { runHealthCli } = await import("./commands/observabilityCli");
+  process.exit(runHealthCli(args.slice(1)));
+}
+
+if (subCmd === "logs") {
+  const { runLogsCli } = await import("./commands/observabilityCli");
+  process.exit(await runLogsCli(args.slice(1)));
+}
+
+if (subCmd === "trace") {
+  const { runTraceCli } = await import("./commands/observabilityCli");
+  process.exit(runTraceCli(args.slice(1)));
 }
 
 if (subCmd === "doctor") {

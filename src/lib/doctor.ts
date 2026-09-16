@@ -21,6 +21,8 @@ import { isNoColor } from "../term";
 import { supportsVision } from "./vision";
 import { getCliKey } from "./keys";
 import { checkPendingRecovery } from "./crashRecovery";
+import { getHealthSnapshot } from "./observability/healthSnapshot";
+import { getLogsDir, LOG_MAX_BYTES, LOG_MAX_FILES } from "./observability/logger";
 
 export interface DiagnosticResult {
   name: string;
@@ -86,6 +88,13 @@ export function runDoctor(): DoctorReport {
   checks.push(checkScmAuth());
   checks.push(checkRecoveryState());
   checks.push(checkSandboxIsolation());
+  checks.push(checkObservabilityLogs());
+  // Health snapshot as a summary check (no extra probe beyond snapshot).
+  try {
+    const snap = getHealthSnapshot();
+    checks.push({ name: "health snapshot", status: snap.summary === "healthy" ? "ok" : snap.summary === "unknown" ? "ok" : snap.summary === "degraded" ? "warn" : "error", value: `${snap.summary} (${snap.components.map(c => `${c.component}:${c.status}`).join(", ")})` });
+  } catch {}
+
 
   return {
     version: getVersion(),
@@ -292,4 +301,18 @@ function checkSandboxIsolation(): DiagnosticResult {
     status: cap.available ? "ok" : "warn",
     value: cap.label + " (" + cap.details + ")",
   };
+}
+
+function checkObservabilityLogs(): DiagnosticResult {
+  try {
+    const dir = getLogsDir();
+    if (!fs.existsSync(dir)) return { name: "observability logs", status: "ok", value: "no logs yet" };
+    const files = fs.readdirSync(dir).filter(n => /^toolnet(\.\d+)?\.jsonl$/.test(n));
+    let total = 0;
+    for (const f of files) { try { total += fs.statSync(path.join(dir, f)).size; } catch {} }
+    const over = files.length > LOG_MAX_FILES ? ` (${files.length} files, max ${LOG_MAX_FILES})` : "";
+    return { name: "observability logs", status: "ok", value: `${files.length} file(s), ${(total/1024).toFixed(1)} KiB${over}, cap ${LOG_MAX_BYTES/1024/1024}MiB/file` };
+  } catch (e: any) {
+    return { name: "observability logs", status: "warn", value: String(e?.message ?? e) };
+  }
 }

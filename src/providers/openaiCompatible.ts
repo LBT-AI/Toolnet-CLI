@@ -18,6 +18,7 @@ import type {
   ChatChunk,
 } from "./types";
 import { resolveApiKey } from "./registry";
+import { isQuotaExhaustedMessage, isRetryableTransportError } from "../core/models/failureKind";
 
 /**
  * Normalizes any baseUrl to an OpenAI /v1 endpoint root.
@@ -83,6 +84,12 @@ export class OpenAICompatibleProvider implements Provider {
     this.apiKey = resolveApiKey(config);
   }
 
+  /** Provider-supplied text is redacted before it can reach a log or an error. */
+  private redactBody(text: string): string {
+    if (this.apiKey && text.includes(this.apiKey)) return text.replaceAll(this.apiKey, "[REDACTED_API_KEY]");
+    return text;
+  }
+
   private getHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -145,8 +152,44 @@ export class OpenAICompatibleProvider implements Provider {
         });
 
         if (res.status === 429 || res.status === 503) {
-          const delay = Math.pow(2, attempt) * 1000;
-          await new Promise((r) => setTimeout(r, delay));
+          // A quota-exhausted 429 shares the status with a transient rate limit
+          // but never clears on its own: surface it once instead of retrying.
+          const bodyText = await res.text().catch(() => "");
+          const evidence = this.redactBody(bodyText).slice(0, 500);
+          if (res.status === 429 && isQuotaExhaustedMessage(bodyText)) {
+            throw new Error(`HTTP 429: ${evidence}`);
+          }
+          // Keep the failure on record: if every attempt is rejected, the
+          // caller must still learn WHICH status and why, otherwise the failure
+          // classifier can only report an unclassifiable "unknown".
+          lastError = new Error(`HTTP ${res.status}: ${evidence || "transient provider failure"}`);
+          // Honor Retry-After when present, bounded to 30s and abort-interruptible.
+          const retryAfterHeader = res.headers.get("retry-after");
+          let delayMs = Math.min(4_000, Math.pow(2, attempt) * 500) + Math.floor(Math.random() * 250);
+          if (retryAfterHeader) {
+            const retryAfterSec = Number(retryAfterHeader.trim());
+            if (Number.isFinite(retryAfterSec) && retryAfterSec >= 0) {
+              delayMs = Math.min(retryAfterSec * 1000, 30_000);
+            } else {
+              const retryAfterDate = Date.parse(retryAfterHeader);
+              if (Number.isFinite(retryAfterDate)) {
+                delayMs = Math.min(Math.max(0, retryAfterDate - Date.now()), 30_000);
+              }
+            }
+          }
+          // Never sleep before giving up: the delay only buys another attempt.
+          if (attempt < 2) {
+            if (request.signal) {
+              await new Promise<void>((resolve, reject) => {
+                const t = setTimeout(resolve, delayMs);
+                (t as any).unref?.();
+                const onAbort = () => { clearTimeout(t); reject(new Error("Request aborted")); };
+                request.signal!.addEventListener("abort", onAbort, { once: true });
+              });
+            } else {
+              await new Promise((r) => setTimeout(r, delayMs));
+            }
+          }
           continue;
         }
 
@@ -161,7 +204,28 @@ export class OpenAICompatibleProvider implements Provider {
         return (await res.json()) as ChatResponse;
       } catch (err: any) {
         lastError = err;
-        if (request.signal?.aborted || err.message?.startsWith("HTTP 40")) throw err;
+        if (request.signal?.aborted) throw err;
+        if (typeof err?.message === "string" && err.message.startsWith("HTTP 40")) throw err;
+        // A classified quota exhaustion is terminal, never a 5xx/network retry.
+        if (typeof err?.message === "string" && isQuotaExhaustedMessage(err.message)) throw err;
+        // Transient 5xx / transport failure — bounded backoff with jitter before
+        // the next attempt. Reset codes live on `err.cause`, so classification
+        // goes through the shared transport check rather than message text.
+        if (attempt < 2 && isRetryableTransportError(err)) {
+          const backoffMs = Math.min(4000, Math.pow(2, attempt) * 500 + Math.floor(Math.random() * 250));
+          if (request.signal) {
+            try {
+              await new Promise<void>((resolve, reject) => {
+                const t = setTimeout(resolve, backoffMs);
+                (t as any).unref?.();
+                const onAbort = () => { clearTimeout(t); reject(new Error("Request aborted")); };
+                request.signal!.addEventListener("abort", onAbort, { once: true });
+              });
+            } catch (abortErr) { throw abortErr; }
+          } else {
+            await new Promise((r) => setTimeout(r, backoffMs));
+          }
+        }
       }
     }
 
@@ -195,11 +259,14 @@ export class OpenAICompatibleProvider implements Provider {
     });
 
     if (!res.ok) {
+      // Surface Retry-After on streaming failures so callers can honor it.
+      const retryAfter = res.headers.get("retry-after");
       let errText = await res.text();
       if (this.apiKey && errText.includes(this.apiKey)) {
         errText = errText.replaceAll(this.apiKey, "[REDACTED_API_KEY]");
       }
-      throw new Error(`HTTP ${res.status}: ${errText}`);
+      const suffix = retryAfter ? ` Retry-After: ${retryAfter}` : "";
+      throw new Error(`HTTP ${res.status}: ${errText}${suffix}`);
     }
 
     if (!res.body || typeof (res.body as any).getReader !== "function") {

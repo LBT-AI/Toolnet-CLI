@@ -83,6 +83,10 @@ export function getToolnetTelemetryDir(): string {
   return path.join(getToolnetHome(), "telemetry");
 }
 
+export function getToolnetLogsDir(): string {
+  return path.join(getToolnetHome(), "logs");
+}
+
 export function getToolnetRecoveryDir(): string {
   return path.join(getToolnetHome(), "recovery");
 }

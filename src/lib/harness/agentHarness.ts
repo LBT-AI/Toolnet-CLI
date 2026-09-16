@@ -36,6 +36,15 @@ import { hookRegistry } from "../../core/hooks";
 import { createWorkspaceContext, type WorkspaceContext } from "./workspace";
 import { AgentStateMachine } from "./agentState";
 import { ModelAdapter, type AgentModelResponse, type AgentToolCall } from "./modelAdapter";
+import {
+  requireStreamTerminal,
+  StreamStallWatch,
+  STREAM_STALL_TIMEOUT_MS,
+} from "../streamReliability";
+import { observabilityHub } from "../observability/hub";
+import { newTraceId, newTurnId, type CorrelationContext } from "../observability/correlation";
+import { MetricsRegistry, boundedModelLabel } from "../observability/metrics";
+import { redactedErrorEvidence } from "../observability/redact";
 import { parseTaskRequirements, evaluateCompletionGate, recordEvidence, emptyEvidence } from "../../core/agent/completionGate";
 import type { CompletionEvidence, TaskRequirement } from "../../core/contracts";
 // harness compatibility layer. POLICY ONLY: the profile shapes the
@@ -372,9 +381,21 @@ export class AgentHarness {
         const result = await this.completeModelOnce(provider, req, mode, wantStream);
  // health derives from observed outcomes only.
         noteModelSuccess(provider.id, Date.now() - startedAt);
+        try {
+          const dur = Date.now() - startedAt;
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.modelRequestCount, { labels: { model: boundedModelLabel(req.model) } });
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.modelRequestDuration, { labels: { model: boundedModelLabel(req.model) }, valueMs: dur });
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.providerAttemptCount, { labels: { provider: provider.id } });
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.providerAttemptDuration, { labels: { provider: provider.id }, valueMs: dur });
+        } catch {}
         return result;
       } catch (error) {
         noteModelFailure(provider.id, error instanceof Error ? error.message : String(error));
+        try {
+          const ev = redactedErrorEvidence(error);
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.modelRequestError, { labels: { model: boundedModelLabel(req.model), error_class: ev.code ?? "network" } });
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.providerAttemptCount, { labels: { provider: provider.id, error_class: ev.code ?? "network" } });
+        } catch {}
         throw error;
       }
     }
@@ -406,6 +427,14 @@ export class AgentHarness {
         // Terminal once anything reached the user, or the caller cancelled.
         isTerminal: (error) => emitted || req.signal?.aborted === true,
         onAttempt: (record) => {
+          try {
+            if (!record.ok) {
+              observabilityHub.metrics.increment(MetricsRegistry.NAMES.providerAttemptCount, { labels: { provider: record.providerId, error_class: record.failureKind ?? "unknown" } });
+            }
+            if (!record.ok && record.retryable) {
+              observabilityHub.metrics.increment(MetricsRegistry.NAMES.providerFallbackCount, { labels: { provider: record.providerId } });
+            }
+          } catch {}
           if (!record.ok && record.retryable) {
             this.emitEvent("agent:routing", mode, {
               routeId: record.routeId,
@@ -494,44 +523,79 @@ export class AgentHarness {
     let sawChunk = false;
     const toolAcc = new Map<number, { id: string; name: string; args: string }>();
 
-    for await (const chunk of adapter.stream({
-      model: req.model,
-      messages: req.messages,
-      tools: req.tools,
-      toolChoice: req.toolChoice,
-      headers: req.headers,
-      signal: req.signal,
-      reasoningEffort: req.reasoningEffort,
-      sessionId: req.sessionId,
-    })) {
-      sawChunk = true;
+    // Two observability-backed reliability guards, armed only for real streams:
+    // inactivity abort (a live socket can still be dead) and terminal
+    // validation (an EOF without protocol evidence is not success).
+    const stallAbort = new AbortController();
+    const combinedStallSignal = req.signal
+      ? AbortSignal.any([req.signal, stallAbort.signal])
+      : stallAbort.signal;
+    const stallWatch = new StreamStallWatch(STREAM_STALL_TIMEOUT_MS, () => {
+      stallAbort.abort();
+    });
 
-      if (chunk.reasoningDelta) {
-        noteFirstDelta();
-        reasoning += chunk.reasoningDelta;
-        this.emitEvent("agent:reasoning_chunk", mode, { text: chunk.reasoningDelta });
+    try {
+      stallWatch.start();
+      for await (const chunk of adapter.stream({
+        model: req.model,
+        messages: req.messages,
+        tools: req.tools,
+        toolChoice: req.toolChoice,
+        headers: req.headers,
+        signal: combinedStallSignal,
+        reasoningEffort: req.reasoningEffort,
+        sessionId: req.sessionId,
+      })) {
+        stallWatch.noteChunk();
+        sawChunk = true;
+
+        if (chunk.reasoningDelta) {
+          noteFirstDelta();
+          reasoning += chunk.reasoningDelta;
+          this.emitEvent("agent:reasoning_chunk", mode, { text: chunk.reasoningDelta });
+        }
+
+        if (chunk.contentDelta) {
+          noteFirstDelta();
+          content += chunk.contentDelta;
+          this.emitEvent("agent:stream_chunk", mode, { text: chunk.contentDelta });
+          req.onContentDelta?.(chunk.contentDelta);
+        }
+
+        if (chunk.toolCallDelta) {
+          const d = chunk.toolCallDelta;
+          const idx = d.index ?? 0;
+          const cur = toolAcc.get(idx) ?? { id: "", name: "", args: "" };
+          if (d.id) cur.id = d.id;
+          if (d.name) cur.name = d.name;
+          if (d.argumentsDelta) cur.args += d.argumentsDelta;
+          toolAcc.set(idx, cur);
+        }
+
+        if (chunk.usage) usage = chunk.usage;
+        if (chunk.finishReason) finishReason = chunk.finishReason;
       }
-
-      if (chunk.contentDelta) {
-        noteFirstDelta();
-        content += chunk.contentDelta;
-        this.emitEvent("agent:stream_chunk", mode, { text: chunk.contentDelta });
-        req.onContentDelta?.(chunk.contentDelta);
+    } catch (streamErr: any) {
+      // An inactivity abort reads as a TIMEOUT (retryable), never as a user
+      // cancellation (terminal) — the AbortError produced by the stall abort is
+      // converted so failure classification stays truthful. A genuine user
+      // abort (req.signal) keeps its original error.
+      if (stallWatch.stalled && !req.signal?.aborted) {
+        const timeoutErr: any = new Error(
+          `Provider stream stalled: no chunk within ${STREAM_STALL_TIMEOUT_MS}ms.`,
+        );
+        timeoutErr.name = "TimeoutError";
+        throw timeoutErr;
       }
-
-      if (chunk.toolCallDelta) {
-        const d = chunk.toolCallDelta;
-        const idx = d.index ?? 0;
-        const cur = toolAcc.get(idx) ?? { id: "", name: "", args: "" };
-        if (d.id) cur.id = d.id;
-        if (d.name) cur.name = d.name;
-        if (d.argumentsDelta) cur.args += d.argumentsDelta;
-        toolAcc.set(idx, cur);
-      }
-
-      if (chunk.usage) usage = chunk.usage;
-      if (chunk.finishReason) finishReason = chunk.finishReason;
+      throw streamErr;
+    } finally {
+      // Disarm without recording a stall; a clean end is not inactivity.
+      stallWatch.complete();
     }
+
+    // A connection that dissolved without protocol evidence is incomplete,
+    // not successful: classified as a retryable failure, never fake success.
+    requireStreamTerminal({ sawChunk, sawFinishReason: finishReason != null, sawUsage: usage != null });
 
     const toolCalls: AgentToolCall[] = [...toolAcc.entries()]
       .sort((a, b) => a[0] - b[0])
@@ -867,6 +931,12 @@ export class AgentHarness {
     mode: ExecutionMode = "HEADLESS"
   ): Promise<HarnessResult> {
     const startTime = Date.now();
+    const turnId = newTurnId();
+    const traceId = newTraceId();
+    const corr: CorrelationContext = { sessionId: options.sessionId || this.config.sessionId || "session", turnId, traceId };
+    const turnSpan = (() => { try { return observabilityHub.trace.start("agent_turn", `turn:${corr.sessionId}`, corr); } catch { return null; } })();
+    try { observabilityHub.info("harness", "turn.start", { correlation: corr, metadata: { mode, model: options.model || this.config.model } as any }); } catch {}
+    try { observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { operation: "turn" } }); } catch {}
  // — an explicit caller budget always wins, then the profile's.
     const maxTurns = resolveMaxTurns(
       options.maxTurns,
@@ -886,6 +956,10 @@ export class AgentHarness {
       // `idle → cancelled` is not a legal edge in the state machine.
       this.lastRunState.cancelled = true;
       this.emitEvent("agent:error", mode, { error: "Execution cancelled by user" });
+      try {
+        observabilityHub.info("harness", "turn.cancelled", { correlation: corr, outcome: "cancelled" });
+        if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "cancelled", "cancelled");
+      } catch {}
       return {
         success: false,
         output: "",
@@ -908,6 +982,12 @@ export class AgentHarness {
         error: this.profileError,
         code: "HARNESS_PROFILE_NOT_FOUND",
       });
+      try {
+        const ev = redactedErrorEvidence(this.profileError);
+        observabilityHub.error("harness", "turn.error", { correlation: corr, error: { message: ev.message, code: "HARNESS_PROFILE_NOT_FOUND" }, outcome: "error" });
+        observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: "error", error_class: "bad-request" } });
+        if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", "HARNESS_PROFILE_NOT_FOUND");
+      } catch {}
       return {
         success: false,
         output: "",
@@ -935,6 +1015,11 @@ export class AgentHarness {
     if (!provider) {
       const errorMsg = "No active AI provider configured.";
       this.emitEvent("agent:error", mode, { error: errorMsg });
+      try {
+        observabilityHub.error("harness", "turn.error", { correlation: corr, error: { message: errorMsg, code: "NO_PROVIDER" }, outcome: "error" });
+        observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: "error", error_class: "bad-request" } });
+        if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", "NO_PROVIDER");
+      } catch {}
       return {
         success: false,
         output: "",
@@ -1133,6 +1218,11 @@ export class AgentHarness {
           this.lastRunState.cancelled = true;
           this.agentState.transition("cancelled");
           this.emitEvent("agent:error", mode, { error: "Execution cancelled by user" });
+          try {
+            observabilityHub.info("harness", "turn.cancelled", { correlation: corr, outcome: "cancelled" });
+            observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: "cancelled", error_class: "cancelled" } });
+            if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "cancelled", "cancelled");
+          } catch {}
           return {
             success: false,
             output: "",
@@ -1149,9 +1239,17 @@ export class AgentHarness {
         // A provider call aborted by the run's own timeout budget is a TIMEOUT,
         // not a network failure.
         if (timeoutSignal.aborted) this.lastRunState.timedOut = true;
-        const errorMsg = `Gateway network error: Network/Gateway connection failed: ${netErr?.message || String(netErr)}`;
+        const ev = redactedErrorEvidence(netErr);
+        const errorMsg = `Gateway network error: Network/Gateway connection failed: ${ev.message}`;
         this.agentState.transition("error", "network");
         this.emitEvent("agent:error", mode, { error: errorMsg });
+        try {
+          const dur = Date.now() - startTime;
+          observabilityHub.error("harness", "turn.error", { correlation: corr, error: { message: ev.message, ...(ev.code ? { code: ev.code } : {}), ...(ev.status !== undefined ? { status: ev.status } : {}) }, durationMs: dur, outcome: timeoutSignal.aborted ? "timeout" : "error" });
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.modelRequestError, { labels: { model: boundedModelLabel(model), error_class: timeoutSignal.aborted ? "timeout" : "network" } });
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: timeoutSignal.aborted ? "timeout" : "error", error_class: timeoutSignal.aborted ? "timeout" : "network" } });
+          if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", ev.code ?? "network");
+        } catch {}
         return {
           success: false,
           output: "",
@@ -1256,6 +1354,11 @@ export class AgentHarness {
           if (stalledAtGate) {
             this.agentState.transition("error", "no-progress");
             this.emitEvent("agent:error", mode, { error: stalledAtGate.error, gateReason: gate.reason });
+            try {
+              observabilityHub.warn("harness", "turn.no_progress", { correlation: corr, outcome: "error", errorCode: "NO_PROGRESS", metadata: { gateReason: gate.reason } as any });
+              observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: "error", error_class: "no_progress" } });
+              if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", "NO_PROGRESS");
+            } catch {}
             return {
               success: false,
               output: finalOutput,
@@ -1293,6 +1396,21 @@ export class AgentHarness {
           tokensUsed: accumulatedTokens,
         });
         this.emitEvent("session:saved", mode, { sessionId, turnsUsed, toolCallsCount });
+
+        {
+          const dur = Date.now() - startTime;
+          try {
+            observabilityHub.info("harness", "turn.complete", {
+              correlation: corr,
+              durationMs: dur,
+              outcome: "ok",
+              metadata: { turnsUsed, toolCallsCount, tokensUsed: accumulatedTokens } as any,
+            });
+            observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnDuration, { labels: { outcome: "ok" }, valueMs: dur });
+            observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: "ok" } });
+            if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "ok");
+          } catch {}
+        }
 
         return {
           success: true,
@@ -1434,6 +1552,11 @@ export class AgentHarness {
       if (loopAborted) {
         this.agentState.transition("error", "loop-detected");
         this.emitEvent("agent:error", mode, { error: "Infinite loop detected: exceeded maximum repetition of identical tool calls." });
+        try {
+          observabilityHub.warn("harness", "turn.loop_detected", { correlation: corr, outcome: "error", errorCode: "LOOP_DETECTED" });
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: "error", error_class: "loop" } });
+          if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", "LOOP_DETECTED");
+        } catch {}
         return {
           success: false,
           output: "",
@@ -1457,6 +1580,11 @@ export class AgentHarness {
           turnsUsed,
           toolCallsCount,
         });
+        try {
+          observabilityHub.warn("harness", "turn.no_progress", { correlation: corr, outcome: "error", errorCode: "NO_PROGRESS" });
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: "error", error_class: "no_progress" } });
+          if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", "NO_PROGRESS");
+        } catch {}
         return {
           success: false,
           output: "",
@@ -1475,6 +1603,11 @@ export class AgentHarness {
     }
 
     this.agentState.transition("error", "max-turns");
+    try {
+      observabilityHub.warn("harness", "turn.max_turns", { correlation: corr, outcome: "error", errorCode: "MAX_TURNS" });
+      observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: "error", error_class: "max_turns" } });
+      if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", "MAX_TURNS");
+    } catch {}
     return {
       success: false,
       output: "",

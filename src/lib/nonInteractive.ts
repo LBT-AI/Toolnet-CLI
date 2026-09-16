@@ -201,7 +201,13 @@ export async function runNonInteractive(options: NonInteractiveOptions): Promise
 
     // Release plugin hooks, MCP processes and registered tools before exit.
     await disposeExtensions();
-    process.exit(result.success ? 0 : 1);
+    // Exit 0 only for a completed task. Cancellation and timeout are failure
+    // shapes too: a caller scripting this CLI must never read a half-finished
+    // run as success. Verdicts come from the completion gate, which never
+    // accepts "the model said it finished" as terminal evidence.
+    const verdict = result.verdict ?? (result.success ? "SUCCESS" : "FAILED");
+    const exitCode = verdict === "SUCCESS" ? 0 : verdict === "CANCELLED" ? 130 : verdict === "TIMEOUT" ? 124 : 1;
+    process.exit(exitCode);
   } catch (err: unknown) {
     const durationMs = Date.now() - startTime;
     const classified = classifyError(err);
