@@ -21,7 +21,9 @@ export type HarnessEventType =
   | "agent:start"
   | "agent:thinking"
   | "agent:stream_chunk"
+  | "agent:reasoning_start"
   | "agent:reasoning_chunk"
+  | "agent:reasoning_end"
  /** a runtime notification was injected into the conversation. */
   | "agent:notification"
   | "tool:queued"

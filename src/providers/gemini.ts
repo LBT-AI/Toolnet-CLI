@@ -298,7 +298,17 @@ export class GeminiProvider implements Provider {
             if (Array.isArray(parts)) {
               for (let pIdx = 0; pIdx < parts.length; pIdx++) {
                 const part = parts[pIdx];
-                if (part.text) {
+                if (part.thought && part.text) {
+                  yield {
+                    choices: [
+                      {
+                        index: 0,
+                        delta: { thinking: part.text },
+                        finish_reason: candidate.finishReason ?? null,
+                      },
+                    ],
+                  };
+                } else if (part.text) {
                   yield {
                     choices: [
                       {

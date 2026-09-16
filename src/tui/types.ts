@@ -1,4 +1,4 @@
-export type Role = "user" | "assistant" | "system" | "tool";
+export type Role = "user" | "assistant" | "system" | "tool" | "reasoning";
 
 export interface Msg {
   role: Role;
@@ -6,6 +6,8 @@ export interface Msg {
   tool_calls?: any[];
   tool_call_id?: string;
   name?: string;
+  reasoning?: import("../lib/reasoning").ReasoningBlock;
+  [key: string]: any;
 }
 
 export type ApprovalChoice = "y" | "a" | "t" | "n";

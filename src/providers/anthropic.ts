@@ -300,6 +300,16 @@ export class AnthropicProvider implements Provider {
                   },
                 ],
               };
+            } else if (event.type === "content_block_delta" && event.delta?.type === "thinking_delta") {
+              yield {
+                choices: [
+                  {
+                    index: 0,
+                    delta: { thinking: event.delta.thinking },
+                    finish_reason: null,
+                  },
+                ],
+              };
             } else if (event.type === "content_block_delta" && event.delta?.type === "input_json_delta") {
               yield {
                 choices: [

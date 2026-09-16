@@ -4,6 +4,8 @@ import type { Msg } from "../types";
 import { formatToolStart, formatToolEnd } from "../toolActivity";
 import { renderUnifiedDiffLines } from "./diffRenderer";
 import { redactOutputSecrets } from "../../lib/security/outputRedactor";
+import { renderReasoningPanel } from "./reasoningPanel";
+import type { ReasoningBlock } from "../../lib/reasoning";
 
 export function renderChatMessages(
   messages: Msg[],
@@ -16,6 +18,27 @@ export function renderChatMessages(
   for (let mIdx = 0; mIdx < messages.length; mIdx++) {
     const msg = messages[mIdx];
     const isUser = msg.role === "user";
+
+    // ── 0. Finalized Reasoning Block ───────────────────────────────────────
+    if (msg.role === "reasoning") {
+      const block: ReasoningBlock | undefined = msg.reasoning;
+      const text = block?.text || msg.content || "";
+      if (text.trim() || block?.collapsed) {
+        const durationStr = block?.durationMs
+          ? `${(block.durationMs / 1000).toFixed(1)}s`
+          : (msg as any).elapsed || "";
+        const panelLines = renderReasoningPanel(chatCols, {
+          text,
+          elapsed: durationStr,
+          effort: block?.effort || (msg as any).effort || "",
+          collapsed: block?.collapsed ?? (msg as any).collapsed ?? false,
+          tokens: block?.tokens || (msg as any).tokens || 0,
+          streaming: false,
+        });
+        chatLines.push(...panelLines);
+      }
+      continue;
+    }
 
     // ── 1. Tool Response / Result ──────────────────────────────────────────
     let isToolResponse = msg.role === "tool";

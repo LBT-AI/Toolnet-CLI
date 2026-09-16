@@ -365,8 +365,10 @@ export class AgentHarness {
       signal?: AbortSignal;
       onContentDelta?: (text: string) => void;
       reasoningEffort?: "low" | "medium" | "high";
- /** forwarded to the model hooks as session metadata. */
+      /** forwarded to the model hooks as session metadata. */
       sessionId?: string;
+      turn?: number;
+      runId?: string;
     },
     mode: ExecutionMode,
     wantStream: boolean,
@@ -484,6 +486,8 @@ export class AgentHarness {
       onFirstDelta?: () => void;
       reasoningEffort?: "low" | "medium" | "high";
       sessionId?: string;
+      turn?: number;
+      runId?: string;
     },
     mode: ExecutionMode,
     wantStream: boolean
@@ -518,6 +522,8 @@ export class AgentHarness {
 
     let content = "";
     let reasoning = "";
+    let reasoningStarted = false;
+    let reasoningStartTime = 0;
     let usage: AgentModelResponse["usage"] | undefined;
     let finishReason: string | null = null;
     let sawChunk = false;
@@ -551,8 +557,34 @@ export class AgentHarness {
 
         if (chunk.reasoningDelta) {
           noteFirstDelta();
+          if (!reasoningStarted) {
+            reasoningStarted = true;
+            reasoningStartTime = Date.now();
+            this.emitEvent("agent:reasoning_start", mode, {
+              id: `rs_${Date.now()}`,
+              turn: req.turn ?? 0,
+              runId: req.runId,
+              timestamp: reasoningStartTime,
+            });
+          }
           reasoning += chunk.reasoningDelta;
-          this.emitEvent("agent:reasoning_chunk", mode, { text: chunk.reasoningDelta });
+          this.emitEvent("agent:reasoning_chunk", mode, {
+            text: chunk.reasoningDelta,
+            turn: req.turn ?? 0,
+            runId: req.runId,
+            timestamp: Date.now(),
+          });
+        }
+
+        if (reasoningStarted && (chunk.contentDelta || chunk.toolCallDelta)) {
+          reasoningStarted = false;
+          this.emitEvent("agent:reasoning_end", mode, {
+            id: `rs_${reasoningStartTime}`,
+            turn: req.turn ?? 0,
+            runId: req.runId,
+            durationMs: Date.now() - reasoningStartTime,
+            timestamp: Date.now(),
+          });
         }
 
         if (chunk.contentDelta) {
@@ -574,6 +606,17 @@ export class AgentHarness {
 
         if (chunk.usage) usage = chunk.usage;
         if (chunk.finishReason) finishReason = chunk.finishReason;
+      }
+
+      if (reasoningStarted) {
+        reasoningStarted = false;
+        this.emitEvent("agent:reasoning_end", mode, {
+          id: `rs_${reasoningStartTime}`,
+          turn: req.turn ?? 0,
+          runId: req.runId,
+          durationMs: Date.now() - reasoningStartTime,
+          timestamp: Date.now(),
+        });
       }
     } catch (streamErr: any) {
       // An inactivity abort reads as a TIMEOUT (retryable), never as a user
@@ -1205,6 +1248,7 @@ export class AgentHarness {
             onContentDelta: options.onChunk,
             reasoningEffort: resolveReasoningEffort(model, options.reasoningSettings),
             sessionId,
+            turn: turnsUsed,
           },
           mode,
           options.stream === true,

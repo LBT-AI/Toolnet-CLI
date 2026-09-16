@@ -98,6 +98,31 @@ function buildToolsForMode(mode: "Build" | "Plan"): any[] | undefined {
   return planTools;
 }
 
+export function syncTranscriptPreservingReasoning(currentMsgs: any[], engineMsgs: any[]): any[] {
+  const nonReasoningEngine = (engineMsgs ?? []).filter((m) => m.role !== "system");
+  if (nonReasoningEngine.length === 0) return currentMsgs;
+  if (!currentMsgs.some((m) => m.role === "reasoning")) {
+    return nonReasoningEngine;
+  }
+
+  const merged: any[] = [];
+  let eIdx = 0;
+
+  for (const m of currentMsgs) {
+    if (m.role === "reasoning") {
+      merged.push(m);
+    } else if (eIdx < nonReasoningEngine.length) {
+      merged.push(nonReasoningEngine[eIdx++]);
+    }
+  }
+
+  while (eIdx < nonReasoningEngine.length) {
+    merged.push(nonReasoningEngine[eIdx++]);
+  }
+
+  return merged;
+}
+
 export async function sendMessage(text: string): Promise<void> {
   if (!text.trim()) return;
 
@@ -108,8 +133,10 @@ export async function sendMessage(text: string): Promise<void> {
 
   messageQueue.setIsProcessing(true);
 
+  // Initialize fresh run with isolated runId and reset reasoning draft
+  const runId = tuiState.startNewRun(tuiState.currentSessionId);
+
   tuiState.messages.push({ role: "user", content: text });
-  tuiState.messages.push({ role: "assistant", content: "" });
 
   // Explicit language request ("trả lời bằng tiếng Việt", "用中文", ...)
   // locks the response language for the session; otherwise it stays "auto"
@@ -120,7 +147,6 @@ export async function sendMessage(text: string): Promise<void> {
     setResponseLanguage(langRequest);
   }
   tuiState.saveCurrentSession();
-  const assistantIdx = tuiState.messages.length - 1;
 
   pinToTail(tuiState.chatViewport);
   statusManager.start("Thinking…");
@@ -129,16 +155,11 @@ export async function sendMessage(text: string): Promise<void> {
 
   // Reset reasoning state for the new turn (capability-aware: phase only
   // becomes "thinking" when the model actually reasons or streams reasoning).
-  tuiState.reasoningText = "";
-  tuiState.reasoningCollapsed = false;
-  tuiState.reasoningTokens = 0;
-  tuiState.reasoningElapsed = "";
   tuiState.agentPhase = supportsReasoning(tuiState.currentModel) ? "thinking" : "idle";
   tuiState.saveCurrentSession();
 
-
   try {
- // ── Shared Agent Engine ──────────────────────────────────
+    // ── Shared Agent Engine ──────────────────────────────────
     // The TUI no longer holds an agent loop. It builds the transcript, calls
     // the ONE engine, and renders the normalized AgentEvent stream: no
     // tool_calls parsing, no direct tool execution, no provider-specific code.
@@ -160,7 +181,7 @@ export async function sendMessage(text: string): Promise<void> {
     }
 
     const apiMessages: ContextMessage[] = tuiState.messages
-      .filter((m, i) => i !== assistantIdx && m.role !== "system")
+      .filter((m) => m.role !== "system" && m.role !== "reasoning")
       .map((m) => {
         let contentPayload: any = m.content;
         if (m.role === "user" && typeof m.content === "string" && (m.content.includes("@") || m.content.includes("/attach"))) {
@@ -198,44 +219,104 @@ export async function sendMessage(text: string): Promise<void> {
       toolsOverride,
       reasoningSettings: tuiState.reasoningSettings,
       onTextDelta: (delta) => {
+        // Content arrived -> finalize any active reasoning block for this turn
+        tuiState.finalizeActiveReasoning("text-delta");
         if (tuiState.agentPhase === "thinking") tuiState.agentPhase = "streaming";
         fullText += delta;
-        tuiState.messages[assistantIdx] = { role: "assistant", content: fullText + "▊" };
+        const lastMsg = tuiState.messages[tuiState.messages.length - 1];
+        if (lastMsg && lastMsg.role === "assistant" && !lastMsg.tool_calls) {
+          lastMsg.content = fullText + "▊";
+        } else {
+          tuiState.messages.push({ role: "assistant", content: fullText + "▊" });
+        }
         tuiState.requestStreamRender();
       },
       onReasoningDelta: (delta) => {
-        if (tuiState.agentPhase !== "thinking") tuiState.agentPhase = "thinking";
-        tuiState.reasoningText += delta;
-        if (!tuiState.reasoningElapsed) tuiState.reasoningElapsed = tuiState.elapsedDisplay || "";
+        tuiState.appendReasoningDelta(delta, {
+          sessionId: tuiState.currentSessionId,
+          runId,
+          turnId: tuiState.currentTurnId,
+        });
         statusManager.update("Thinking");
-        tuiState.requestStreamRender();
       },
       onEvent: (event) => {
         switch (event.type) {
-          case "reasoning-delta":
+          case "reasoning-start":
+            tuiState.appendReasoningDelta("", {
+              sessionId: tuiState.currentSessionId,
+              runId,
+              turnId: event.turn ?? tuiState.currentTurnId,
+            });
             if (tuiState.agentPhase !== "thinking") tuiState.agentPhase = "thinking";
-            tuiState.requestStreamRender();
+            statusManager.update("Thinking");
+            break;
+          case "reasoning-delta":
+            tuiState.appendReasoningDelta(event.text, {
+              sessionId: tuiState.currentSessionId,
+              runId,
+              turnId: event.turn ?? tuiState.currentTurnId,
+            });
+            if (tuiState.agentPhase !== "thinking") tuiState.agentPhase = "thinking";
+            statusManager.update("Thinking");
+            break;
+          case "reasoning-end":
+            if (tuiState.activeReasoningDraft) {
+              tuiState.activeReasoningDraft.endedAt = event.timestamp ?? Date.now();
+            }
             break;
           case "tool-call":
+            // Tool call begins -> finalize current reasoning block immediately!
+            tuiState.finalizeActiveReasoning("tool-call");
             tuiState.agentPhase = "working";
             toolNames.set(event.callId, event.name);
             statusManager.updateTool(event.name, event.input as any);
+            // Append tool call directly into transcript
+            tuiState.messages.push({
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: event.callId,
+                  type: "function",
+                  function: {
+                    name: event.name,
+                    arguments: typeof event.input === "string" ? event.input : JSON.stringify(event.input ?? {}),
+                  },
+                },
+              ],
+            });
+            tuiState.currentTurnId++;
             tuiState.requestRender();
             break;
           case "tool-result":
             updateCrashToolResult(event.callId, event.result.exitCode ?? (event.result.ok ? 0 : 1), "Executed tool");
+            tuiState.messages.push({
+              role: "tool",
+              tool_call_id: event.callId,
+              name: toolNames.get(event.callId) || "tool",
+              content: JSON.stringify(event.result),
+            });
             tuiState.requestRender();
             break;
           case "tool-error":
+            tuiState.messages.push({
+              role: "tool",
+              tool_call_id: event.callId,
+              name: toolNames.get(event.callId) || "tool",
+              content: JSON.stringify({ error: event.error, exitCode: 1 }),
+            });
             tuiState.requestRender();
             break;
           case "agent-complete":
+            tuiState.finalizeActiveReasoning("agent-complete");
             tuiState.agentPhase = "done";
             break;
           case "cancelled":
+            tuiState.finalizeActiveReasoning("cancelled");
             tuiState.agentPhase = "cancelled";
             break;
           case "error":
+            tuiState.finalizeActiveReasoning("error");
             tuiState.agentPhase = "error";
             break;
           default:
@@ -259,15 +340,24 @@ export async function sendMessage(text: string): Promise<void> {
       },
     });
 
+    tuiState.finalizeActiveReasoning("run-settled");
+
     // Adopt the engine-owned transcript (minus the system prompt, which the
-    // TUI rebuilds per turn) so tool results persist across turns.
+    // TUI rebuilds per turn) so tool results persist across turns, while
+    // preserving any reasoning blocks already in the transcript.
     const transcript = (result.messages ?? []).filter((m) => m.role !== "system");
     if (transcript.length > 0) {
-      tuiState.messages = transcript as any;
+      tuiState.messages = syncTranscriptPreservingReasoning(tuiState.messages, transcript);
     } else if (!result.success) {
-      tuiState.messages[assistantIdx] = { role: "assistant", content: result.error ? `✖ Error: ${result.error}` : "(no response)" };
+      tuiState.messages.push({ role: "assistant", content: result.error ? `✖ Error: ${result.error}` : "(no response)" });
     } else {
-      tuiState.messages[assistantIdx] = { role: "assistant", content: result.output || fullText || "(empty response)" };
+      const outputText = result.output || fullText || "(empty response)";
+      const lastMsg = tuiState.messages[tuiState.messages.length - 1];
+      if (lastMsg && lastMsg.role === "assistant" && !lastMsg.tool_calls) {
+        lastMsg.content = outputText;
+      } else {
+        tuiState.messages.push({ role: "assistant", content: outputText });
+      }
     }
 
     if (!result.success) {
@@ -282,12 +372,13 @@ export async function sendMessage(text: string): Promise<void> {
       tuiState.reasoningTokens > 0
         ? `Done · ${tuiState.reasoningTokens.toLocaleString()} reasoning tokens`
         : undefined;
-    if (reasoningDoneMsg && tuiState.reasoningText) {
+    if (reasoningDoneMsg && (tuiState.reasoningText || tuiState.messages.some((m) => m.role === "reasoning"))) {
       statusManager.done(`✔ ${reasoningDoneMsg}`);
     } else {
       statusManager.done();
     }
   } catch (err: any) {
+    tuiState.finalizeActiveReasoning("error");
     if (err?.name === "AbortError") {
       tuiState.agentPhase = "cancelled";
       statusManager.cancel();

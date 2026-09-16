@@ -76,7 +76,9 @@ export type PermissionDecision = "ALLOW" | "ASK" | "DENY";
 export type AgentEvent =
   | { type: "agent-start"; sessionId: string }
   | { type: "thinking-start" }
-  | { type: "reasoning-delta"; text: string }
+  | { type: "reasoning-start"; id?: string; turn?: number; timestamp?: number; sessionId?: string; runId?: string }
+  | { type: "reasoning-delta"; text: string; turn?: number; timestamp?: number; sessionId?: string; runId?: string }
+  | { type: "reasoning-end"; id?: string; durationMs?: number; turn?: number; timestamp?: number; sessionId?: string; runId?: string }
   | { type: "tool-input-start"; callId: string; name: string }
   | { type: "tool-input-delta"; callId: string; delta: string }
   | { type: "tool-call"; callId: string; name: string; input: unknown }

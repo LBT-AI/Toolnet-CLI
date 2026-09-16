@@ -33,6 +33,25 @@ export type AgentPhase =
   | "cancelled"
   | "error";
 
+/**
+ * Normalized reasoning block structure for live active drafts and finalized blocks.
+ * Matches OpenCode and Codex TUI semantics.
+ */
+export interface ReasoningBlock {
+  id: string;
+  turnId: number;
+  runId: string;
+  sessionId: string;
+  text: string;
+  startedAt: number;
+  endedAt?: number;
+  durationMs?: number;
+  collapsed?: boolean;
+  streaming?: boolean;
+  effort?: string;
+  tokens?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Capability cache — populated by provider.listModels() results.
 // ---------------------------------------------------------------------------

@@ -134,11 +134,39 @@ export function toAgentEvents(ev: HarnessEvent): AgentEvent[] {
       return [{ type: "text-delta", text }];
     }
 
+    case "agent:reasoning_start":
+      return [{
+        type: "reasoning-start",
+        id: payload.id,
+        turn: payload.turn,
+        timestamp: ev.timestamp || payload.timestamp,
+        sessionId: ev.sessionId,
+        runId: payload.runId,
+      }];
+
     case "agent:reasoning_chunk": {
       const text = typeof payload.text === "string" ? payload.text : "";
       if (!text) return [];
-      return [{ type: "reasoning-delta", text }];
+      return [{
+        type: "reasoning-delta",
+        text,
+        turn: payload.turn,
+        timestamp: ev.timestamp || payload.timestamp,
+        sessionId: ev.sessionId,
+        runId: payload.runId,
+      }];
     }
+
+    case "agent:reasoning_end":
+      return [{
+        type: "reasoning-end",
+        id: payload.id,
+        durationMs: payload.durationMs,
+        turn: payload.turn,
+        timestamp: ev.timestamp || payload.timestamp,
+        sessionId: ev.sessionId,
+        runId: payload.runId,
+      }];
 
     case "agent:notification":
       return [{
