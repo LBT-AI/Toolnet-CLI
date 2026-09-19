@@ -7,6 +7,8 @@ export interface ReasoningPanelState {
   effort: string;
   collapsed: boolean;
   tokens: number;
+  /** True while the block is still receiving deltas — renders the live header. */
+  streaming?: boolean;
 }
 
 /**
@@ -19,9 +21,12 @@ export function renderReasoningPanel(cols: number, state: ReasoningPanelState): 
   const out: string[] = [];
   if (!state.text && !state.collapsed) return out;
 
+  // Live blocks carry a pulsing marker so the user can tell an in-flight
+  // stream apart from a finalized summary at a glance.
+  const liveMark = state.streaming ? "● " : "";
   const effortLabel = state.effort && state.effort !== "auto" ? ` · ${state.effort}` : "";
   const tokensLabel = state.tokens > 0 ? ` · ${state.tokens.toLocaleString()} tokens` : "";
-  const headerCore = `Thinking${effortLabel}${state.elapsed ? ` · ${state.elapsed}` : ""}${tokensLabel}`;
+  const headerCore = `${liveMark}Thinking${effortLabel}${state.elapsed ? ` · ${state.elapsed}` : ""}${tokensLabel}`;
 
   if (state.collapsed) {
     const line = A.fgCyan + A.bold + "▶ " + A.reset + A.fgSubtext + headerCore + A.reset;
@@ -32,7 +37,11 @@ export function renderReasoningPanel(cols: number, state: ReasoningPanelState): 
   const boxW = Math.min(cols - 2, Math.max(40, Math.floor(cols * 0.92)));
   const leftPad = Math.max(0, Math.floor((cols - boxW) / 2));
   const innerWidth = boxW - 2;
-  const header = A.fgCyan + A.bold + "▼ " + A.reset + A.fgCyan + A.bold + headerCore + A.reset;
+  // Header sits after the "▼ " marker inside the border, so its visible
+  // budget is innerWidth - 2; without this clamp a long header overflows
+  // the box on narrow terminals.
+  const headerCoreTrimmed = truncate(headerCore, Math.max(1, innerWidth - 2));
+  const header = A.fgCyan + A.bold + "▼ " + A.reset + A.fgCyan + A.bold + headerCoreTrimmed + A.reset;
 
   out.push(" ".repeat(leftPad) + A.fgBorder + "╭" + "─".repeat(innerWidth) + "╮" + A.reset + "\r\n");
   out.push(

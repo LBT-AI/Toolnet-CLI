@@ -25,6 +25,7 @@ import { setResponseLanguage } from "../lib/language";
 import {
   DEFAULT_REASONING_SETTINGS,
   type AgentPhase,
+  type ReasoningBlock,
   type ReasoningSettings,
 } from "../lib/reasoning";
 import type { SessionItem } from "./renderers/sessionPickerRenderer";
@@ -55,6 +56,19 @@ export class TuiState {
   reasoningCollapsed = false;
   reasoningTokens = 0;
   reasoningElapsed = "";
+
+  // ── Live reasoning draft (canonical stream lifecycle) ────────────────────
+  /** Correlation id of the in-flight agent run; empty when idle. */
+  currentRunId: string = "";
+  /** Zero-based turn counter within the current run; advanced on tool calls. */
+  currentTurnId = 0;
+  /**
+   * In-flight reasoning block for the active turn. Null when no reasoning
+   * stream is open; non-null blocks are rendered live and finalized into the
+   * transcript on the next lifecycle boundary (tool call / text / completion).
+   */
+  activeReasoningDraft: ReasoningBlock | null = null;
+
   bypassMode = bypassEngine.isEnabled();
   bypassLevel = bypassEngine.getLevel();
 
@@ -227,6 +241,111 @@ export class TuiState {
     if (this.renderCallback) {
       this.renderCallback();
     }
+  }
+
+  // ── Live reasoning lifecycle ──────────────────────────────────────────────
+
+  /**
+   * Open a new agent run and return its correlation id. Reasoning deltas from
+   * any previous run become stale by definition and are rejected on arrival.
+   */
+  startNewRun(sessionId: string): string {
+    if (sessionId) this.currentSessionId = sessionId;
+    this.currentRunId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.currentTurnId = 0;
+    this.activeReasoningDraft = null;
+    this.reasoningText = "";
+    this.reasoningTokens = 0;
+    this.reasoningElapsed = "";
+    return this.currentRunId;
+  }
+
+  /**
+   * Append a provider reasoning delta to the live draft.
+   *
+   * Invariants:
+   *  - Correlation guard: deltas whose (sessionId, runId[, turnId]) do not
+   *    match the active run are dropped — a late event from a previous run or
+   *    a switched session must never leak into the current transcript.
+   *  - Micro-cycle coalescing: providers may emit start/delta/end per token;
+   *    a draft closed within the same turn is reopened and extended instead
+   *    of finalized, so one logical block per turn segment.
+   *  - An empty delta still opens the draft (reasoning-start with no text yet).
+   *
+   * Returns true when the delta was accepted into the live draft.
+   */
+  appendReasoningDelta(
+    delta: string,
+    ctx: { sessionId: string; runId: string; turnId?: number }
+  ): boolean {
+    if (!ctx) return false;
+    if (ctx.sessionId !== this.currentSessionId || ctx.runId !== this.currentRunId) return false;
+    if (
+      typeof ctx.turnId === "number" &&
+      ctx.turnId !== this.currentTurnId
+    ) {
+      return false;
+    }
+
+    const now = Date.now();
+    if (!this.activeReasoningDraft) {
+      this.activeReasoningDraft = {
+        id: `rsn_${now}_${Math.random().toString(36).slice(2, 6)}`,
+        turnId: ctx.turnId ?? this.currentTurnId,
+        runId: ctx.runId,
+        sessionId: ctx.sessionId,
+        text: "",
+        startedAt: now,
+        streaming: true,
+      };
+    } else if (this.activeReasoningDraft.endedAt !== undefined) {
+      this.activeReasoningDraft.endedAt = undefined;
+      this.activeReasoningDraft.streaming = true;
+    }
+    if (delta) this.activeReasoningDraft.text += delta;
+
+    // Legacy live-surface fields: the frame renderer draws the live panel
+    // from these while the draft is open.
+    this.reasoningText = this.activeReasoningDraft.text;
+    this.requestStreamRender();
+    return true;
+  }
+
+  /**
+   * Close the live reasoning draft and record it as a transcript block.
+   *
+   * `reason` is the lifecycle boundary that ended the stream (tool call,
+   * text delta, agent completion, cancellation, error, run settle) — kept on
+   * the block for diagnostics. Empty drafts are closed but not recorded: an
+   * empty block would render as nothing and only pollute the transcript.
+   *
+   * Returns the finalized block, or null when nothing was active.
+   */
+  finalizeActiveReasoning(reason: string): ReasoningBlock | null {
+    const draft = this.activeReasoningDraft;
+    if (!draft) return null;
+    this.activeReasoningDraft = null;
+
+    const endedAt = draft.endedAt ?? Date.now();
+    const finalized: ReasoningBlock = {
+      ...draft,
+      endedAt,
+      streaming: false,
+      durationMs: Math.max(0, endedAt - draft.startedAt),
+      collapsed: this.reasoningCollapsed,
+    };
+    void reason;
+
+    if (draft.text.trim()) {
+      this.messages.push({ role: "reasoning", content: draft.text, reasoning: finalized });
+    }
+    // The finalized block now lives in the transcript; the legacy live panel
+    // must not double-render it.
+    this.reasoningText = "";
+    this.reasoningElapsed = "";
+    if (finalized.tokens && finalized.tokens > 0) this.reasoningTokens = finalized.tokens;
+    this.requestRender();
+    return finalized;
   }
 
   pushPromptHistory(prompt: string): void {

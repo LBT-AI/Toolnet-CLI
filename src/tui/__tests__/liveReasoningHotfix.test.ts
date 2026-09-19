@@ -15,6 +15,11 @@ describe("Live Reasoning Hotfix — UX and Stream Lifecycle", () => {
     tuiState.reasoningTokens = 0;
     tuiState.reasoningElapsed = "";
     tuiState.agentPhase = "idle";
+    tuiState.currentTurnId = 0;
+    // Tests below (e.g. the delayed-first-reasoning status case) flip the
+    // shared singleton's streaming flag; restore it so the pollution never
+    // outlives this file in the suite's shared module cache.
+    tuiState.isStreaming = false;
     tuiState.startNewRun("sess_test_123");
   });
 
