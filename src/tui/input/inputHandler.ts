@@ -217,7 +217,7 @@ function _handlePasteInternal(
   }
 
   // 5. Default: Command line multiline input
-  const sanitized = stripBracketedPaste(pastedText);
+  const sanitized = stripBracketedPaste(pastedText).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
   inputBufferManager.insertText(sanitized);
   tuiState.inputBuffer = inputBufferManager.getText();
   tuiState.cursorPos = inputBufferManager.getCursor();

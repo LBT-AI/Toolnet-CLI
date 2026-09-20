@@ -39,7 +39,7 @@ export function verifyFileWritten(pathArg: unknown, ctx?: PathExecContext): Post
   const abs = resolveWorkspacePath(pathArg, ctx);
   if (!abs) return { ok: false, error: "write_file verification failed: missing or invalid path argument" };
   try {
-    const st = fs.lstatSync(abs);
+    const st = fs.statSync(abs);
     if (!st.isFile()) {
       return { ok: false, error: `write_file verification failed: ${pathArg} is not a regular file` };
     }

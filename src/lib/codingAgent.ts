@@ -425,6 +425,12 @@ export function toolEdit(filePath: string, oldString: string, newString: string,
     const content = fs.readFileSync(absPath, "utf8");
     const idx = content.indexOf(oldString);
     if (idx === -1) return { success: false, error: `"${oldString}" not found in file` };
+    
+    // Hardening: Prevent ambiguous replacements that mutate the wrong location
+    const nextIdx = content.indexOf(oldString, idx + 1);
+    if (nextIdx !== -1) {
+      return { success: false, error: `Ambiguous edit: "${oldString}" appears multiple times in the file. Please provide more context lines in oldString to uniquely identify the block, or use replace_all.` };
+    }
 
     const newContent = content.replace(oldString, newString);
     if (newContent === content) return { success: false, error: "No changes made (oldString == newString?)" };
@@ -681,8 +687,9 @@ export async function toolBash(command: string, timeoutMs = 30000, execCtx?: She
   const mode = ctx.sandboxMode || getSandboxMode();
   const outputCap = ctx.outputCapBytes || DEFAULT_SHELL_OUTPUT_CAP;
 
-  // Inject a trap to capture the final PWD after the command executes
-  const wrappedCommand = `set -e\n${command}\necho "---CWD---"\npwd`;
+  // Inject an unguessable marker to capture the final PWD without breaking exit code or forcing set -e
+  const cwdMarker = `__TOOLNET_CWD_${Date.now()}_${Math.random().toString(36).slice(2)}__`;
+  const wrappedCommand = `${command}\n__toolnet_exit=$?\necho "${cwdMarker}"\npwd\nexit $__toolnet_exit`;
   const sandboxed = buildSandboxedCommandLine(wrappedCommand, {
     workspaceRoot: wsRoot,
     cwd: execCwd,
@@ -793,9 +800,9 @@ export async function toolBash(command: string, timeoutMs = 30000, execCtx?: She
       cleanup();
 
       let finalStdout = stdoutBuf;
-      const cwdMarkerIdx = finalStdout.lastIndexOf("---CWD---");
+      const cwdMarkerIdx = finalStdout.lastIndexOf(cwdMarker);
       if (cwdMarkerIdx !== -1) {
-        const afterMarker = finalStdout.substring(cwdMarkerIdx + 9).trim();
+        const afterMarker = finalStdout.substring(cwdMarkerIdx + cwdMarker.length).trim();
         const newCwd = afterMarker.split("\n")[0].trim();
         if (newCwd && newCwd.startsWith("/") && fs.existsSync(newCwd)) {
           // Only follow the child's cd if it stayed within workspace policy

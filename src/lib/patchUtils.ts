@@ -229,14 +229,14 @@ export function applyStructuredPatch(patchText: string, cwd: string): ToolResult
       return { success: false, error: `Failed applying patch to ${targetFile}: ${res.error}` };
     }
 
-    // Push snapshot before writing to history so /undo works 100%
-    pushSnapshot(absPath, `apply_patch on ${targetFile}`);
+    const writePath = pathCheck.resolvedPath || absPath;
+    pushSnapshot(writePath, `apply_patch on ${targetFile}`);
 
     try {
-      const parentDir = path.dirname(absPath);
+      const parentDir = path.dirname(writePath);
       if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
-      fs.writeFileSync(absPath, res.content, "utf8");
-      commitSnapshot(absPath);
+      fs.writeFileSync(writePath, res.content, "utf8");
+      commitSnapshot(writePath);
 
       const diffPreview = generateDiff(oldContent, res.content, targetFile);
       results.push(`Applied patch to ${targetFile}:\n${diffPreview}`);

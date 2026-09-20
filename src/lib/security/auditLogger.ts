@@ -199,10 +199,12 @@ export class SecurityAuditLogger {
 
       this.lastHash = hash;
       const line = JSON.stringify(entry) + "\n";
-      if (!fs.existsSync(this.logFilePath)) {
-        fs.writeFileSync(this.logFilePath, line, { mode: 0o600, encoding: "utf-8" });
-      } else {
-        fs.appendFileSync(this.logFilePath, line, "utf-8");
+      const fd = fs.openSync(this.logFilePath, "a", 0o600);
+      try {
+        fs.writeFileSync(fd, line, "utf-8");
+        try { fs.fsyncSync(fd); } catch {}
+      } finally {
+        fs.closeSync(fd);
       }
     } catch {
       // Non-fatal if logging fails

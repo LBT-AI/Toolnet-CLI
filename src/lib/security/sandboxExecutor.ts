@@ -1,6 +1,18 @@
 import fs from "node:fs";
+import path from "node:path";
 import { execSync } from "node:child_process";
 import type { SandboxMode } from "./types";
+
+function isSystemOrRootDirectory(dirPath: string): boolean {
+  try {
+    const norm = path.resolve(dirPath);
+    if (norm === "/" || norm === "") return true;
+    const sysRoots = ["/etc", "/sys", "/proc", "/usr", "/bin", "/sbin", "/boot", "/dev"];
+    return sysRoots.some((sys) => norm === sys || norm.startsWith(sys + "/"));
+  } catch {
+    return false;
+  }
+}
 
 export type SandboxBackend = "bwrap" | "seatbelt" | "direct";
 export type NetworkMode = "allowed" | "ask" | "denied";
@@ -112,6 +124,16 @@ export function buildSandboxedCommandLine(
 
   // Linux Bubblewrap Sandbox
   if (cap.backend === "bwrap" && (sandboxMode === "workspace" || sandboxMode === "ask")) {
+    if (isSystemOrRootDirectory(options.workspaceRoot)) {
+      return {
+        executable: "",
+        args: [],
+        isOsSandboxed: false,
+        denied: true,
+        reason: `Workspace root "${options.workspaceRoot}" is a system or root directory and cannot be mounted read-write in sandbox.`,
+      };
+    }
+
     const bwrapArgs = [
       "--ro-bind", "/", "/",
       "--bind", options.workspaceRoot, options.workspaceRoot,

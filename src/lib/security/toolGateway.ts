@@ -115,55 +115,54 @@ export class ToolGateway {
     });
 
     // 0.5 RATE LIMIT CHECK
-    if (sessionId) {
-      const rateLimitContext: ToolRateLimitContext = {
-        sessionId,
+    const rateLimitSessionId = sessionId || "_unscoped";
+    const rateLimitContext: ToolRateLimitContext = {
+      sessionId: rateLimitSessionId,
+      toolName: name,
+      now,
+      source: context.source,
+    };
+
+    const rateLimitResult = toolRateLimiter.check(rateLimitContext);
+
+    if (!rateLimitResult.allowed) {
+      const rateLimitDuration = Date.now() - startTime;
+
+      auditLogger.logEvent({
+        timestamp: Date.now(),
         toolName: name,
-        now,
+        action: name,
+        args,
+        mode,
+        decision: "RATE_LIMITED",
+        allowed: false,
+        cwd,
+        reason: rateLimitResult.reason,
+        correlationId,
+        toolCallId,
+        userSessionId: sessionId,
+        userId,
+        workspaceId,
+        agentRole: context.agentRole,
         source: context.source,
+        durationMs: rateLimitDuration,
+        metadata: {
+          ...auditMeta,
+          retryAfterMs: rateLimitResult.retryAfterMs,
+        },
+      });
+
+      return {
+        stdout: "",
+        stderr: `Rate Limited: ${rateLimitResult.reason}`,
+        exitCode: 1,
+        allowed: false,
+        decision: "DENY",
+        reason: rateLimitResult.reason,
+        riskLevel: "MODERATE_WRITE",
+        capability: "READ",
+        durationMs: rateLimitDuration,
       };
-
-      const rateLimitResult = toolRateLimiter.check(rateLimitContext);
-
-      if (!rateLimitResult.allowed) {
-        const rateLimitDuration = Date.now() - startTime;
-
-        auditLogger.logEvent({
-          timestamp: Date.now(),
-          toolName: name,
-          action: name,
-          args,
-          mode,
-          decision: "RATE_LIMITED",
-          allowed: false,
-          cwd,
-          reason: rateLimitResult.reason,
-          correlationId,
-          toolCallId,
-          userSessionId: sessionId,
-          userId,
-          workspaceId,
-          agentRole: context.agentRole,
-          source: context.source,
-          durationMs: rateLimitDuration,
-          metadata: {
-            ...auditMeta,
-            retryAfterMs: rateLimitResult.retryAfterMs,
-          },
-        });
-
-        return {
-          stdout: "",
-          stderr: `Rate Limited: ${rateLimitResult.reason}`,
-          exitCode: 1,
-          allowed: false,
-          decision: "DENY",
-          reason: rateLimitResult.reason,
-          riskLevel: "MODERATE_WRITE",
-          capability: "READ",
-          durationMs: rateLimitDuration,
-        };
-      }
     }
 
  // 0.7 TOOL HOOKS (/77.8/77.31)
@@ -540,14 +539,12 @@ export class ToolGateway {
     }
 
     // Record rate limit before execution
-    if (sessionId) {
-      toolRateLimiter.record({
-        sessionId,
-        toolName: name,
-        now: Date.now(),
-        source: context.source,
-      });
-    }
+    toolRateLimiter.record({
+      sessionId: rateLimitSessionId,
+      toolName: name,
+      now: Date.now(),
+      source: context.source,
+    });
 
     // 2. Cache check for read-only tools
     const toolCache = getToolCache();
@@ -568,9 +565,7 @@ export class ToolGateway {
 
       const durationMs = Date.now() - startTime;
 
-      if (sessionId) {
-        toolRateLimiter.release({ sessionId, toolName: name, now: Date.now() });
-      }
+      toolRateLimiter.release({ sessionId: rateLimitSessionId, toolName: name, now: Date.now() });
 
       return {
         stdout: finalCached,
@@ -712,9 +707,7 @@ export class ToolGateway {
         metadata: auditMeta,
       });
 
-      if (sessionId) {
-        toolRateLimiter.release({ sessionId, toolName: name, now: Date.now() });
-      }
+      toolRateLimiter.release({ sessionId: rateLimitSessionId, toolName: name, now: Date.now() });
 
       return {
         stdout: finalOutput,
@@ -755,9 +748,7 @@ export class ToolGateway {
         metadata: auditMeta,
       });
 
-      if (sessionId) {
-        toolRateLimiter.release({ sessionId, toolName: name, now: Date.now() });
-      }
+      toolRateLimiter.release({ sessionId: rateLimitSessionId, toolName: name, now: Date.now() });
 
       // The executor itself threw: report it to `tool.error` observers so a
       // plugin sees the same failure the model does.

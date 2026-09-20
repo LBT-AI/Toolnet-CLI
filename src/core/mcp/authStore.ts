@@ -158,8 +158,13 @@ export class McpAuthStore {
     ensureToolnetDir(dir);
     const tmp = `${this.filePath}.tmp-${process.pid}-${Date.now()}`;
     try {
-      fs.writeFileSync(tmp, JSON.stringify(entries, null, 2), { mode: 0o600 });
-      // Re-assert the mode: writeFileSync only applies `mode` on creation.
+      const fd = fs.openSync(tmp, "w", 0o600);
+      try {
+        fs.writeFileSync(fd, JSON.stringify(entries, null, 2), "utf-8");
+        try { fs.fsyncSync(fd); } catch {}
+      } finally {
+        fs.closeSync(fd);
+      }
       try {
         fs.chmodSync(tmp, 0o600);
       } catch {

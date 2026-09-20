@@ -33,7 +33,10 @@ export function encodeLspMessage(message: unknown): Buffer {
 export class LspMessageReader {
   private buffer: Buffer = Buffer.alloc(0);
 
-  constructor(private readonly onMessage: (message: unknown) => void) {}
+  constructor(
+    private readonly onMessage: (message: unknown) => void,
+    private readonly onError?: (error: Error) => void
+  ) {}
 
   push(chunk: Buffer): void {
     this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
@@ -42,7 +45,10 @@ export class LspMessageReader {
       const headerEnd = this.buffer.indexOf(HEADER_SEPARATOR, 0, "ascii");
       if (headerEnd === -1) {
         // Guard against a server that streams garbage instead of headers.
-        if (this.buffer.length > MAX_HEADER_BYTES) this.buffer = Buffer.alloc(0);
+        if (this.buffer.length > MAX_HEADER_BYTES) {
+          this.buffer = Buffer.alloc(0);
+          this.onError?.(new Error(`LSP header exceeded maximum size (${MAX_HEADER_BYTES} bytes)`));
+        }
         return;
       }
 
@@ -82,9 +88,12 @@ export interface StdioStreams {
 export function createStdioTransport(streams: StdioStreams, child?: ChildProcessWithoutNullStreams): LspTransport {
   const messageHandlers = new Set<(message: unknown) => void>();
   const closeHandlers = new Set<(error?: Error) => void>();
-  const reader = new LspMessageReader((message) => {
-    for (const handler of messageHandlers) handler(message);
-  });
+  const reader = new LspMessageReader(
+    (message) => {
+      for (const handler of messageHandlers) handler(message);
+    },
+    (err) => emitClose(err)
+  );
 
   const emitClose = (error?: Error) => {
     for (const handler of closeHandlers) handler(error);

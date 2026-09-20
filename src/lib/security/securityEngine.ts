@@ -635,67 +635,8 @@ export class SecurityEngine {
     return "MCP_TOOL";
   }
 
-  private checkPathInsideWorkspace(targetPath: string, workspaceRoot?: string, cwd?: string) {
-    const root = workspaceRoot || process.cwd();
-    const baseCwd = cwd || process.cwd();
-
-    let realRoot = root;
-    try {
-      realRoot = fs.realpathSync(root);
-    } catch {
-      realRoot = path.resolve(root);
-    }
-
-    const absPath = path.isAbsolute(targetPath) ? path.normalize(targetPath) : path.resolve(baseCwd, targetPath);
-    let realTarget = absPath;
-    try {
-      realTarget = fs.realpathSync(absPath);
-    } catch {
-      const parentDir = path.dirname(absPath);
-      const fileName = path.basename(absPath);
-      try {
-        const realParent = fs.realpathSync(parentDir);
-        realTarget = path.join(realParent, fileName);
-      } catch {
-        realTarget = absPath;
-      }
-    }
-
-    let rel = path.relative(realRoot, realTarget);
-    let isInside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-
-    if (!isInside && !workspaceRoot) {
-      // Multi-root fallback: consult ALL registered workspace roots so the
-      // SecurityEngine boundary matches the workspace-roots model used by the
-      // tool layer (setWorkspaceRoots / toolnet.workspace.json).
-      // Only when no explicit root was passed — an explicit root is authoritative.
-      try {
-        const { getWorkspaceRoots } = require("../codingAgent");
-        const roots: string[] = getWorkspaceRoots();
-        for (const r of roots) {
-          let rReal = r;
-          try {
-            rReal = fs.realpathSync(r);
-          } catch {
-            rReal = path.resolve(r);
-          }
-          const rRel = path.relative(rReal, realTarget);
-          if (rRel === "" || (!rRel.startsWith("..") && !path.isAbsolute(rRel))) {
-            isInside = true;
-            rel = rRel;
-            realRoot = rReal;
-            break;
-          }
-        }
-      } catch {}
-    }
-
-    return {
-      isInside,
-      resolvedPath: realTarget,
-      realWorkspaceRoot: realRoot,
-      relative: rel,
-    };
+  private checkPathInsideWorkspace(targetPath: string, workspaceRoot?: string, cwd?: string): PathCheckResult {
+    return isPathInsideWorkspace(targetPath, workspaceRoot, cwd);
   }
 }
 

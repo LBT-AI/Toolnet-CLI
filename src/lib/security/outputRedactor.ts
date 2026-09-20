@@ -56,10 +56,29 @@ export function redactOutputSecrets(text: string | null | undefined): string {
     return `${prefix}****${suffix}`;
   });
 
+  // 2.1. OpenRouter API keys
+  sanitized = sanitized.replace(/\bsk-or-v1-[A-Za-z0-9_-]{20,}\b/g, (match) => {
+    if (isPlaceholder(match)) return match;
+    const prefix = "sk-or-v1-";
+    const remainder = match.slice(prefix.length);
+    const suffix = remainder.slice(-3);
+    return `${prefix}****${suffix}`;
+  });
+
+  // 2.2. HuggingFace & Replicate tokens
+  sanitized = sanitized.replace(/\bhf_[A-Za-z0-9]{20,}\b/g, (match) => {
+    if (isPlaceholder(match)) return match;
+    return `hf_****${match.slice(-3)}`;
+  });
+  sanitized = sanitized.replace(/\br8_[A-Za-z0-9]{20,}\b/g, (match) => {
+    if (isPlaceholder(match)) return match;
+    return `r8_****${match.slice(-3)}`;
+  });
+
   // 3. OpenAI-style API keys (sk-..., sk-proj-...)
   sanitized = sanitized.replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{8,}\b/g, (match) => {
     if (isPlaceholder(match)) return match;
-    if (match.startsWith("sk-ant-")) return match;
+    if (match.startsWith("sk-ant-") || match.startsWith("sk-or-v1-")) return match;
     const prefix = match.startsWith("sk-proj-") ? "sk-proj-" : "sk-";
     const remainder = match.slice(prefix.length);
     const suffix = remainder.slice(-3);

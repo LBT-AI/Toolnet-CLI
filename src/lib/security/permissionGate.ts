@@ -84,7 +84,7 @@ export class PermissionGate {
           reason: "Network access is disabled by security policy (networkMode: denied).",
         };
       }
-      if (netMode === "ask" && sandboxMode === "workspace") {
+      if (netMode === "ask" && (sandboxMode === "workspace" || sandboxMode === "ask")) {
         if (isHeadless) {
           return {
             allowed: false,

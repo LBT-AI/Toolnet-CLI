@@ -155,8 +155,14 @@ export class StructuredLogger {
         ensureToolnetDir(logsDir());
         maybeRotate();
         const line = JSON.stringify(rec) + "\n";
-        try { fs.appendFileSync(logFilePath(), line, "utf-8"); } catch {}
-        try { fs.chmodSync(logFilePath(), 0o600); } catch {}
+        try {
+          const fd = fs.openSync(logFilePath(), "a", 0o600);
+          try {
+            fs.writeFileSync(fd, line, "utf-8");
+          } finally {
+            fs.closeSync(fd);
+          }
+        } catch {}
       } catch {}
     } catch {}
   }

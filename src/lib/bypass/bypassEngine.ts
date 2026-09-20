@@ -52,7 +52,7 @@ export class BypassEngine {
   public saveConfig() {
     try {
       const dir = getConfigDir();
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(this.config, null, 2), { mode: 0o600 });
     } catch {}
     this.notifyListeners();
