@@ -1114,10 +1114,13 @@ function _handleKeyInternal(
       return;
     }
 
-    // 8F. Enter — execute highlighted command directly without submitting raw input
+    // 8F. Enter — execute the highlighted command without submitting raw input.
+    // Determinism: if the typed text names a command exactly, THAT command runs
+    // — never a fuzzy suggestion at a stale palette index.
     if (hex === "0d" || hex === "0a" || s === "\r" || s === "\n") {
-      const safeIdx = Math.max(0, Math.min(tuiState.cmdSuggestIdx, suggests.length - 1));
-      const selected = suggests[safeIdx]?.name;
+      const typed = inputBufferManager.getText().trim();
+      const exact = suggests.find((c) => c.name === typed);
+      const selected = exact?.name ?? suggests[Math.max(0, Math.min(tuiState.cmdSuggestIdx, suggests.length - 1))]?.name;
       if (selected) {
         inputBufferManager.clear();
         tuiState.inputBuffer = "";

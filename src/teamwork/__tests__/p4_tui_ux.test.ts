@@ -294,17 +294,17 @@ describe("TUI Redesign — Header & Working Status & Footer", () => {
 });
 
 describe("TUI Redesign — Command Palette & Model Picker", () => {
-  it("Command Palette renders large command sheet with 2-line rows and hints", () => {
+  it("Command Palette renders compact one-row autocomplete with hints", () => {
     const suggests = [
       { name: "/model", desc: "Switch active model" },
       { name: "/provider", desc: "Manage AI providers" },
       { name: "/session", desc: "Save or load sessions" },
     ];
-    const lines = renderSuggestionsPopup(80, 18, suggests, 0, "\x1b[36m");
+    const lines = renderSuggestionsPopup(80, 6, suggests, 0, "\x1b[36m");
     const joined = lines.join("");
     const stripped = stripAnsi(joined);
 
-    // Full-width sheet with top border, 2-line command blocks and hint row.
+    // Compact anchored palette: top border, one row per command, hint row.
     expect(stripped).toContain("╭");
     expect(stripped).toContain("/model");
     expect(stripped).toContain("Switch active model");

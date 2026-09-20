@@ -1,12 +1,12 @@
 /**
- * Slash Command Palette Redesign Tests
+ * Slash Command Palette Tests
  *
- * Validates the large command-sheet palette (Freebuff-style):
- * - exactly 37 commands from getAllCommands() (no second registry)
+ * Validates the compact command autocomplete anchored above the composer:
+ * - exactly 39 commands from getAllCommands() (no second registry)
  * - realtime filter on /, /m, /pro (name/alias first, description fallback)
  * - ↑↓, PgUp/PgDn, Home/End, Ctrl+P/Ctrl+N navigation
- * - Enter executes the selected command, Esc closes
- * - sheet geometry at 50x20 / 60x25 / 80x30 (and 120x40, 40x20)
+ * - Enter executes the selected command (exact text wins over stale index), Esc closes
+ * - compact geometry: one row per command, bounded window, hint + counter
  * - selected item always visible inside the viewport
  * - exactly one hint/footer line (no duplicate footer/input)
  */
@@ -38,8 +38,10 @@ const PALETTE_SIZES: Array<[number, number]> = [
 ];
 
 function popupRowsFor(rows: number): number {
+  // Mirrors computeLayoutGeometry's compact palette ledger: window of up to
+  // 8 one-row items plus border/hint chrome.
   const content = Math.max(6, rows - 5);
-  return Math.max(6, Math.min(content - 1, Math.floor(content * 0.72)));
+  return Math.min(8 + 3, Math.max(4, content - 2));
 }
 
 describe("Slash Command Palette Redesign", () => {
@@ -162,9 +164,14 @@ describe("Slash Command Palette Redesign", () => {
       expect(stripped).toContain("╰");
       expect(stripped).toContain("/help");
       expect(stripped).toContain("1 / 39");
-      // description sits on its own line under the command name
-      // (border/padding chars between them are allowed; sizes vary)
-      expect(stripped).toMatch(/\/help[\s│]*Show list of commands/);
+      // compact one-row items: on wide terminals the description shares the
+      // command's row; below 44 cols the description is dropped entirely so
+      // the command name always fits.
+      if (cols >= 44) {
+        expect(stripped).toMatch(/\/help\s+Show list of commands/);
+      } else {
+        expect(stripped).toContain("/help");
+      }
     }
   });
 

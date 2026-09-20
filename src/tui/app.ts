@@ -19,8 +19,8 @@ import { handleKey, handlePaste, getSuggestions, getInputState, setInputState, r
 import { sendMessage } from "./events/agentWiring";
 import { A, T, getSize } from "../term";
 import { renderFallbackFrame } from "./renderers/errorBoundary";
-import { BracketedPasteParser, ENABLE_BRACKETED_PASTE } from "../lib/bracketedPaste";
-import { PasteBurstDetector, type PasteBurstChunk } from "./input/pasteBurst";
+import { ENABLE_BRACKETED_PASTE } from "../lib/bracketedPaste";
+import { TerminalKeyDecoder, ESC_FLUSH_TIMEOUT_MS } from "./input/keyDecoder";
 import { setupTerminalLifecycle, restoreTerminal, wrapErrorBoundary, onTerminalResize } from "../lib/terminalLifecycle";
 import { setResponseLanguage } from "../lib/language";
 import { reasoningEffortLabel } from "../lib/reasoning";
@@ -538,73 +538,31 @@ export async function main(): Promise<void> {
   // startup; a second raw listener here would re-render twice per resize.
   renderAll();
 
-  const pasteParser = new BracketedPasteParser();
-  const burstDetector = new PasteBurstDetector();
-
-  const emitBurstChunks = (chunks: PasteBurstChunk[]) => {
-    for (const chunk of chunks) {
-      if (chunk.type === "paste") {
-        handlePaste(chunk.content, { renderAll, sendMessage, exitApp, openModelPicker });
-      } else {
-        for (const char of chunk.content) {
-          handleKey(Buffer.from(char, "utf8"), { renderAll, sendMessage, exitApp, openModelPicker });
-        }
-      }
+  // ── One input owner: stateful VT decoder → handleKey ─────────────────────
+  // The decoder assembles escape sequences across stdin chunks (mobile SSH
+  // fragments a single Down into `ESC` + `"[B"`), disambiguates a real
+  // standalone Esc with a bounded timeout, and unwraps bracketed pastes.
+  // Nothing downstream may re-parse raw bytes for sequences.
+  const keyDecoder = new TerminalKeyDecoder();
+  const dispatchDecoded = (key: { s: string; kind: string }) => {
+    if (key.kind === "paste") {
+      handlePaste(key.s, { renderAll, sendMessage, exitApp, openModelPicker });
+      return;
     }
-  };
-
-  const handleRawBytes = (content: string) => {
-    const buf = Buffer.from(content, "utf8");
-    let i = 0;
-    while (i < buf.length) {
-      if (buf[i] === 0x1b) {
-        if (i + 1 < buf.length && (buf[i + 1] === 0x5b || buf[i + 1] === 0x4f)) {
-          let j = i + 2;
-          while (j < buf.length && !(buf[j] >= 0x40 && buf[j] <= 0x7e)) j++;
-          handleKey(buf.slice(i, j + 1), { renderAll, sendMessage, exitApp, openModelPicker });
-          i = j + 1;
-        } else if (i + 1 < buf.length) {
-          handleKey(buf.slice(i, i + 2), { renderAll, sendMessage, exitApp, openModelPicker });
-          i += 2;
-        } else {
-          handleKey(buf.slice(i, i + 1), { renderAll, sendMessage, exitApp, openModelPicker });
-          i += 1;
-        }
-      } else {
-        let j = i;
-        while (j < buf.length && buf[j] !== 0x1b) j++;
-        for (const char of buf.slice(i, j).toString("utf8")) {
-          handleKey(Buffer.from(char, "utf8"), { renderAll, sendMessage, exitApp, openModelPicker });
-        }
-        i = j;
-      }
-    }
+    handleKey(Buffer.from(key.s, "latin1"), { renderAll, sendMessage, exitApp, openModelPicker });
   };
 
   process.stdin.on("data", (data: Buffer) => {
-    const chunks = pasteParser.parse(data);
-    for (const chunk of chunks) {
-      if (chunk.type === "paste") {
-        // Preserve ordering: emit any buffered plain-text group first.
-        emitBurstChunks(burstDetector.flush());
-        handlePaste(chunk.content, { renderAll, sendMessage, exitApp, openModelPicker });
-        continue;
-      }
-
-      // Keystrokes that must act immediately bypass the burst detector:
-      // escape sequences, and any C0 control byte (Ctrl+C abort/exit, Ctrl+D,
-      // Enter, Backspace…). A trailing control keystroke buffered as "maybe a
-      // burst" would never be delivered until the user types again — the
-      // double-Ctrl+C exit would silently stop working.
-      if (/[\x00-\x1f\x7f]/.test(chunk.content)) {
-        emitBurstChunks(burstDetector.flush());
-        handleRawBytes(chunk.content);
-        continue;
-      }
-
-      emitBurstChunks(burstDetector.accept(chunk.content, Date.now()));
-    }
+    const keys = keyDecoder.feed(data);
+    for (const key of keys) dispatchDecoded(key);
   });
+
+  // A partial sequence (e.g. a lone ESC) must not wait forever: flush it as
+  // a standalone key when no continuation arrives within the decoder window.
+  setInterval(() => {
+    if (!keyDecoder.hasTimedOut(Date.now())) return;
+    for (const key of keyDecoder.flush()) dispatchDecoded(key);
+  }, Math.max(10, Math.floor(ESC_FLUSH_TIMEOUT_MS / 2)));
 
   process.on("exit", () => {
     restoreTerminal();

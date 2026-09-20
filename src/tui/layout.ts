@@ -186,14 +186,21 @@ export function computeLayoutGeometry(
   const composerRow = footerRow - inputRows; // divider row (0-based)
   const contentRows = rows - HEADER_ROWS - statusRows - inputRows - FOOTER_ROWS;
 
-  // Command palette: a large sheet anchored above the composer — roughly
-  // 65-75% of the content viewport (never a tiny centered popup). When the
-  // viewport is too short to fit it plus a readable transcript it collapses
-  // rather than pushing chrome off the grid.
+  // Command palette: a COMPACT autocomplete anchored above the composer,
+  // sized to the actual result count (5-8 results) instead of a fixed sheet.
+  // Window height = items (+1 wrapped description on narrow terminals) plus
+  // top border, hint line and bottom border. The transcript keeps at least
+  // chatFloor rows; the palette collapses rather than pushing chrome off-grid.
   const chatFloor = 2;
+  const paletteWindow = Math.min(activeSuggestsCount, 8);
+  const paletteChrome = 3; // top border + hint + bottom border
+  const paletteNeeded =
+    activeSuggestsCount > 0
+      ? paletteWindow + paletteChrome + (cols < 60 ? paletteWindow : 0)
+      : 0;
   const popupRows =
-    activeSuggestsCount > 0 && contentRows >= chatFloor + 6
-      ? Math.max(6, Math.min(contentRows - chatFloor, Math.floor(contentRows * 0.72)))
+    paletteNeeded > 0 && contentRows >= chatFloor + Math.min(paletteNeeded, 4)
+      ? Math.min(paletteNeeded, Math.max(0, contentRows - chatFloor))
       : 0;
   const chatRows = Math.max(chatFloor, contentRows - popupRows);
 

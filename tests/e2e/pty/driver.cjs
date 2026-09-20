@@ -100,6 +100,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       continue;
     }
     try {
+      process.stderr.write(
+        "STEP t=" + Date.now() + " action=" + JSON.stringify(action) + "\n"
+      );
       proc.write(action);
     } catch {}
   }
