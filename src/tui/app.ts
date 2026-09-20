@@ -6,7 +6,7 @@ import { renderChatMessages } from "./renderers/chatRenderer";
 import { renderSidebar } from "./renderers/sidebarRenderer";
 import { renderWorkingStatus, renderInputArea, renderFooter } from "./renderers/statusRenderer";
 import { renderConfirmationModal, renderToast, renderSecretInputModal, renderDeviceCodeModal } from "./renderers/modalRenderer";
-import { renderModelPickerBox } from "./renderers/modelPickerRenderer";
+import { renderModelPickerBox, renderProviderStageBox } from "./renderers/modelPickerRenderer";
 import { renderKeyManagerBox } from "./renderers/keyManagerRenderer";
 import { renderSkillsPickerBox } from "./renderers/skillsPickerRenderer";
 import { renderQueueManagerBox } from "./renderers/queueManagerRenderer";
@@ -232,12 +232,21 @@ function buildFrame(): string {
 
   // ── Overlays / modals: absolute-positioned draws on top of the base frame ──
   if (tuiState.showModelPicker) {
-    out.push(renderModelPickerBox(cols, rows, {
-      filteredModels: tuiState.filteredModels,
-      modelPickerIdx: tuiState.modelPickerIdx,
-      currentModel: tuiState.currentModel,
-      modelSearchQuery: tuiState.modelSearchQuery,
-    }));
+    if (tuiState.modelPickerStage === "provider") {
+      out.push(renderProviderStageBox(cols, rows, {
+        entries: tuiState.providerEntries,
+        idx: tuiState.providerPickerIdx,
+        activeProviderId: tuiState.providerName,
+      }));
+    } else {
+      out.push(renderModelPickerBox(cols, rows, {
+        filteredModels: tuiState.filteredModels,
+        modelPickerIdx: tuiState.modelPickerIdx,
+        currentModel: tuiState.currentModel,
+        modelSearchQuery: tuiState.modelSearchQuery,
+        pendingProviderId: tuiState.pendingProviderId,
+      }));
+    }
   }
 
   if (tuiState.showSecretInput && tuiState.secretInputConfig) {

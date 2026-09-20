@@ -28,7 +28,26 @@ import { getToolnetConfigPath, getToolnetHome } from "./toolnetHome";
 import { BANNER_SETTINGS } from "../banner/types";
 import type { BannerSetting } from "../banner/types";
 
-export const CURRENT_SCHEMA_VERSION = 5;
+/**
+ * A user-added model. Persisted in the canonical config so custom entries
+ * survive restarts, provider re-discovery and upgrades.
+ *
+ * Capability fields are three-state: `true` = explicitly supported,
+ * `false` = explicitly not supported, omitted = UNKNOWN. Only explicit
+ * values are persisted (JSON cannot represent `undefined`); a missing field
+ * materializes as `undefined` at runtime and discovery may fill it, but must
+ * never overwrite an explicit true/false.
+ */
+export interface CustomModelEntry {
+  providerId: string;
+  apiModelId: string;
+  displayName?: string;
+  capabilities?: Partial<Record<"tools" | "nativeToolCalls" | "streaming" | "reasoning" | "vision" | "structuredOutput" | "jsonMode", boolean>>;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+}
+
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export type SandboxMode = "workspace" | "ask" | "full-access";
 export const SANDBOX_MODES: SandboxMode[] = ["workspace", "ask", "full-access"];
@@ -127,6 +146,8 @@ export interface AppConfig {
   harness: AppHarnessSettings;
  /** provider auth profile metadata + active pointers (no secrets). */
   auth: AppAuthSettings;
+  /** User-added models, merged into the catalog before every provider replace. */
+  customModels: CustomModelEntry[];
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
@@ -145,6 +166,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   routing: { ...DEFAULT_ROUTING_SETTINGS },
   harness: { ...DEFAULT_HARNESS_SETTINGS },
   auth: { ...DEFAULT_AUTH_SETTINGS },
+  customModels: [],
 };
 
 /** Fields that may be carried over from the legacy ~/.toolnetapi/config.json. */
@@ -219,8 +241,42 @@ export function validateConfig(input: unknown): AppConfig {
   cfg.routing = validateRoutingSettings(input.routing);
   cfg.harness = validateHarnessSettings(input.harness);
   cfg.auth = validateAuthSettings(input.auth);
+  cfg.customModels = validateCustomModels(input.customModels);
 
   return cfg;
+}
+
+function validateCustomModels(input: unknown): CustomModelEntry[] {
+  const out: CustomModelEntry[] = [];
+  if (!Array.isArray(input)) return out;
+  for (const raw of input) {
+    if (!isRecord(raw)) continue;
+    if (typeof raw.providerId !== "string" || !raw.providerId.trim()) continue;
+    if (typeof raw.apiModelId !== "string" || !raw.apiModelId.trim()) continue;
+    const entry: CustomModelEntry = {
+      providerId: raw.providerId.trim(),
+      apiModelId: raw.apiModelId.trim(),
+    };
+    if (typeof raw.displayName === "string" && raw.displayName.trim()) {
+      entry.displayName = raw.displayName.trim();
+    }
+    // Only explicit booleans persist; everything else stays absent (UNKNOWN).
+    if (isRecord(raw.capabilities)) {
+      const caps: NonNullable<CustomModelEntry["capabilities"]> = {};
+      for (const [k, v] of Object.entries(raw.capabilities)) {
+        if (typeof v === "boolean") (caps as Record<string, boolean>)[k] = v;
+      }
+      if (Object.keys(caps).length > 0) entry.capabilities = caps;
+    }
+    if (typeof raw.contextWindow === "number" && Number.isFinite(raw.contextWindow) && raw.contextWindow > 0) {
+      entry.contextWindow = Math.floor(raw.contextWindow);
+    }
+    if (typeof raw.maxOutputTokens === "number" && Number.isFinite(raw.maxOutputTokens) && raw.maxOutputTokens > 0) {
+      entry.maxOutputTokens = Math.floor(raw.maxOutputTokens);
+    }
+    out.push(entry);
+  }
+  return out;
 }
 
 /**
@@ -367,6 +423,12 @@ function migrateConfig(raw: Record<string, unknown>): AppConfig {
   if (cfg.schemaVersion < 5) {
     cfg.routing = validateRoutingSettings({ ...cfg.routing, ...(raw as Record<string, unknown>).routing as object });
     cfg.schemaVersion = 5;
+  }
+
+  // v5 → v6 migration: add the customModels block (empty by default).
+  if (cfg.schemaVersion < 6) {
+    cfg.customModels = validateCustomModels((raw as Record<string, unknown>).customModels);
+    cfg.schemaVersion = 6;
   }
 
   // Legacy flat config from ~/.toolnetapi/config.json (no schemaVersion).

@@ -10,6 +10,7 @@ import { syncProviderOnKeySave, setActiveProvider } from "../../providers";
 import { BRACKETED_PASTE_START, parseBracketedPaste, stripBracketedPaste } from "../../lib/bracketedPaste";
 import { statusManager } from "../statusService";
 import { cancelPendingApproval } from "../permissions/permissionModal";
+import { handleModelPickerKey } from "../modelPickerWorkflow";
 import { messageQueue } from "../../lib/messageQueue";
 import { overlayIsActive, handleOverlayKey } from "./overlayInput";
 import { workspaceAccessAnimation } from "../animations/modalAnimation";
@@ -427,64 +428,7 @@ function _handleKeyInternal(
 
   // 2. Model Picker navigation
   if (tuiState.showModelPicker) {
-    if (hex === "1b5b41" || hex === "1b4f41") { // Up — wrap around with modulo
-      const len = Math.max(1, tuiState.filteredModels.length);
-      tuiState.modelPickerIdx = (tuiState.modelPickerIdx - 1 + len) % len;
-      renderAll();
-      return;
-    }
-    if (hex === "1b5b42" || hex === "1b4f42") { // Down — wrap around with modulo
-      const len = Math.max(1, tuiState.filteredModels.length);
-      tuiState.modelPickerIdx = (tuiState.modelPickerIdx + 1) % len;
-      renderAll();
-      return;
-    }
-    if (hex === "0d" || hex === "0a") { // Enter
-      const sel = tuiState.filteredModels[tuiState.modelPickerIdx];
-      if (
-        sel &&
-        !sel.includes("No models") &&
-        !sel.includes("Provider offline") &&
-        !sel.includes("Gateway offline") &&
-        !sel.includes("Error") &&
-        !sel.includes("No matches") &&
-        !sel.includes("No provider") &&
-        !sel.includes("Loading...")
-      ) {
-        tuiState.currentModel = sel;
-        tuiState.showToast(`Model: ${sel}`);
-      }
-      tuiState.showModelPicker = false;
-      tuiState.setStatus("");
-      renderAll();
-      return;
-    }
-    if (hex === "1b") { // Esc
-      tuiState.showModelPicker = false;
-      tuiState.setStatus("");
-      renderAll();
-      return;
-    }
-    if (hex === "7f" || hex === "08") { // Backspace
-      if (tuiState.modelSearchQuery.length > 0) {
-        tuiState.modelSearchQuery = tuiState.modelSearchQuery.slice(0, -1);
-        const query = tuiState.modelSearchQuery.toLowerCase();
-        tuiState.filteredModels = tuiState.availableModels.filter((m) => m.toLowerCase().includes(query));
-        if (tuiState.filteredModels.length === 0) tuiState.filteredModels = ["No matches"];
-        tuiState.modelPickerIdx = 0;
-        renderAll();
-      }
-      return;
-    }
-    if (s.length >= 1 && !s.startsWith("\x1b") && s >= " " && s <= "~") {
-      tuiState.modelSearchQuery += s;
-      const query = tuiState.modelSearchQuery.toLowerCase();
-      tuiState.filteredModels = tuiState.availableModels.filter((m) => m.toLowerCase().includes(query));
-      if (tuiState.filteredModels.length === 0) tuiState.filteredModels = ["No matches"];
-      tuiState.modelPickerIdx = 0;
-      renderAll();
-      return;
-    }
+    handleModelPickerKey(hex, s, { renderAll });
     return;
   }
 

@@ -391,8 +391,11 @@ describe("TUI Command Execution & Status Line Integrity", () => {
     // Simulate user typing /model and pressing Enter
     await sendMessage("/model");
 
+    // Provider-first: the workflow opens at the provider stage.
     expect(tuiState.showModelPicker).toBe(true);
-    expect(tuiState.filteredModels.length).toBeGreaterThan(0);
+    expect(tuiState.modelPickerStage).toBe("provider");
+    expect(tuiState.providerEntries.length).toBeGreaterThan(0);
+    tuiState.showModelPicker = false;
   });
 
   it("executes /model <id> and sets active model immediately", async () => {

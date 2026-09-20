@@ -68,6 +68,10 @@ describe(`PTY model picker — fragmented Down (${COLS}x${ROWS} mobile SSH)${ski
       const { output } = runDriver([
         ["WAIT:> ", ""], // readiness — stdin listener attached
         [0, "/model\r"],
+        ["WAIT:Select provider", ""],
+        [400, ""],
+        // Enter the configured provider's model stage (highlighted by default).
+        [0, "\r"],
         ["WAIT:Select model", ""],
         [1200, ""], // allow the async model list to load
         [60, "\u001b"],

@@ -18,6 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ensureToolnetDir, getToolnetCacheDir } from "../../lib/toolnetHome";
 import { ModelCatalog, modelCatalog } from "./catalog";
+import { mergeCustomModels } from "./customModels";
 import { ProviderRegistry, providerRegistry } from "./registry";
 import { redactSecret } from "./errors";
 import type { ModelDefinition } from "./types";
@@ -223,7 +224,9 @@ export function hydrateCatalogFromCache(options: {
       continue;
     }
     // Per-provider atomic replace — a corrupt entry cannot half-apply.
-    catalog.replaceProviderModels(providerId, entry.models);
+    // Custom models merge in BEFORE the replace: a cache hydration must not
+    // drop user-added entries (they are config, not cache artifacts).
+    catalog.replaceProviderModels(providerId, mergeCustomModels(providerId, entry.models));
     hydrated.push(providerId);
   }
   return { hydrated, skipped, stale, quarantined: false };

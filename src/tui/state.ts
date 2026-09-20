@@ -22,6 +22,7 @@ import {
 import { messageQueue } from "../lib/messageQueue";
 import { setCurrentSessionId as bindCurrentContextSession } from "../lib/context";
 import { setResponseLanguage } from "../lib/language";
+import { listProviders, getDefaultProviderConfig } from "../providers/registry";
 import {
   DEFAULT_REASONING_SETTINGS,
   type AgentPhase,
@@ -127,6 +128,40 @@ export class TuiState {
   availableModels: string[] = [];
   filteredModels: string[] = [];
   modelSearchQuery = "";
+
+  /**
+   * Hierarchical /model workflow. `modelPickerStage = "provider"` shows the
+   * provider list; "model" shows the pending provider's models. Selecting a
+   * provider sets `pendingProviderId` — NAVIGATION ONLY — and the runtime
+   * provider/model pair only changes when a model is chosen (atomic commit).
+   * Esc/back at any earlier stage discards the pending id and leaves the
+   * active pair untouched: the runtime is never left half-switched.
+   */
+  modelPickerStage: "provider" | "model" = "provider";
+  pendingProviderId: string | null = null;
+  providerPickerIdx = 0;
+  providerEntries: Array<{ id: string; name: string; configured: boolean }> = [];
+  /** Search cursor inside the model list's filter field. */
+  modelSearchCursor = 0;
+
+  async openProviderStage(): Promise<void> {
+    this.showModelPicker = true;
+    this.modelPickerStage = "provider";
+    this.pendingProviderId = null;
+    this.modelSearchQuery = "";
+    this.modelSearchCursor = 0;
+    this.providerEntries = buildProviderEntries();
+    // Highlight the currently active provider when known.
+    let active = 0;
+    try {
+      const { getActiveProviderConfig } = await import("../providers");
+      const cfg = getActiveProviderConfig();
+      if (cfg) active = this.providerEntries.findIndex((p) => p.id === cfg.id);
+    } catch {}
+    this.providerPickerIdx = active >= 0 ? active : 0;
+    this.setStatus("");
+    this.requestRender();
+  }
 
   
   showSecretInput = false;
@@ -405,46 +440,11 @@ export class TuiState {
 
   async openModelPicker(): Promise<void> {
     this.overlay = { type: "none" };
-    this.showModelPicker = true;
     this.showKeyManager = false;
     this.showHelp = false;
-    this.modelSearchQuery = "";
-
-    const { getActiveProvider, getActiveProviderConfig } = await import("../providers");
-    const providerConfig = getActiveProviderConfig();
-    const provider = getActiveProvider();
-    if (!providerConfig || !provider) {
-      this.currentModel = "";
-      this.availableModels = ["No provider configured — use /key or /provider to set one up"];
-      this.filteredModels = this.availableModels;
-      this.setStatus("");
-      this.requestRender();
-      return;
-    }
-
-    if (
-      this.availableModels.length === 0 ||
-      this.availableModels[0].startsWith("No provider") ||
-      this.availableModels[0] === "Loading..." ||
-      this.availableModels[0] === "Provider offline"
-    ) {
-      this.setStatus("Fetching models...");
-      this.requestRender();
-      await this.refreshActiveModels();
-    }
-
-    this.filteredModels = [...this.availableModels];
-    if (this.availableModels.length === 0 || this.availableModels[0] === "No models available" || this.availableModels[0] === "Provider offline") {
-      this.currentModel = "";
-      this.setStatus("");
-      this.requestRender();
-      return;
-    }
-
-    this.modelPickerIdx = this.filteredModels.indexOf(this.currentModel);
-    if (this.modelPickerIdx < 0) this.modelPickerIdx = 0;
-    this.setStatus("");
-    this.requestRender();
+    // The hierarchical workflow starts at the provider stage; the previous
+    // active-provider model list becomes reachable by selecting a provider.
+    await this.openProviderStage();
   }
 
   openKeyManager(): void {
@@ -813,6 +813,38 @@ export class TuiState {
     this.openSessionPicker();
     return true;
   }
+}
+
+/**
+ * Provider list for the /model workflow's first stage: configured providers
+ * first (selectable), built-in but unconfigured after (marked), canonical ids
+ * preserved. Pure data — no runtime mutation.
+ */
+export function buildProviderEntries(): Array<{ id: string; name: string; configured: boolean }> {
+  const builtin = [
+    "toolnet",
+    "openai",
+    "anthropic",
+    "gemini",
+    "deepseek",
+    "groq",
+    "openrouter",
+    "together",
+    "mistral",
+    "xai",
+    "alibaba",
+    "minimax",
+    "cohere",
+  ];
+  const entries: Array<{ id: string; name: string; configured: boolean }> = [];
+  for (const p of listProviders()) {
+    entries.push({ id: p.id, name: p.name || p.id, configured: true });
+  }
+  const seen = new Set(entries.map((e) => e.id.toLowerCase()));
+  for (const id of builtin) {
+    if (!seen.has(id)) entries.push({ id, name: getDefaultProviderConfig(id).name, configured: false });
+  }
+  return entries;
 }
 
 export const tuiState = new TuiState();

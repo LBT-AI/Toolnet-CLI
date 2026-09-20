@@ -92,11 +92,15 @@ describe("Provider Key Model Flow Regression Suite", () => {
     expect(currentActive?.id).toBe("toolnet");
     expect(currentActive?.name).toBe("ToolNet Gateway");
 
-    // /model now has models available
+    // /model opens the hierarchical workflow: provider stage first, with the
+    // freshly configured provider highlighted and its models one Enter away.
     await tuiState.openModelPicker();
-    expect(tuiState.availableModels.length).toBeGreaterThan(0);
-    expect(tuiState.availableModels).toContain("claude-3-5-sonnet");
     expect(tuiState.showModelPicker).toBe(true);
+    expect(tuiState.modelPickerStage).toBe("provider");
+    const toolnetRow = tuiState.providerEntries.findIndex((p) => p.id === "toolnet");
+    expect(toolnetRow).toBeGreaterThanOrEqual(0);
+    expect(tuiState.providerEntries[toolnetRow].configured).toBe(true);
+    tuiState.showModelPicker = false;
   });
 
   it("2. If another valid active provider exists, adding a new key does NOT overwrite active provider", () => {

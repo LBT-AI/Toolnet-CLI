@@ -15,6 +15,7 @@
 import type { Provider, ProviderConfig } from "../../providers";
 import { createProviderInstance } from "../../providers";
 import { ModelCatalog, modelCatalog } from "./catalog";
+import { mergeCustomModels } from "./customModels";
 import { DuplicateProviderError, ModelNotFoundError, ProviderNotFoundError } from "./errors";
 import { ProviderHealthTracker, type ProviderOutcome } from "./health";
 import { formatModelRef } from "./ref";
@@ -74,11 +75,14 @@ export class ProviderRegistry {
     if (!options.skipModels && registration.models && registration.models.length > 0) {
       this.catalog.replaceProviderModels(
         id,
-        registration.models.map((model) => ({
-          ...model,
-          providerId: id,
-          id: formatModelRef(id, model.apiModelId),
-        })),
+        mergeCustomModels(
+          id,
+          registration.models.map((model) => ({
+            ...model,
+            providerId: id,
+            id: formatModelRef(id, model.apiModelId),
+          })),
+        ),
       );
     }
 
@@ -156,7 +160,7 @@ export class ProviderRegistry {
   replaceModels(providerId: string, models: ModelDefinition[]): string[] {
     const key = normalizeId(providerId);
     if (!this.definitions.has(key)) return [];
-    return this.catalog.replaceProviderModels(key, models);
+    return this.catalog.replaceProviderModels(key, mergeCustomModels(key, models));
   }
 
   // ── Health ────────────────────────────────────────────────────────────────

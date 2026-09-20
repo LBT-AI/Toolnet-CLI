@@ -45,6 +45,8 @@ describe("Modal focus routing — keys never leak", () => {
   it("model picker open: Down moves selection and leaks nothing into the composer", () => {
     resetInputState();
     tuiState.showModelPicker = true;
+    tuiState.modelPickerStage = "model";
+    tuiState.pendingProviderId = "toolnet";
     tuiState.filteredModels = ["m1", "m2", "m3"];
     tuiState.modelPickerIdx = 0;
 
@@ -60,9 +62,11 @@ describe("Modal focus routing — keys never leak", () => {
 
     expect(tuiState.modelPickerIdx).toBe(1);
     expect(tuiState.showModelPicker).toBe(true);
+    expect(tuiState.modelPickerStage).toBe("model");
     expect(getInputState().buffer).toBe("");
     expect(sent).toEqual([]);
     tuiState.showModelPicker = false;
+    tuiState.pendingProviderId = null;
   });
 
   it("model picker open: Esc closes the picker only — no exit, no composer change", () => {
