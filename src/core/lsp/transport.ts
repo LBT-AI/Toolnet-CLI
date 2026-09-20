@@ -150,6 +150,15 @@ export function spawnStdioServer(
     stdio: ["pipe", "pipe", "pipe"],
   }) as ChildProcessWithoutNullStreams;
 
+  // Prevent zombie processes if the CLI exits abruptly
+  const cleanup = () => {
+    try {
+      if (!child.killed) child.kill();
+    } catch {}
+  };
+  process.on("exit", cleanup);
+  child.on("exit", () => process.off("exit", cleanup));
+
   return {
     transport: createStdioTransport({ stdin: child.stdin, stdout: child.stdout }, child),
     initialization: options.initialization,
