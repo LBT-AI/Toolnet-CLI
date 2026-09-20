@@ -38,12 +38,18 @@ describe("Tier 3 Cross-Feature: Resize During Stream & Active Modal", () => {
     for (const [cols, rows] of SIZES) {
       // Palette open + long multi-line prompt mid-stream.
       const geo = computeLayoutGeometry(cols, rows, 12, 2, 8, true, 7);
-      expect(geo.popupRows).toBeGreaterThan(0);
-      expect(geo.popupRows).toBeLessThan(geo.rows);
+      // The palette collapses on grids too short for a sheet + composer +
+      // readable transcript; where it renders it is a bounded sheet.
+      expect(geo.popupRows).toBeGreaterThanOrEqual(0);
+      if (geo.popupRows > 0) {
+        expect(geo.popupRows).toBeGreaterThanOrEqual(6);
+        expect(geo.popupRows).toBeLessThan(geo.rows);
+      }
       expect(geo.chatRows).toBeGreaterThanOrEqual(2);
       expect(geo.inputRows).toBeLessThanOrEqual(COMPOSER_MAX_BUFFER_LINES + 1);
-      // Composer is never squeezed away by the palette or the status row.
-      expect(geo.chatRows + geo.popupRows + geo.inputRows).toBeLessThanOrEqual(geo.rows);
+      // The exact one-ledger invariant: chrome reserved exactly once.
+      const painted = 2 + geo.chatRows + geo.popupRows + geo.statusRows + geo.inputRows + 1;
+      expect(painted).toBe(geo.rows);
     }
   });
 

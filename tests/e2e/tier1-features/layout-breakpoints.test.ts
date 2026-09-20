@@ -49,7 +49,8 @@ describe("Tier 1 Feature Coverage: Responsive Layout & Dynamic Breakpoints", () 
     const layout = calculateLayoutContract(60, 15, 1, 0);
     expect(layout.inputRows).toBeGreaterThanOrEqual(2);
     expect(layout.chatRows).toBeGreaterThanOrEqual(2);
-    expect(layout.cursorRow).toBe(15 - 1);
+    // Caret rides the composer prompt line, directly above the footer.
+    expect(layout.cursorRow).toBe(15 - 2);
   });
 
   it("F18.1: VirtualTerminal emulates resize and recalculates responsive layout cleanly", () => {

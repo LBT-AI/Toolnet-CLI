@@ -95,7 +95,7 @@ function buildFrame(): string {
     tuiState.isStreaming ||
     Boolean(tuiState.statusText) ||
     messageQueue.size() > 0;
-  const layout = computeLayout(activeSuggests.length, 2, tuiState.cursorPos, statusActive, tuiState.inputBuffer ? tuiState.inputBuffer.split("\n").length : 1);
+  const layout = computeLayout(activeSuggests.length, 2, tuiState.cursorPos, statusActive, tuiState.inputBuffer ? tuiState.inputBuffer.split("\n").length : 1, tuiState.inputBuffer);
   const { cols, rows, hasPanel, panelWidth, chatCols, chatRows, popupRows } = layout;
   const out: string[] = [];
 
@@ -152,6 +152,8 @@ function buildFrame(): string {
   // Rows are capped at cols - 1 wide: a line that fills the last column +
   // CRLF double-advances the cursor on autowrap terminals, scrolling the
   // frame and leaving stale duplicate provider/input/workspace rows behind.
+  // The painted ledger below must mirror computeLayout's vertical ledger
+  // exactly: header + chatRows + popup + status + composer + footer = rows.
   for (let i = 0; i < chatRows; i++) {
     const line = visibleLines[i] ?? "";
     // Pad by TERMINAL CELLS, not JS string length: CJK/emoji occupy 2 cells,
@@ -204,43 +206,9 @@ function buildFrame(): string {
   out.push(T.clearDown);
 
   // ── Cursor positioning ─────────────────────────────────────────────────────
-  // Compute the absolute cursor position from the actual rendered input area.
-  // The input area sits directly above the footer: divider row, then up to 3
-  // visible input lines. The cursor must land on the exact line/column where
-  // the user is typing, not on the divider or a separate row.
-  const inputBuffer = tuiState.inputBuffer;
-  const inputLines = inputBuffer ? inputBuffer.split("\n") : [];
-  const maxInputLines = inputLines.length > 0 ? Math.min(3, inputLines.length) : 1;
-  const inputStartIdx = Math.max(0, inputLines.length - maxInputLines);
-
-  // Find which line and column the cursor is on within the input buffer.
-  // The buffer cursor is a code-point index; we map it to terminal cells via
-  // visibleWidth so CJK/emoji before the cursor don't misplace the caret.
-  let cursorLine = 0;
-  let cursorColInLine = 0;
-  if (inputBuffer) {
-    let pos = 0;
-    for (let i = 0; i < inputLines.length; i++) {
-      const lineLen = Array.from(inputLines[i]).length;
-      if (pos + lineLen >= tuiState.cursorPos || i === inputLines.length - 1) {
-        cursorLine = i;
-        cursorColInLine = tuiState.cursorPos - pos;
-        break;
-      }
-      pos += lineLen + 1; // +1 for the newline character
-    }
-  }
-
-  const visibleLineIdx = cursorLine - inputStartIdx;
-
-  // The input area (from bottom): footer → last input line → ... → divider.
-  // Footer occupies the last terminal row. The last visible input line is at
-  // rows - 1, the second-to-last at rows - 2, etc.
-  // Prompt prefix ('> ' or '… ') is always 2 visible cells wide.
-  const promptWidth = 2;
-  const cursorPrefix = Array.from(inputLines[cursorLine] ?? "").slice(0, cursorColInLine).join("");
-  layout.cursorRow = rows - 1 - (maxInputLines - 1 - visibleLineIdx);
-  layout.cursorCol = Math.min(promptWidth + 1 + visibleWidth(cursorPrefix), cols - 1);
+  // Composer/footer/caret geometry has ONE owner: computeLayout. The frame
+  // renders layout.cursorRow/cursorCol as-is — never re-derives them from
+  // raw terminal rows.
 
   // Cursor: only visible when nothing is layered on top of the main frame.
   const anyOverlayActive =
@@ -256,7 +224,8 @@ function buildFrame(): string {
     tuiState.overlay.type !== "none";
 
   if (!anyOverlayActive) {
-    out.push(T.goto(layout.cursorRow, layout.cursorCol) + T.show);
+    // LayoutInfo coordinates are 0-based; the terminal's CUP sequence is 1-based.
+    out.push(T.goto(layout.cursorRow + 1, layout.cursorCol + 1) + T.show);
   } else {
     out.push(T.hide);
   }
@@ -622,9 +591,12 @@ export async function main(): Promise<void> {
         continue;
       }
 
-      // Escape sequences bypass the burst detector entirely: a keystroke
-      // carrying ESC must reach the key handler even mid-paste-burst.
-      if (chunk.content.includes("\x1b")) {
+      // Keystrokes that must act immediately bypass the burst detector:
+      // escape sequences, and any C0 control byte (Ctrl+C abort/exit, Ctrl+D,
+      // Enter, Backspace…). A trailing control keystroke buffered as "maybe a
+      // burst" would never be delivered until the user types again — the
+      // double-Ctrl+C exit would silently stop working.
+      if (/[\x00-\x1f\x7f]/.test(chunk.content)) {
         emitBurstChunks(burstDetector.flush());
         handleRawBytes(chunk.content);
         continue;

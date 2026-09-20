@@ -24,7 +24,8 @@ describe("Tier 2 Boundary & Corner Cases: Small Terminals & 60x20 Geometry", () 
     expect(layout.breakpoint).toBe("narrow");
     expect(layout.chatRows).toBeGreaterThan(0);
     expect(layout.inputRows).toBeGreaterThan(0);
-    expect(layout.cursorRow).toBe(14);
+    // Caret sits on the composer's prompt line, one row above the footer.
+    expect(layout.cursorRow).toBe(13);
   });
 
   it("B1.3: Sub-minimal screen (25x8) is safely clamped to 40x15 minimum floor", () => {
@@ -40,7 +41,8 @@ describe("Tier 2 Boundary & Corner Cases: Small Terminals & 60x20 Geometry", () 
     const layout = calculateLayoutContract(60, 20, 3);
     expect(layout.inputRows).toBe(4); // 1 border + 3 lines
     expect(layout.chatRows).toBeGreaterThanOrEqual(2);
-    expect(layout.cursorRow).toBe(19);
+    // Last composer line is the row directly above the footer.
+    expect(layout.cursorRow).toBe(18);
   });
 
   it("B1.5: Cursor coordinates remain strictly within terminal bounds across all small geometries", () => {
