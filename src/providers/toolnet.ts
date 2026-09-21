@@ -21,6 +21,7 @@ import { resolveApiKey } from "./registry";
 
 export const TOOLNET_DEFAULT_MODELS: ModelInfo[] = [
   { id: "alims-intl.llm", name: "Alibaba Intl LLM", object: "model", created: Date.now(), owned_by: "combo" },
+  { id: "bob/fast", name: "Bob Fast", object: "model", created: Date.now(), owned_by: "bob" },
   { id: "claude-3-5-sonnet", name: "Claude 3.5 Sonnet", object: "model", created: Date.now(), owned_by: "toolnet" },
   { id: "claude-3-7-sonnet", name: "Claude 3.7 Sonnet", object: "model", created: Date.now(), owned_by: "toolnet" },
   { id: "gpt-4o", name: "GPT-4o", object: "model", created: Date.now(), owned_by: "toolnet" },
@@ -116,7 +117,7 @@ export class ToolNetProvider implements Provider {
     try {
       const res = await fetch(`${this.v1Url}/models`, {
         headers: this.getHeaders(),
-        signal: AbortSignal.timeout(2000),
+        signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) return TOOLNET_DEFAULT_MODELS;
       const data = (await res.json()) as {
