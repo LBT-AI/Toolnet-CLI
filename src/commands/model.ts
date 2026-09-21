@@ -241,8 +241,8 @@ async function handleCustomModelSubcommand(
   const capabilities: Record<string, boolean> = {};
   const capAliases: Record<string, string> = { "native-tools": "nativeToolCalls" };
   for (const flag of CAP_FLAGS) {
-    if (flags.get(flag.slice(2)) === true) {
-      capabilities[capAliases[flag.slice(2)] ?? flag.slice(2)] = true;
+    if (flags.get(flag) === true) {
+      capabilities[capAliases[flag] ?? flag] = true;
     }
   }
   const contextRaw = flags.get("context");

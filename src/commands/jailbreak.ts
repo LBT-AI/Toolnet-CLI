@@ -71,7 +71,11 @@ export const jailbreakCommand: Command = {
     if (args.length >= 1 && args[0].toLowerCase() === "force") {
       const stateArg = args[1]?.toLowerCase();
       const enabled = stateArg === "on" || stateArg === "1" || stateArg === "enable";
-      bypassEngine.setForceExecution(enabled);
+      const ok = bypassEngine.setForceExecution(enabled);
+      if (enabled && !ok) {
+        addMessage("assistant", `\x1b[31m✖ Force execution rejected:\x1b[0m Sandbox mode must be 'full-access' to enable force execution.`);
+        return;
+      }
       addMessage("assistant", `🛡️ Force execution (skip shell/file permission checks): ${enabled ? "\x1b[32mON\x1b[0m" : "\x1b[31mOFF\x1b[0m"}`);
       return;
     }

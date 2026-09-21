@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import { execSync } from "node:child_process";
 
 export interface RepositoryProfile {
   root: string;
@@ -26,9 +27,8 @@ export function detectRepositoryProfile(cwd: string): RepositoryProfile {
   
   if (vcs === "git") {
     try {
-      const { execSync } = require("node:child_process");
-      branch = execSync("git branch --show-current", { cwd: root, stdio: "pipe" }).toString().trim();
-      const status = execSync("git status --porcelain", { cwd: root, stdio: "pipe" }).toString().trim();
+      branch = execSync("git branch --show-current", { cwd: root, stdio: "pipe", timeout: 5000 }).toString().trim();
+      const status = execSync("git status --porcelain", { cwd: root, stdio: "pipe", timeout: 5000 }).toString().trim();
       clean = status.length === 0;
     } catch {
       // Ignored
@@ -63,10 +63,12 @@ export function detectRepositoryProfile(cwd: string): RepositoryProfile {
     packageManagers.push("pip"); // Simplified
   }
 
-  // Find instruction files (AGENTS.md)
+  // Find instruction files (AGENTS.md, AGENT.md, .toolnet/instructions.md)
   const instructionFiles: string[] = [];
-  if (fs.existsSync(path.join(root, "AGENTS.md"))) {
-    instructionFiles.push("AGENTS.md");
+  for (const candidate of ["AGENTS.md", "AGENT.md", path.join(".toolnet", "instructions.md")]) {
+    if (fs.existsSync(path.join(root, candidate))) {
+      instructionFiles.push(candidate);
+    }
   }
   
   return {

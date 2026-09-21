@@ -27,13 +27,13 @@ export const doctorCommand: Command = {
       if (process.versions && (process.versions as any).bun) {
         bunVer = `v${(process.versions as any).bun}`;
       } else {
-        bunVer = execSync("bun --version", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+        bunVer = execSync("bun --version", { stdio: ["ignore", "pipe", "ignore"], timeout: 3000 }).toString().trim();
       }
     } catch {}
 
     let gitVer = "not installed";
     try {
-      gitVer = execSync("git --version", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+      gitVer = execSync("git --version", { stdio: ["ignore", "pipe", "ignore"], timeout: 3000 }).toString().trim();
     } catch {}
 
     let playwrightVer = "not detected";

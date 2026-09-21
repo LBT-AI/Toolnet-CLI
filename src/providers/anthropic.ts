@@ -181,8 +181,29 @@ export class AnthropicProvider implements Provider {
         });
 
         if (res.status === 429 || res.status === 503) {
-          const delay = Math.pow(2, attempt) * 1000;
-          await new Promise((r) => setTimeout(r, delay));
+          const bodyText = await res.text().catch(() => "");
+          const evidence = (this.apiKey && bodyText.includes(this.apiKey) ? bodyText.replaceAll(this.apiKey, "[REDACTED_API_KEY]") : bodyText).slice(0, 500);
+          lastError = new Error(`HTTP ${res.status}: ${evidence || "transient provider failure"}`);
+          const retryAfterHeader = res.headers.get("retry-after");
+          let delayMs = Math.min(4_000, Math.pow(2, attempt) * 500) + Math.floor(Math.random() * 250);
+          if (retryAfterHeader) {
+            const retryAfterSec = Number(retryAfterHeader.trim());
+            if (Number.isFinite(retryAfterSec) && retryAfterSec >= 0) {
+              delayMs = Math.min(retryAfterSec * 1000, 30_000);
+            }
+          }
+          if (attempt < 2) {
+            if (request.signal) {
+              await new Promise<void>((resolve, reject) => {
+                const t = setTimeout(resolve, delayMs);
+                (t as any).unref?.();
+                const onAbort = () => { clearTimeout(t); reject(new Error("Request aborted")); };
+                request.signal!.addEventListener("abort", onAbort, { once: true });
+              });
+            } else {
+              await new Promise((r) => setTimeout(r, delayMs));
+            }
+          }
           continue;
         }
 
@@ -240,8 +261,26 @@ export class AnthropicProvider implements Provider {
             : undefined,
         };
       } catch (err: any) {
+        if (this.apiKey && typeof err?.message === "string" && err.message.includes(this.apiKey)) {
+          err.message = err.message.replaceAll(this.apiKey, "[REDACTED_API_KEY]");
+        }
         lastError = err;
         if (request.signal?.aborted) throw err;
+        if (attempt < 2) {
+          const backoffMs = Math.min(4000, Math.pow(2, attempt) * 500 + Math.floor(Math.random() * 250));
+          if (request.signal) {
+            try {
+              await new Promise<void>((resolve, reject) => {
+                const t = setTimeout(resolve, backoffMs);
+                (t as any).unref?.();
+                const onAbort = () => { clearTimeout(t); reject(new Error("Request aborted")); };
+                request.signal!.addEventListener("abort", onAbort, { once: true });
+              });
+            } catch (abortErr) { throw abortErr; }
+          } else {
+            await new Promise((r) => setTimeout(r, backoffMs));
+          }
+        }
       }
     }
 
@@ -267,7 +306,9 @@ export class AnthropicProvider implements Provider {
       if (this.apiKey && errText.includes(this.apiKey)) {
         errText = errText.replaceAll(this.apiKey, "[REDACTED_API_KEY]");
       }
-      throw new Error(`HTTP ${res.status}: ${errText}`);
+      const retryAfter = res.headers.get("retry-after");
+      const suffix = retryAfter ? ` Retry-After: ${retryAfter}` : "";
+      throw new Error(`HTTP ${res.status}: ${errText}${suffix}`);
     }
 
     if (!res.body) throw new Error("No response body for streaming request");

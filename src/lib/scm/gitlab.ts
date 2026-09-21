@@ -51,7 +51,7 @@ export class GitLabProvider implements SCMProvider {
     let url = remoteUrl;
     if (!url) {
       try {
-        url = execSync("git remote get-url origin", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+        url = execSync("git remote get-url origin", { stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }).toString().trim();
       } catch {
         throw new Error("Cannot detect git remote repository. Please provide a full GitLab URL.");
       }
@@ -83,7 +83,7 @@ export class GitLabProvider implements SCMProvider {
       num = parsed.number;
     } else {
       num = typeof prNumberOrUrl === "number" ? prNumberOrUrl : parseInt(prNumberOrUrl, 10);
-      if (isNaN(num)) throw new Error(`Invalid MR number: ${prNumberOrUrl}`);
+      if (isNaN(num) || num <= 0 || !Number.isInteger(num)) throw new Error(`Invalid MR number: ${prNumberOrUrl}`);
     }
 
     const projectPath = encodeURIComponent(`${targetRepo.owner}/${targetRepo.repo}`);
@@ -125,7 +125,7 @@ export class GitLabProvider implements SCMProvider {
       num = parsed.number;
     } else {
       num = typeof issueNumberOrUrl === "number" ? issueNumberOrUrl : parseInt(issueNumberOrUrl, 10);
-      if (isNaN(num)) throw new Error(`Invalid Issue number: ${issueNumberOrUrl}`);
+      if (isNaN(num) || num <= 0 || !Number.isInteger(num)) throw new Error(`Invalid Issue number: ${issueNumberOrUrl}`);
     }
 
     const projectPath = encodeURIComponent(`${targetRepo.owner}/${targetRepo.repo}`);
@@ -152,6 +152,7 @@ export class GitLabProvider implements SCMProvider {
 
   async getDiff(repo: SCMRepoInfo, prNumber: string | number): Promise<string> {
     const num = typeof prNumber === "number" ? prNumber : parseInt(prNumber, 10);
+    if (isNaN(num) || num <= 0 || !Number.isInteger(num)) throw new Error(`Invalid MR number: ${prNumber}`);
     const projectPath = encodeURIComponent(`${repo.owner}/${repo.repo}`);
     const apiUrl = `https://gitlab.com/api/v4/projects/${projectPath}/merge_requests/${num}/raw_diffs`;
 
@@ -162,7 +163,7 @@ export class GitLabProvider implements SCMProvider {
       const changesRes = await fetch(changesUrl, { headers: this.getHeaders() });
       if (changesRes.ok) {
         const changesData = await changesRes.json() as any;
-        const diffs = (changesData.changes || []).map((c: any) => `--- a/${c.old_path}\n+++ b/${c.new_path}\n${c.diff}`).join("\n");
+        const diffs = (changesData.changes || []).slice(0, 100).map((c: any) => `--- a/${c.old_path}\n+++ b/${c.new_path}\n${c.diff}`).join("\n").slice(0, 200000);
         return diffs;
       }
       throw new Error(`Failed to fetch GitLab MR diff: ${res.statusText}`);

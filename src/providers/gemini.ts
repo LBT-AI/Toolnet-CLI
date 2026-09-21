@@ -47,16 +47,25 @@ export class GeminiProvider implements Provider {
     this.apiKey = resolveApiKey(config);
   }
 
+  private getHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...extraHeaders,
+    };
+    if (this.apiKey) {
+      headers["x-goog-api-key"] = this.apiKey;
+    }
+    return headers;
+  }
+
   private getUrl(path: string): string {
-    const keyParam = this.apiKey ? `key=${encodeURIComponent(this.apiKey)}` : "";
-    const sep = path.includes("?") ? "&" : "?";
-    return `${this.baseUrl}${path}${keyParam ? `${sep}${keyParam}` : ""}`;
+    return `${this.baseUrl}${path}`;
   }
 
   async listModels(): Promise<ModelInfo[]> {
     try {
       const url = this.getUrl("/models");
-      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      const res = await fetch(url, { headers: this.getHeaders(), signal: AbortSignal.timeout(6000) });
       if (!res.ok) return GEMINI_DEFAULT_MODELS;
       const data = (await res.json()) as { models?: Array<{ name: string; displayName?: string }> };
       if (Array.isArray(data.models) && data.models.length > 0) {
@@ -178,14 +187,35 @@ export class GeminiProvider implements Provider {
       try {
         const res = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...(request.headers || {}) },
+          headers: this.getHeaders(request.headers),
           body: JSON.stringify(payload),
           signal: request.signal ?? AbortSignal.timeout(120000),
         });
 
         if (res.status === 429 || res.status === 503) {
-          const delay = Math.pow(2, attempt) * 1000;
-          await new Promise((r) => setTimeout(r, delay));
+          const bodyText = await res.text().catch(() => "");
+          const evidence = (this.apiKey && bodyText.includes(this.apiKey) ? bodyText.replaceAll(this.apiKey, "[REDACTED_API_KEY]") : bodyText).slice(0, 500);
+          lastError = new Error(`HTTP ${res.status}: ${evidence || "transient provider failure"}`);
+          const retryAfterHeader = res.headers.get("retry-after");
+          let delayMs = Math.min(4_000, Math.pow(2, attempt) * 500) + Math.floor(Math.random() * 250);
+          if (retryAfterHeader) {
+            const retryAfterSec = Number(retryAfterHeader.trim());
+            if (Number.isFinite(retryAfterSec) && retryAfterSec >= 0) {
+              delayMs = Math.min(retryAfterSec * 1000, 30_000);
+            }
+          }
+          if (attempt < 2) {
+            if (request.signal) {
+              await new Promise<void>((resolve, reject) => {
+                const t = setTimeout(resolve, delayMs);
+                (t as any).unref?.();
+                const onAbort = () => { clearTimeout(t); reject(new Error("Request aborted")); };
+                request.signal!.addEventListener("abort", onAbort, { once: true });
+              });
+            } else {
+              await new Promise((r) => setTimeout(r, delayMs));
+            }
+          }
           continue;
         }
 
@@ -244,8 +274,26 @@ export class GeminiProvider implements Provider {
             : undefined,
         };
       } catch (err: any) {
+        if (this.apiKey && typeof err?.message === "string" && err.message.includes(this.apiKey)) {
+          err.message = err.message.replaceAll(this.apiKey, "[REDACTED_API_KEY]");
+        }
         lastError = err;
         if (request.signal?.aborted) throw err;
+        if (attempt < 2) {
+          const backoffMs = Math.min(4000, Math.pow(2, attempt) * 500 + Math.floor(Math.random() * 250));
+          if (request.signal) {
+            try {
+              await new Promise<void>((resolve, reject) => {
+                const t = setTimeout(resolve, backoffMs);
+                (t as any).unref?.();
+                const onAbort = () => { clearTimeout(t); reject(new Error("Request aborted")); };
+                request.signal!.addEventListener("abort", onAbort, { once: true });
+              });
+            } catch (abortErr) { throw abortErr; }
+          } else {
+            await new Promise((r) => setTimeout(r, backoffMs));
+          }
+        }
       }
     }
 
@@ -260,7 +308,7 @@ export class GeminiProvider implements Provider {
 
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(request.headers || {}) },
+      headers: this.getHeaders(request.headers),
       body: JSON.stringify(payload),
       signal: request.signal ?? AbortSignal.timeout(300000),
     });
@@ -270,7 +318,9 @@ export class GeminiProvider implements Provider {
       if (this.apiKey && errText.includes(this.apiKey)) {
         errText = errText.replaceAll(this.apiKey, "[REDACTED_API_KEY]");
       }
-      throw new Error(`HTTP ${res.status}: ${errText}`);
+      const retryAfter = res.headers.get("retry-after");
+      const suffix = retryAfter ? ` Retry-After: ${retryAfter}` : "";
+      throw new Error(`HTTP ${res.status}: ${errText}${suffix}`);
     }
 
     if (!res.body) throw new Error("No response body for streaming request");
@@ -353,6 +403,7 @@ export class GeminiProvider implements Provider {
   async health(): Promise<boolean> {
     try {
       const res = await fetch(this.getUrl("/models"), {
+        headers: this.getHeaders(),
         signal: AbortSignal.timeout(5000),
       });
       return res.ok || res.status === 400 || res.status === 403;

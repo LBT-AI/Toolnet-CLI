@@ -88,7 +88,15 @@ export function saveProvidersConfig(config: StoredProvidersConfig): void {
   ensureDir();
   const file = getProvidersConfigFile();
   try {
-    fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n", "utf8");
+    const tmp = `${file}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+    fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+    const fd = fs.openSync(tmp, "r+");
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, file);
     cachedConfig = config;
     lastConfigFilePath = file;
   } catch {}

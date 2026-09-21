@@ -68,7 +68,10 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
     });
 
     if (!response.ok) {
-      const text = await safeText(response);
+      let text = await safeText(response);
+      if (this.discoveryKey && text.includes(this.discoveryKey)) {
+        text = text.replaceAll(this.discoveryKey, "[REDACTED_API_KEY]");
+      }
       throw new Error(`OpenRouter model discovery failed: HTTP ${response.status}${text ? ` — ${text}` : ""}`);
     }
 

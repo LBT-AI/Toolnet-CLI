@@ -152,8 +152,16 @@ export function findCommand(input: string): { command: Command; args: string[] }
   const cmdName = parts[0].toLowerCase();
   const args = parts.slice(1);
 
+  // Pass 1: Exact command name takes absolute precedence over aliases
   for (const cmd of builtinCommands) {
-    if (cmd.name === cmdName || cmd.aliases.includes(cmdName)) {
+    if (cmd.name === cmdName) {
+      return { command: cmd, args };
+    }
+  }
+
+  // Pass 2: Check aliases if no canonical name matched
+  for (const cmd of builtinCommands) {
+    if (cmd.aliases.includes(cmdName)) {
       return { command: cmd, args };
     }
   }
@@ -169,6 +177,10 @@ export async function dispatchCommand(
   if (!found) return false;
 
   const { command, args } = found;
-  await command.handler(args, ctx);
+  try {
+    await command.handler(args, ctx);
+  } catch (err: any) {
+    ctx.addMessage("assistant", `\x1b[31mCommand /${command.name} failed:\x1b[0m ${err?.message || String(err)}`);
+  }
   return true;
 }

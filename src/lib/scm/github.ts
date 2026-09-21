@@ -51,7 +51,7 @@ export class GitHubProvider implements SCMProvider {
     let url = remoteUrl;
     if (!url) {
       try {
-        url = execSync("git remote get-url origin", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+        url = execSync("git remote get-url origin", { stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }).toString().trim();
       } catch {
         throw new Error("Cannot detect git remote repository. Please provide a full GitHub URL.");
       }
@@ -84,10 +84,12 @@ export class GitHubProvider implements SCMProvider {
       num = parsed.number;
     } else {
       num = typeof prNumberOrUrl === "number" ? prNumberOrUrl : parseInt(prNumberOrUrl, 10);
-      if (isNaN(num)) throw new Error(`Invalid PR number: ${prNumberOrUrl}`);
+      if (isNaN(num) || num <= 0 || !Number.isInteger(num)) throw new Error(`Invalid PR number: ${prNumberOrUrl}`);
     }
 
-    const apiUrl = `https://api.github.com/repos/${targetRepo.owner}/${targetRepo.repo}/pulls/${num}`;
+    const owner = encodeURIComponent(targetRepo.owner);
+    const repoName = encodeURIComponent(targetRepo.repo);
+    const apiUrl = `https://api.github.com/repos/${owner}/${repoName}/pulls/${num}`;
     const res = await fetch(apiUrl, { headers: this.getHeaders() });
     if (!res.ok) {
       const err = await res.text().catch(() => "");
@@ -125,10 +127,12 @@ export class GitHubProvider implements SCMProvider {
       num = parsed.number;
     } else {
       num = typeof issueNumberOrUrl === "number" ? issueNumberOrUrl : parseInt(issueNumberOrUrl, 10);
-      if (isNaN(num)) throw new Error(`Invalid Issue number: ${issueNumberOrUrl}`);
+      if (isNaN(num) || num <= 0 || !Number.isInteger(num)) throw new Error(`Invalid Issue number: ${issueNumberOrUrl}`);
     }
 
-    const apiUrl = `https://api.github.com/repos/${targetRepo.owner}/${targetRepo.repo}/issues/${num}`;
+    const owner = encodeURIComponent(targetRepo.owner);
+    const repoName = encodeURIComponent(targetRepo.repo);
+    const apiUrl = `https://api.github.com/repos/${owner}/${repoName}/issues/${num}`;
     const res = await fetch(apiUrl, { headers: this.getHeaders() });
     if (!res.ok) {
       const err = await res.text().catch(() => "");
@@ -145,14 +149,17 @@ export class GitHubProvider implements SCMProvider {
       body: data.body || "",
       author: data.user?.login || "",
       state: data.state === "closed" ? "closed" : "open",
-      url: data.html_url || `https://github.com/${targetRepo.owner}/${targetRepo.repo}/issues/${num}`,
+      url: data.html_url || `https://github.com/${owner}/${repoName}/issues/${num}`,
       labels,
     };
   }
 
   async getDiff(repo: SCMRepoInfo, prNumber: string | number): Promise<string> {
     const num = typeof prNumber === "number" ? prNumber : parseInt(prNumber, 10);
-    const apiUrl = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${num}`;
+    if (isNaN(num) || num <= 0 || !Number.isInteger(num)) throw new Error(`Invalid PR number: ${prNumber}`);
+    const owner = encodeURIComponent(repo.owner);
+    const repoName = encodeURIComponent(repo.repo);
+    const apiUrl = `https://api.github.com/repos/${owner}/${repoName}/pulls/${num}`;
     const headers = {
       ...this.getHeaders(),
       Accept: "application/vnd.github.v3.diff",

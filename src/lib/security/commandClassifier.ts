@@ -308,8 +308,9 @@ function inspectCommandNode(
     };
   }
 
-  // 1b. Wrapper commands (env, command, exec, nohup, nice, timeout)
-  if (["env", "command", "exec", "nohup", "nice", "timeout"].includes(exec)) {
+  // 1b. Wrapper commands (env, command, exec, nohup, nice, timeout, stdbuf, setsid, busybox, chroot, ionice)
+  const EXEC_WRAPPERS = ["env", "command", "exec", "nohup", "nice", "timeout", "stdbuf", "setsid", "busybox", "chroot", "ionice"];
+  if (EXEC_WRAPPERS.includes(exec)) {
     let innerIdx = 0;
     if (exec === "timeout" && innerIdx < args.length && /^\d+[smhd]?$/.test(args[innerIdx])) {
       innerIdx++;
@@ -318,7 +319,8 @@ function inspectCommandNode(
       innerIdx++;
     }
     const innerExec = innerIdx < args.length ? args[innerIdx] : null;
-    if (innerExec && CRITICAL_EXECUTABLES.has(innerExec)) {
+    const innerBase = innerExec ? path.basename(innerExec).toLowerCase() : null;
+    if (innerBase && (CRITICAL_EXECUTABLES.has(innerBase) || (innerExec && CRITICAL_EXECUTABLES.has(innerExec)))) {
       return {
         riskLevel: "CRITICAL_DENY",
         isDangerous: true,
@@ -328,13 +330,19 @@ function inspectCommandNode(
         suggestedAction: "Blocked by security sandbox policy.",
       };
     }
-    if (innerExec === "rm" || innerExec === "rmdir" || innerExec === "unlink") {
+    if (innerBase === "rm" || innerBase === "rmdir" || innerBase === "unlink") {
       const rmArgs = args.slice(innerIdx + 1);
       const isRecursive = rmArgs.some((a) => a.startsWith("-") && (a.includes("r") || a.includes("R")));
       const hasForce = rmArgs.some((a) => a.startsWith("-") && a.includes("f"));
       for (const arg of rmArgs) {
         if (arg.startsWith("-")) continue;
-        if (arg === "/" || arg === "/*" || arg === "/." || arg === "/.*" || arg === "~" || arg === "$HOME") {
+        const normArg = arg.trim();
+        const normalizedPath = path.normalize(normArg);
+        if (
+          normArg === "/" || normArg === "/*" || normArg === "/." || normArg === "/.*" ||
+          normalizedPath === "/" || normalizedPath === "/." || normalizedPath === "/*" ||
+          normArg === "~" || normArg === "$HOME"
+        ) {
           return {
             riskLevel: "CRITICAL_DENY",
             isDangerous: true,
@@ -392,7 +400,12 @@ function inspectCommandNode(
       const normArg = arg.trim();
 
       // Root / System destruction
-      if (normArg === "/" || normArg === "/*" || normArg === "/." || normArg === "/.*") {
+      const normalizedArg = path.normalize(normArg);
+      if (
+        normArg === "/" || normArg === "/*" || normArg === "/." || normArg === "/.*" ||
+        normalizedArg === "/" || normalizedArg === "/." || normalizedArg === "/*" ||
+        normalizedArg === "/.."
+      ) {
         return {
           riskLevel: "CRITICAL_DENY",
           isDangerous: true,
@@ -504,7 +517,7 @@ function inspectCommandNode(
   // 3. Destructive Find Commands (find / -delete, find . -exec rm ...)
   if (exec === "find") {
     const hasDelete = args.includes("-delete");
-    const hasExecRm = args.some((a, idx) => (a === "-exec" || a === "-execdir") && args[idx + 1] === "rm");
+    const hasExecRm = args.some((a, idx) => (a === "-exec" || a === "-execdir") && (args[idx + 1] === "rm" || path.basename(args[idx + 1] || "") === "rm" || path.basename(args[idx + 1] || "") === "unlink"));
     if (hasDelete || hasExecRm) {
       const targetsRootOrHome = args.some((a) => a === "/" || a === "/*" || a === "~" || a === "$HOME");
       if (targetsRootOrHome) {
@@ -689,6 +702,10 @@ function isSafeReadOnlyNode(node: ShellCommandNode): boolean {
   if (exec === "git") {
     const sub = args[0]?.toLowerCase();
     return sub === "status" || sub === "diff" || sub === "log" || sub === "show" || sub === "branch" || sub === "tag";
+  }
+
+  if (exec === "find") {
+    if (args.some((a) => a === "-delete" || a === "-exec" || a === "-execdir")) return false;
   }
 
   if (exec === "node" || exec === "bun" || exec === "npm" || exec === "python" || exec === "python3" || exec === "cargo" || exec === "go") {

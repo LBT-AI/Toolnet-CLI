@@ -43,10 +43,10 @@ function describeError(error: unknown): string {
  * the rejection so callers can shape the error.
  */
 function withTimeout<T>(work: Promise<T>, timeoutMs: number, onTimeout: () => Error): Promise<T> {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return work;
+  const effectiveMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : HOOK_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(onTimeout()), timeoutMs);
+    timer = setTimeout(() => reject(onTimeout()), effectiveMs);
     // Do not keep the process alive purely for a hook timeout.
     timer.unref?.();
   });
@@ -88,7 +88,10 @@ export class HookRegistry {
     if (typeof registration.handler !== "function") {
       throw new Error(`Hook '${registration.name}' handler must be a function`);
     }
-    this.hooks.push({ ...registration });
+    const timeoutMs = registration.timeoutMs !== undefined && Number.isFinite(registration.timeoutMs) && registration.timeoutMs > 0
+      ? registration.timeoutMs
+      : HOOK_TIMEOUT_MS;
+    this.hooks.push({ ...registration, timeoutMs });
   }
 
   /** All registrations, in execution order. */

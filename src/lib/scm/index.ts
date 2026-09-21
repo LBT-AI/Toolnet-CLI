@@ -74,11 +74,15 @@ Author: @${pr.author}
 Branch: ${pr.sourceBranch} -> ${pr.targetBranch}
 
 Description:
+<untrusted_scm_content>
 ${pr.body || "(No description provided)"}
+</untrusted_scm_content>
 
 Diff:
 \`\`\`diff
+<untrusted_scm_content>
 ${pr.diff ? pr.diff.slice(0, 50000) : "(No diff content)"}
+</untrusted_scm_content>
 \`\`\`
 
 Please provide:
@@ -130,7 +134,9 @@ Author: @${issue.author}
 Status: ${issue.state}
 
 Description:
+<untrusted_scm_content>
 ${issue.body || "(No description provided)"}
+</untrusted_scm_content>
 
 Please analyze the codebase, identify root causes or required components, and propose/implement the solution.`;
 

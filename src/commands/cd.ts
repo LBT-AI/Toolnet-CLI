@@ -11,7 +11,7 @@ export const cdCommand: Command = {
       ctx.addMessage("assistant", `Usage: /cd <path>`);
       return;
     }
-    const newPath = args[0];
+    const newPath = args.join(" ");
     const success = setWorkspaceRoot(newPath);
     if (success) {
       const { workspaceRoot } = getCwdInfo();

@@ -25,37 +25,47 @@ export class BoundedRepoMap {
     const manager = getLspManager({ workspaceRoot: root, cwd: root });
     
     for (const f of files) {
-      if (this.nodes.has(f)) {
-        const cached = this.nodes.get(f)!;
-        const currentSize = fs.statSync(f).size;
-        if (cached.size === currentSize) {
-          continue; // rudimentary cache check
+      try {
+        const stat = fs.statSync(f);
+        if (stat.size > 512 * 1024) continue; // Skip files > 512KB to avoid memory exhaustion
+        if (this.nodes.has(f)) {
+          const cached = this.nodes.get(f)!;
+          if (cached.size === stat.size) {
+            continue; // rudimentary cache check
+          }
         }
-      }
-      
-      const content = fs.readFileSync(f, "utf-8");
-      const hash = crypto.createHash("sha256").update(content).digest("hex");
-      
-      let symbols: string[] = [];
-      if (manager.hasActiveClient(f)) {
-        try {
-          const docSymbols = await manager.documentSymbols(f);
-          symbols = docSymbols.filter((s: any) => s.kind == 11 || s.kind == 12 || s.kind == 5 || s.kind == 6 || String(s.kind) === "Function" || String(s.kind) === "Class" || String(s.kind) === "Method").map((s: any) => s.name); // basic function/class/method symbols
-        } catch {
-          // fallback to simple regex parsing
+        
+        const content = fs.readFileSync(f, "utf-8");
+        const hash = crypto.createHash("sha256").update(content).digest("hex");
+        
+        let symbols: string[] = [];
+        if (manager.hasActiveClient(f)) {
+          try {
+            const docSymbols = await manager.documentSymbols(f);
+            symbols = docSymbols.filter((s: any) => s.kind == 11 || s.kind == 12 || s.kind == 5 || s.kind == 6 || String(s.kind) === "Function" || String(s.kind) === "Class" || String(s.kind) === "Method").map((s: any) => s.name); // basic function/class/method symbols
+          } catch {
+            // fallback to simple regex parsing
+            symbols = this.fallbackExtractSymbols(content, f);
+          }
+        } else {
           symbols = this.fallbackExtractSymbols(content, f);
         }
-      } else {
-        symbols = this.fallbackExtractSymbols(content, f);
+        
+        if (this.nodes.size >= 500) {
+          const oldestKey = this.nodes.keys().next().value;
+          if (oldestKey) this.nodes.delete(oldestKey);
+        }
+
+        this.nodes.set(f, {
+          filePath: path.relative(root, f),
+          language: path.extname(f).slice(1),
+          size: Buffer.byteLength(content),
+          hash,
+          symbols: symbols.slice(0, 10), // Bounded symbols
+        });
+      } catch {
+        // Skip unreadable or concurrently deleted files
       }
-      
-      this.nodes.set(f, {
-        filePath: path.relative(root, f),
-        language: path.extname(f).slice(1),
-        size: Buffer.byteLength(content),
-        hash,
-        symbols: symbols.slice(0, 10), // Bounded symbols
-      });
     }
 
     return Array.from(this.nodes.values());
@@ -77,8 +87,16 @@ export class BoundedRepoMap {
   private gatherFiles(dirs: string[], max: number): string[] {
     const result: string[] = [];
     const queue = [...dirs];
+    const visited = new Set<string>();
     while (queue.length > 0 && result.length < max) {
       const dir = queue.shift()!;
+      let realDir = dir;
+      try {
+        realDir = fs.realpathSync.native ? fs.realpathSync.native(dir) : fs.realpathSync(dir);
+      } catch {}
+      if (visited.has(realDir)) continue;
+      visited.add(realDir);
+
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const e of entries) {
