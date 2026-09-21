@@ -665,7 +665,7 @@ export class AgentHarness {
   async dispatchTool(
     name: string,
     args: any,
-    options: { cwd?: string; userApproved?: boolean; agentRole?: string; agentDepth?: number; signal?: AbortSignal } = {}
+    options: { cwd?: string; userApproved?: boolean; agentRole?: string; agentDepth?: number; signal?: AbortSignal; onProgress?: (progress: any) => void } = {}
   ): Promise<{ result: string; allowed: boolean; reason?: string; needsApproval?: boolean }> {
     const cwd = options.cwd || this.config.currentCwd || process.cwd();
     const mode = this.config.sandboxMode || getSandboxMode();
@@ -740,6 +740,7 @@ export class AgentHarness {
       sessionId: this.config.sessionId,
       source: this.activeMode === "SUBAGENT" ? "subagent" : this.activeMode === "TEAMWORK" ? "teamwork" : "headless",
       signal: options.signal,
+      onProgress: options.onProgress,
  // a `task` call derives the child scope from the SPAWNING
       // turn's scope. Absent an explicit scope, the sandbox mode is the honest
       // baseline (never unbounded).
@@ -1533,10 +1534,23 @@ export class AgentHarness {
           this.emitEvent("tool:queued", mode, { toolName: name, toolArgs: args, id });
           this.emitEvent("tool:start", mode, { toolName: name, toolArgs: args, id });
 
+          const toolStartTimestamp = Date.now();
           const ctx = {
             agentRole: options.agentRole,
             agentDepth: options.agentDepth ?? (this.activeMode === "SUBAGENT" ? 1 : 0),
             signal: combinedSignal,
+            onProgress: (progress: any) => {
+              this.emitEvent("tool:progress", mode, {
+                toolName: name,
+                toolArgs: args,
+                id,
+                callId: id,
+                elapsedMs: progress.elapsedMs ?? (Date.now() - toolStartTimestamp),
+                tail: progress.tail,
+                stdoutDelta: progress.stdoutDelta,
+                stderrDelta: progress.stderrDelta,
+              });
+            },
           };
 
           let res = await this.dispatchTool(name, args, ctx);

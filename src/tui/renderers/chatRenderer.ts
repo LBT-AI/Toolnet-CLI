@@ -1,11 +1,46 @@
 import { A } from "../../term";
-import { wrapText, truncate } from "../layout";
+import { wrapText, truncate, visibleWidth } from "../layout";
 import type { Msg } from "../types";
 import { formatToolStart, formatToolEnd } from "../toolActivity";
+import { renderToolLine, prettyToolTarget } from "../../lib/tool-format";
+import { classifyToolAction } from "../../lib/commandClassifier";
 import { renderUnifiedDiffLines } from "./diffRenderer";
 import { redactOutputSecrets } from "../../lib/security/outputRedactor";
 import { renderReasoningPanel } from "./reasoningPanel";
 import type { ReasoningBlock } from "../../lib/reasoning";
+import { tuiState, type ActiveToolActivity } from "../state";
+
+export function renderActiveToolActivity(activity: ActiveToolActivity, cols: number): string[] {
+  const isNarrow = cols <= 60;
+  const elapsedSec = Math.max(0, Math.floor(activity.elapsedMs / 1000));
+  const elapsedStr = `${elapsedSec}s`;
+
+  const actionInfo = classifyToolAction(activity.name, activity.args);
+  const action = activity.actionLabel || actionInfo.actionLabel;
+  const target = activity.target || prettyToolTarget(activity.name, activity.args);
+
+  const dot = `${A.fgAmber}●${A.reset}`;
+  const label = `${A.bold}${A.fgAmber}${action}${A.reset}`;
+  const elapsed = `${A.dim}${A.fgMuted}· ${elapsedStr}${A.reset}`;
+
+  const lines: string[] = [];
+
+  const rawTargetMax = Math.max(5, cols - visibleWidth(action) - elapsedStr.length - 10);
+  const targetFormatted = target ? ` ${A.dim}${A.fgSubtext}${truncate(target, rawTargetMax)}${A.reset}` : "";
+  lines.push(`  ${dot} ${label}${targetFormatted} ${elapsed}`);
+
+  // Bounded live tail lines
+  if (activity.tail && activity.tail.length > 0) {
+    const maxTail = isNarrow ? 1 : 3;
+    const shownTail = activity.tail.slice(-maxTail);
+    const maxTailWidth = Math.max(10, cols - 6);
+    for (const t of shownTail) {
+      lines.push(`    ${A.fgSubtext}${A.dim}${truncate(t, maxTailWidth)}${A.reset}`);
+    }
+  }
+
+  return lines;
+}
 
 export function renderChatMessages(
   messages: Msg[],
@@ -75,11 +110,14 @@ export function renderChatMessages(
         }
       }
 
-      const isSuccess = parsedTool
+      const isCancelled = Boolean((msg as any).cancelled || (parsedTool && parsedTool.cancelled) || parsedTool?.exitCode === 130);
+      const isSuccess = !isCancelled && (parsedTool
         ? parsedTool.exitCode === 0 || !("exitCode" in parsedTool) || !parsedTool.error
-        : !String(msg.content || "").toLowerCase().startsWith("error");
+        : !String(msg.content || "").toLowerCase().startsWith("error"));
 
-      const headerText = formatToolEnd(toolName, argsObj, isSuccess);
+      const durationMs = (msg as any).durationMs ?? parsedTool?.durationMs;
+      const status = isCancelled ? "cancelled" : isSuccess ? "success" : "error";
+      const headerText = renderToolLine(toolName, argsObj, status, durationMs);
       chatLines.push(headerText);
 
       const tNameLower = toolName.toLowerCase();
@@ -108,14 +146,27 @@ export function renderChatMessages(
         if (isDiffTool && (outStr.includes("@@") || outStr.includes("+++") || outStr.includes("---"))) {
           const diffLines = renderUnifiedDiffLines(outStr, 25, chatCols - 6);
           chatLines.push(...diffLines);
+        } else if (isCancelled) {
+          // No output tail dumped for cancelled operations
         } else if (verbose || isDiffTool || !isSuccess) {
-          const lines = outStr.trim().split("\n");
-          const maxLines = isDiffTool ? 20 : 6;
-          for (let i = 0; i < Math.min(lines.length, maxLines); i++) {
-            chatLines.push("    " + A.fgSubtext + A.dim + truncate(lines[i], chatCols - 6) + A.reset);
+          const lines = outStr.trim().split("\n").filter((l) => l.trim().length > 0);
+          const maxLines = isDiffTool ? 20 : (chatCols < 60 ? 3 : 6);
+          const tail = lines.slice(-maxLines);
+          for (let i = 0; i < tail.length; i++) {
+            chatLines.push("    " + A.fgSubtext + A.dim + truncate(tail[i], chatCols - 6) + A.reset);
           }
           if (lines.length > maxLines) {
             chatLines.push("    " + A.fgMuted + `… (${lines.length - maxLines} more lines)` + A.reset);
+          }
+        } else {
+          // Successful verbose commands: show small tail/summary (1-3 lines)
+          const lines = outStr.trim().split("\n").filter((l) => l.trim().length > 0);
+          const maxSummaryLines = chatCols < 60 ? 1 : 3;
+          if (lines.length > 0) {
+            const tail = lines.slice(-maxSummaryLines);
+            for (let i = 0; i < tail.length; i++) {
+              chatLines.push("    " + A.fgSubtext + A.dim + truncate(tail[i], chatCols - 6) + A.reset);
+            }
           }
         }
       }
@@ -126,13 +177,23 @@ export function renderChatMessages(
     // ── 2. Tool Calls Requested by Model ───────────────────────────────────
     if (msg.tool_calls && msg.tool_calls.length > 0) {
       for (const tc of msg.tool_calls) {
+        // If already completed in the transcript, avoid duplicate start row
+        const alreadyAnswered = messages.some(
+          (m) => m.role === "tool" && m.tool_call_id === tc.id
+        );
+        if (alreadyAnswered) continue;
+
+        // If in flight, rendered by activeToolActivity at transcript tail
+        if (tuiState.activeToolActivity && tuiState.activeToolActivity.callId === tc.id) {
+          continue;
+        }
+
         let argsObj: any = null;
         try {
           argsObj = JSON.parse(tc.function?.arguments || "{}");
         } catch {}
         chatLines.push(formatToolStart(tc.function?.name || "tool", argsObj));
       }
-      chatLines.push("");
       continue;
     }
 
@@ -217,6 +278,11 @@ export function renderChatMessages(
         chatLines.push(msgBg + linePrefix + color + content + A.reset);
       }
     }
+    chatLines.push("");
+  }
+
+  if (tuiState.activeToolActivity && tuiState.activeToolActivity.status === "running") {
+    chatLines.push(...renderActiveToolActivity(tuiState.activeToolActivity, chatCols));
     chatLines.push("");
   }
 

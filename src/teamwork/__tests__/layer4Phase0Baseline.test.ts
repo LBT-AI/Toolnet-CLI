@@ -341,8 +341,8 @@ describe("TEAMWORK BASELINE", () => {
       maxConcurrencyOverride: 1,
       // Bound the worker: on CI the connect to 127.0.0.1:1 can hang instead
       // of refusing, and without a timeout the harness's 120s default blows
-      // the test budget. 5s abort → typed PROVIDER_NETWORK failure.
-      timeoutMs: 5000,
+      // the test budget. 1.5s abort → typed PROVIDER_NETWORK failure.
+      timeoutMs: 1500,
     });
     const state = await scheduler.start();
     const node: any = graph.nodes[0];
@@ -351,7 +351,7 @@ describe("TEAMWORK BASELINE", () => {
  // : result stays unset on failure (only real success output lands there).
     expect(node.result == null || !/fallback mode/.test(String(node.result))).toBe(true);
     expect(["AUTH_REQUIRED", "PROVIDER_NETWORK", "MODEL_NOT_FOUND"]).toContain(node.errorCode);
-  }, 15_000);
+  });
 
  test("BudgetManager IS integrated into DynamicScheduler (FIXED in )", () => {
     const { BudgetManager } = require("../../teamwork/budget");

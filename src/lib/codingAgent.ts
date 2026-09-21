@@ -4,6 +4,8 @@ import { pushSnapshot, commitSnapshot } from "./history";
 import { evaluatePermission, isPathInsideWorkspace, getSandboxMode } from "./permissions";
 import { applyStructuredPatch, generateDiff } from "./patchUtils";
 import { redactSecrets } from "./security/secretGuard";
+import { redactOutputSecrets } from "./security/outputRedactor";
+import { resolveDefaultTimeout, clampTimeout } from "./commandClassifier";
 
 export interface ToolResult {
   success: boolean;
@@ -503,6 +505,14 @@ export function toolWrite(filePath: string, content: string, ctx?: PathExecConte
  * Provided by the ToolGateway execution layer; the executor MUST NOT fall back
  * to module-global state when a caller supplies a context.
  */
+export interface ToolProgress {
+  elapsedMs: number;
+  tail?: string[];
+  rawChunk?: string;
+  stdoutDelta?: string;
+  stderrDelta?: string;
+}
+
 export interface ShellExecContext {
   cwd?: string;
   workspaceRoot?: string;
@@ -511,6 +521,8 @@ export interface ShellExecContext {
   outputCapBytes?: number;
   /** Abort signal — when aborted, the child process tree is killed (SIGTERM → SIGKILL). */
   signal?: AbortSignal;
+  /** Optional progress callback for streaming output deltas and bounded tail lines */
+  onProgress?: (progress: ToolProgress) => void;
 }
 
 const DEFAULT_SHELL_OUTPUT_CAP = 512 * 1024; // hard byte cap per stream
@@ -627,12 +639,16 @@ function attachAbortToChild(child: { pid?: number }, signal?: AbortSignal): void
   signal.addEventListener("abort", onAbort, { once: true });
 }
 
-export async function toolBash(command: string, timeoutMs = 30000, execCtx?: ShellExecContext): Promise<ToolResult> {
+export async function toolBash(command: string, timeoutMs?: number, execCtx?: ShellExecContext): Promise<ToolResult> {
   const { spawn } = require("node:child_process");
   const { buildSandboxedCommandLine } = require("./security/sandboxExecutor");
   const { scrubChildEnv } = require("./security/childEnv");
   const { getSandboxMode } = require("./permissions");
   const { classifyShellCommand } = require("./security/commandClassifier");
+
+  const effectiveTimeout = timeoutMs !== undefined
+    ? clampTimeout(timeoutMs, command)
+    : resolveDefaultTimeout(command);
 
  // ── ABSOLUTE VETO FLOOR (Layer 4 ) ────────────────────────────────
   // CRITICAL_DENY commands are permanently blocked at the executor level.
@@ -750,10 +766,15 @@ export async function toolBash(command: string, timeoutMs = 30000, execCtx?: She
     let aborted = false;
     let settled = false;
 
+    const startTime = Date.now();
+    let lastProgressTime = 0;
+    let progressTimer: any = null;
+    const PROGRESS_THROTTLE_MS = 150;
+
     const timer = setTimeout(() => {
       timedOut = true;
       if (child.pid) killProcessTree(child.pid);
-    }, timeoutMs);
+    }, effectiveTimeout);
 
     // Abort wiring: Ctrl+C / request cancel kills the whole child tree.
     attachAbortToChild(child, ctx.signal);
@@ -763,8 +784,49 @@ export async function toolBash(command: string, timeoutMs = 30000, execCtx?: She
       else ctx.signal.addEventListener("abort", markAborted, { once: true });
     }
 
+    const extractTailLines = (text: string, maxLines = 5): string[] => {
+      const lines = text
+        .split("\n")
+        .map((l) => l.replace(/[\r\x1b\[[0-9;]*[a-zA-Z]/g, "").trim())
+        .filter((l) => l.length > 0);
+      return lines.slice(-maxLines);
+    };
+
+    const emitProgress = (flush = false, chunkStr?: string, isStdout?: boolean) => {
+      if (!ctx.onProgress || settled || aborted) return;
+      const now = Date.now();
+      if (!flush && now - lastProgressTime < PROGRESS_THROTTLE_MS) {
+        if (!progressTimer) {
+          progressTimer = setTimeout(() => {
+            progressTimer = null;
+            emitProgress(true);
+          }, PROGRESS_THROTTLE_MS - (now - lastProgressTime));
+        }
+        return;
+      }
+      if (progressTimer) {
+        clearTimeout(progressTimer);
+        progressTimer = null;
+      }
+      lastProgressTime = now;
+      const recentOut = stdoutBuf.slice(-4096) + "\n" + stderrBuf.slice(-4096);
+      const cleanRecent = redactOutputSecrets(recentOut);
+      const tail = extractTailLines(cleanRecent, 5);
+      ctx.onProgress({
+        elapsedMs: now - startTime,
+        tail,
+        rawChunk: chunkStr,
+        stdoutDelta: isStdout ? chunkStr : undefined,
+        stderrDelta: !isStdout ? chunkStr : undefined,
+      });
+    };
+
     const cleanup = () => {
       clearTimeout(timer);
+      if (progressTimer) {
+        clearTimeout(progressTimer);
+        progressTimer = null;
+      }
       if (child.stdout) child.stdout.removeAllListeners();
       if (child.stderr) child.stderr.removeAllListeners();
       child.removeAllListeners();
@@ -774,6 +836,7 @@ export async function toolBash(command: string, timeoutMs = 30000, execCtx?: She
     const wireStream = (stream: any, isStdout: boolean) => {
       if (!stream) return;
       stream.on("data", (d: Buffer) => {
+        const text = d.toString("utf8");
         if (isStdout) {
           if (stdoutBytes >= outputCap) { stdoutCapped = true; return; }
           const remaining = outputCap - stdoutBytes;
@@ -789,6 +852,7 @@ export async function toolBash(command: string, timeoutMs = 30000, execCtx?: She
           stderrBuf += chunk.toString("utf8");
           if (chunk.length < d.length) stderrCapped = true;
         }
+        emitProgress(false, text, isStdout);
       });
     };
     wireStream(child.stdout, true);

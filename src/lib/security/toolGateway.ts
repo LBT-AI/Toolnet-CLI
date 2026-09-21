@@ -618,6 +618,7 @@ export class ToolGateway {
  // : forwarded so the `task` tool can derive a child scope that
         // can never exceed the spawning turn's permission.
         subagent: context.subagent,
+        onProgress: context.onProgress,
       });
 
       const sanitizedJson = compressToolResult(redactSecrets(rawJson), name);

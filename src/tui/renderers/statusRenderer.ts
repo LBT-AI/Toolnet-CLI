@@ -63,6 +63,12 @@ export function renderWorkingStatus(
     const text = state.statusText || "Working…";
     const elapsed = state.elapsedDisplay ? ` ${state.elapsedDisplay.trim()}` : "";
     content = `${sp} ${text}${elapsed}`;
+    const lower = text.toLowerCase();
+    if (lower.includes("think") || lower.includes("reason")) {
+      fg = A.fgViolet;
+    } else {
+      fg = A.fgAmber;
+    }
   } else if (state.statusText) {
     const isErr = state.statusText.startsWith("✖") || state.statusText.startsWith("✗") || /error|failed/i.test(state.statusText);
     const isSuccess = state.statusText.startsWith("✔") || state.statusText.startsWith("✓");

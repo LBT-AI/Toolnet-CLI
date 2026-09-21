@@ -30,6 +30,23 @@ import {
   type ReasoningSettings,
 } from "../lib/reasoning";
 import type { SessionItem } from "./renderers/sessionPickerRenderer";
+import { classifyToolAction, type ToolCategory } from "../lib/commandClassifier";
+import { prettyToolTarget } from "../lib/tool-format";
+
+export interface ActiveToolActivity {
+  callId: string;
+  name: string;
+  args: any;
+  category: ToolCategory;
+  actionLabel: string;
+  target?: string;
+  startedAt: number;
+  elapsedMs: number;
+  tail?: string[];
+  status: "running" | "completed" | "error" | "cancelled";
+  isBackground?: boolean;
+  jobId?: string;
+}
 
 export const SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
 
@@ -69,6 +86,61 @@ export class TuiState {
    * transcript on the next lifecycle boundary (tool call / text / completion).
    */
   activeReasoningDraft: ReasoningBlock | null = null;
+  /**
+   * In-flight tool activity for the active turn.
+   * Single source of truth for the currently executing tool; rendered
+   * live with animated dot, timer, and bounded tail lines.
+   */
+  activeToolActivity: ActiveToolActivity | null = null;
+
+  openActiveToolActivity(callId: string, name: string, args: any): ActiveToolActivity {
+    const actionInfo = classifyToolAction(name, args);
+    const target = prettyToolTarget(name, args);
+    const isBg = args && typeof args === "object" && (args as any).background === true;
+    this.activeToolActivity = {
+      callId,
+      name,
+      args,
+      category: actionInfo.category,
+      actionLabel: actionInfo.actionLabel,
+      target,
+      startedAt: Date.now(),
+      elapsedMs: 0,
+      tail: [],
+      status: "running",
+      isBackground: isBg,
+    };
+    return this.activeToolActivity;
+  }
+
+  updateActiveToolProgress(callId: string, progress: { elapsedMs?: number; tail?: string[] }): void {
+    if (this.activeToolActivity && this.activeToolActivity.callId === callId && this.activeToolActivity.status === "running") {
+      if (typeof progress.elapsedMs === "number") {
+        this.activeToolActivity.elapsedMs = progress.elapsedMs;
+      } else {
+        this.activeToolActivity.elapsedMs = Date.now() - this.activeToolActivity.startedAt;
+      }
+      if (progress.tail && progress.tail.length > 0) {
+        this.activeToolActivity.tail = progress.tail.slice(-5);
+      }
+      this.requestStreamRender();
+    }
+  }
+
+  cancelActiveToolActivity(): ActiveToolActivity | null {
+    if (this.activeToolActivity && this.activeToolActivity.status === "running") {
+      this.activeToolActivity.status = "cancelled";
+      this.activeToolActivity.elapsedMs = Date.now() - this.activeToolActivity.startedAt;
+      return { ...this.activeToolActivity };
+    }
+    return null;
+  }
+
+  closeActiveToolActivity(callId: string): void {
+    if (this.activeToolActivity && this.activeToolActivity.callId === callId) {
+      this.activeToolActivity = null;
+    }
+  }
 
   bypassMode = bypassEngine.isEnabled();
   bypassLevel = bypassEngine.getLevel();
@@ -289,6 +361,7 @@ export class TuiState {
     this.currentRunId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     this.currentTurnId = 0;
     this.activeReasoningDraft = null;
+    this.activeToolActivity = null;
     this.reasoningText = "";
     this.reasoningTokens = 0;
     this.reasoningElapsed = "";
@@ -874,3 +947,30 @@ onProviderSwitch((_id, config) => {
   tuiState.filteredModels = [];
   tuiState.requestRender();
 });
+
+export function openActiveToolActivity(callId: string, name: string, args: any): ActiveToolActivity {
+  return tuiState.openActiveToolActivity(callId, name, args);
+}
+
+export function updateActiveToolProgress(
+  callId: string,
+  progress: { elapsedMs?: number; tail?: string[] } | string[],
+  elapsedMs?: number,
+): void {
+  if (Array.isArray(progress)) {
+    tuiState.updateActiveToolProgress(callId, { tail: progress, elapsedMs });
+  } else {
+    tuiState.updateActiveToolProgress(callId, progress);
+  }
+}
+
+export function cancelActiveToolActivity(callId?: string): boolean {
+  const res = tuiState.cancelActiveToolActivity();
+  return res !== null;
+}
+
+export function closeActiveToolActivity(callId?: string): ActiveToolActivity | null {
+  const current = tuiState.activeToolActivity;
+  tuiState.closeActiveToolActivity(callId || current?.callId || "");
+  return current;
+}

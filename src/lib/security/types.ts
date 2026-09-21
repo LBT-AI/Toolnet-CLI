@@ -67,6 +67,8 @@ export interface ToolExecutionContext {
    * nesting depth so a child can never be granted more than its parent holds.
    */
   subagent?: SubagentRuntimeContext;
+  /** Optional progress callback — propagated to long-running executors. */
+  onProgress?: (progress: any) => void;
 }
 
 /**

@@ -183,6 +183,21 @@ export function toAgentEvents(ev: HarnessEvent): AgentEvent[] {
     case "tool:start":
       return [{ type: "tool-running", callId: String(payload.id ?? payload.toolName ?? "unknown") }];
 
+    case "tool:progress": {
+      const callId = String(payload.id ?? payload.callId ?? payload.toolName ?? "unknown");
+      return [{
+        type: "tool-progress",
+        callId,
+        name: String(payload.toolName ?? "unknown"),
+        elapsedMs: typeof payload.elapsedMs === "number" ? payload.elapsedMs : undefined,
+        tail: Array.isArray(payload.tail) ? payload.tail : undefined,
+        stdoutDelta: typeof payload.stdoutDelta === "string" ? payload.stdoutDelta : undefined,
+        stderrDelta: typeof payload.stderrDelta === "string" ? payload.stderrDelta : undefined,
+        command: typeof payload.command === "string" ? payload.command : undefined,
+        timestamp: ev.timestamp || Date.now(),
+      }];
+    }
+
     case "tool:complete":
       return [{
         type: "tool-result",

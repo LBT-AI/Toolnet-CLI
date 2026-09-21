@@ -84,6 +84,17 @@ export type AgentEvent =
   | { type: "tool-call"; callId: string; name: string; input: unknown }
   | { type: "permission-required"; callId: string; resource: string }
   | { type: "tool-running"; callId: string }
+  | {
+      type: "tool-progress";
+      callId: string;
+      name?: string;
+      elapsedMs?: number;
+      tail?: string[];
+      stdoutDelta?: string;
+      stderrDelta?: string;
+      command?: string;
+      timestamp?: number;
+    }
   | { type: "tool-result"; callId: string; result: ToolResult }
   | { type: "tool-error"; callId: string; error: string }
   | { type: "verification-start"; callId: string }

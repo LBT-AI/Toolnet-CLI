@@ -29,7 +29,7 @@ export function renderReasoningPanel(cols: number, state: ReasoningPanelState): 
   const headerCore = `${liveMark}Thinking${effortLabel}${state.elapsed ? ` · ${state.elapsed}` : ""}${tokensLabel}`;
 
   if (state.collapsed) {
-    const line = A.fgCyan + A.bold + "▶ " + A.reset + A.fgSubtext + headerCore + A.reset;
+    const line = A.fgViolet + A.bold + "▶ " + A.reset + A.fgSubtext + headerCore + A.reset;
     out.push(line + "\r\n");
     return out;
   }
@@ -41,7 +41,7 @@ export function renderReasoningPanel(cols: number, state: ReasoningPanelState): 
   // budget is innerWidth - 2; without this clamp a long header overflows
   // the box on narrow terminals.
   const headerCoreTrimmed = truncate(headerCore, Math.max(1, innerWidth - 2));
-  const header = A.fgCyan + A.bold + "▼ " + A.reset + A.fgCyan + A.bold + headerCoreTrimmed + A.reset;
+  const header = A.fgViolet + A.bold + "▼ " + A.reset + A.fgViolet + A.bold + headerCoreTrimmed + A.reset;
 
   out.push(" ".repeat(leftPad) + A.fgBorder + "╭" + "─".repeat(innerWidth) + "╮" + A.reset + "\r\n");
   out.push(

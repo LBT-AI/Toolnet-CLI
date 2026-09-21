@@ -951,6 +951,20 @@ function _handleKeyInternal(
       cancelPendingApproval();
     }
     if (tuiState.isStreaming) {
+      if (tuiState.activeToolActivity && tuiState.activeToolActivity.status === "running") {
+        const cancelled = tuiState.cancelActiveToolActivity();
+        if (cancelled) {
+          tuiState.messages.push({
+            role: "tool",
+            tool_call_id: cancelled.callId,
+            name: cancelled.name,
+            content: JSON.stringify({ error: "Cancelled", exitCode: 130 }),
+            durationMs: cancelled.elapsedMs,
+            cancelled: true,
+          } as any);
+          tuiState.activeToolActivity = null;
+        }
+      }
       tuiState.abortController?.abort();
       statusManager.cancel();
       renderAll();
@@ -1095,6 +1109,20 @@ function _handleKeyInternal(
     if (tuiState.showSessionPicker) { tuiState.closeSessionPicker(); renderAll(); return; }
     if (providerPicker.show) { providerPicker.show = false; renderAll(); return; }
     if (tuiState.isStreaming) {
+      if (tuiState.activeToolActivity && tuiState.activeToolActivity.status === "running") {
+        const cancelled = tuiState.cancelActiveToolActivity();
+        if (cancelled) {
+          tuiState.messages.push({
+            role: "tool",
+            tool_call_id: cancelled.callId,
+            name: cancelled.name,
+            content: JSON.stringify({ error: "Cancelled", exitCode: 130 }),
+            durationMs: cancelled.elapsedMs,
+            cancelled: true,
+          } as any);
+          tuiState.activeToolActivity = null;
+        }
+      }
       tuiState.abortController?.abort();
       statusManager.cancel();
       renderAll();

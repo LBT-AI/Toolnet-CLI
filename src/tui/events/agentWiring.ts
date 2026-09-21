@@ -270,6 +270,7 @@ export async function sendMessage(text: string): Promise<void> {
             tuiState.agentPhase = "working";
             toolNames.set(event.callId, event.name);
             statusManager.updateTool(event.name, event.input as any);
+            tuiState.openActiveToolActivity(event.callId, event.name, event.input);
             // Append tool call directly into transcript
             tuiState.messages.push({
               role: "assistant",
@@ -288,24 +289,72 @@ export async function sendMessage(text: string): Promise<void> {
             tuiState.currentTurnId++;
             tuiState.requestRender();
             break;
-          case "tool-result":
+          case "tool-progress":
+            tuiState.updateActiveToolProgress(event.callId, {
+              elapsedMs: event.elapsedMs,
+              tail: event.tail,
+            });
+            break;
+          case "tool-result": {
+            const wasCancelled = tuiState.messages.some(
+              (m) => m.role === "tool" && m.tool_call_id === event.callId && (m as any).cancelled
+            );
+            if (wasCancelled) {
+              tuiState.closeActiveToolActivity(event.callId);
+              break;
+            }
             updateCrashToolResult(event.callId, event.result.exitCode ?? (event.result.ok ? 0 : 1), "Executed tool");
+            const durationMs = tuiState.activeToolActivity?.callId === event.callId
+              ? Date.now() - tuiState.activeToolActivity.startedAt
+              : undefined;
+            tuiState.closeActiveToolActivity(event.callId);
             tuiState.messages.push({
               role: "tool",
               tool_call_id: event.callId,
               name: toolNames.get(event.callId) || "tool",
               content: JSON.stringify(event.result),
-            });
+              durationMs,
+            } as any);
             tuiState.requestRender();
             break;
-          case "tool-error":
+          }
+          case "tool-error": {
+            const wasCancelled = tuiState.messages.some(
+              (m) => m.role === "tool" && m.tool_call_id === event.callId && (m as any).cancelled
+            );
+            if (wasCancelled) {
+              tuiState.closeActiveToolActivity(event.callId);
+              break;
+            }
+            const durationMs = tuiState.activeToolActivity?.callId === event.callId
+              ? Date.now() - tuiState.activeToolActivity.startedAt
+              : undefined;
+            tuiState.closeActiveToolActivity(event.callId);
             tuiState.messages.push({
               role: "tool",
               tool_call_id: event.callId,
               name: toolNames.get(event.callId) || "tool",
               content: JSON.stringify({ error: event.error, exitCode: 1 }),
-            });
+              durationMs,
+            } as any);
             tuiState.requestRender();
+            break;
+          }
+          case "cancelled":
+            if (tuiState.activeToolActivity) {
+              const cancelled = tuiState.cancelActiveToolActivity();
+              if (cancelled) {
+                tuiState.messages.push({
+                  role: "tool",
+                  tool_call_id: cancelled.callId,
+                  name: cancelled.name,
+                  content: JSON.stringify({ error: "Cancelled", exitCode: 130 }),
+                  durationMs: cancelled.elapsedMs,
+                  cancelled: true,
+                } as any);
+                tuiState.activeToolActivity = null;
+              }
+            }
             break;
           case "agent-complete":
             tuiState.finalizeActiveReasoning("agent-complete");

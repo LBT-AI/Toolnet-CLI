@@ -418,17 +418,60 @@ If the tool reports that LSP is unavailable, fall back to grep/glob/read_file.`,
 Use for tests, builds, typechecks, linting and project inspection.
 Do not use destructive commands unless necessary and permitted.
 `,
-    parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "The shell command to execute" },
+        timeout_ms: { type: "number", description: "Optional execution timeout in milliseconds (max 30 minutes)" },
+        background: { type: "boolean", description: "Run in the background via BackgroundJobService" },
+      },
+      required: ["command"],
+    },
     risk: "execute",
     category: "Shell",
-    async execute(input: { command?: string; cmd?: string }, ctx) {
+    async execute(input: { command?: string; cmd?: string; timeout_ms?: number; background?: boolean }, ctx) {
       const cmd = input.command || input.cmd || "";
       const { toolBash } = await import("../codingAgent");
-      const res = await toolBash(cmd, 30000, {
+      const { clampTimeout } = await import("../commandClassifier");
+      const timeoutMs = clampTimeout(input.timeout_ms, cmd);
+
+      if (input.background === true) {
+        const { backgroundJobs } = await import("../../core/background/service");
+        const job = backgroundJobs.start({
+          type: "tool",
+          title: cmd.slice(0, 80),
+          parentSessionId: ctx.sessionId || "default",
+          metadata: { command: cmd, toolName: "shell" },
+          run: async (jobSignal) => {
+            const res = await toolBash(cmd, timeoutMs, {
+              cwd: ctx.cwd,
+              workspaceRoot: ctx.workspaceRoot,
+              sandboxMode: ctx.sandboxMode as "workspace" | "ask" | "full-access" | undefined,
+              signal: jobSignal,
+              onProgress: ctx.onProgress,
+            });
+            return {
+              stdout: res.stdout || "",
+              stderr: res.stderr || res.error || "",
+              exitCode: res.exitCode,
+            };
+          },
+        });
+        return JSON.stringify({
+          stdout: `Background job started with ID: ${job.id}. You will be notified upon completion.`,
+          jobId: job.id,
+          status: "running",
+          background: true,
+          exitCode: 0,
+        });
+      }
+
+      const res = await toolBash(cmd, timeoutMs, {
         cwd: ctx.cwd,
         workspaceRoot: ctx.workspaceRoot,
         sandboxMode: ctx.sandboxMode as "workspace" | "ask" | "full-access" | undefined,
         signal: ctx.signal,
+        onProgress: ctx.onProgress,
       });
       return JSON.stringify({ stdout: res.stdout || "", stderr: res.stderr || res.error || "", exitCode: res.exitCode });
     },
@@ -439,17 +482,60 @@ Do not use destructive commands unless necessary and permitted.
     description: `Run a shell command in the workspace.
 Alias for shell. Use for tests, builds, typechecks, linting and project inspection.
 `,
-    parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "The shell command to execute" },
+        timeout_ms: { type: "number", description: "Optional execution timeout in milliseconds (max 30 minutes)" },
+        background: { type: "boolean", description: "Run in the background via BackgroundJobService" },
+      },
+      required: ["command"],
+    },
     risk: "execute",
     category: "Shell",
-    async execute(input: { command?: string; cmd?: string }, ctx) {
+    async execute(input: { command?: string; cmd?: string; timeout_ms?: number; background?: boolean }, ctx) {
       const cmd = input.command || input.cmd || "";
       const { toolBash } = await import("../codingAgent");
-      const res = await toolBash(cmd, 30000, {
+      const { clampTimeout } = await import("../commandClassifier");
+      const timeoutMs = clampTimeout(input.timeout_ms, cmd);
+
+      if (input.background === true) {
+        const { backgroundJobs } = await import("../../core/background/service");
+        const job = backgroundJobs.start({
+          type: "tool",
+          title: cmd.slice(0, 80),
+          parentSessionId: ctx.sessionId || "default",
+          metadata: { command: cmd, toolName: "bash" },
+          run: async (jobSignal) => {
+            const res = await toolBash(cmd, timeoutMs, {
+              cwd: ctx.cwd,
+              workspaceRoot: ctx.workspaceRoot,
+              sandboxMode: ctx.sandboxMode as "workspace" | "ask" | "full-access" | undefined,
+              signal: jobSignal,
+              onProgress: ctx.onProgress,
+            });
+            return {
+              stdout: res.stdout || "",
+              stderr: res.stderr || res.error || "",
+              exitCode: res.exitCode,
+            };
+          },
+        });
+        return JSON.stringify({
+          stdout: `Background job started with ID: ${job.id}. You will be notified upon completion.`,
+          jobId: job.id,
+          status: "running",
+          background: true,
+          exitCode: 0,
+        });
+      }
+
+      const res = await toolBash(cmd, timeoutMs, {
         cwd: ctx.cwd,
         workspaceRoot: ctx.workspaceRoot,
         sandboxMode: ctx.sandboxMode as "workspace" | "ask" | "full-access" | undefined,
         signal: ctx.signal,
+        onProgress: ctx.onProgress,
       });
       return JSON.stringify({ stdout: res.stdout || "", stderr: res.stderr || res.error || "", exitCode: res.exitCode });
     },
@@ -460,17 +546,60 @@ Alias for shell. Use for tests, builds, typechecks, linting and project inspecti
     description: `Run a shell command in the workspace.
 Alias for shell. Use for tests, builds, typechecks, linting and project inspection.
 `,
-    parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "The shell command to execute" },
+        timeout_ms: { type: "number", description: "Optional execution timeout in milliseconds (max 30 minutes)" },
+        background: { type: "boolean", description: "Run in the background via BackgroundJobService" },
+      },
+      required: ["command"],
+    },
     risk: "execute",
     category: "Shell",
-    async execute(input: { command?: string; cmd?: string }, ctx) {
+    async execute(input: { command?: string; cmd?: string; timeout_ms?: number; background?: boolean }, ctx) {
       const cmd = input.command || input.cmd || "";
       const { toolBash } = await import("../codingAgent");
-      const res = await toolBash(cmd, 30000, {
+      const { clampTimeout } = await import("../commandClassifier");
+      const timeoutMs = clampTimeout(input.timeout_ms, cmd);
+
+      if (input.background === true) {
+        const { backgroundJobs } = await import("../../core/background/service");
+        const job = backgroundJobs.start({
+          type: "tool",
+          title: cmd.slice(0, 80),
+          parentSessionId: ctx.sessionId || "default",
+          metadata: { command: cmd, toolName: "run_command" },
+          run: async (jobSignal) => {
+            const res = await toolBash(cmd, timeoutMs, {
+              cwd: ctx.cwd,
+              workspaceRoot: ctx.workspaceRoot,
+              sandboxMode: ctx.sandboxMode as "workspace" | "ask" | "full-access" | undefined,
+              signal: jobSignal,
+              onProgress: ctx.onProgress,
+            });
+            return {
+              stdout: res.stdout || "",
+              stderr: res.stderr || res.error || "",
+              exitCode: res.exitCode,
+            };
+          },
+        });
+        return JSON.stringify({
+          stdout: `Background job started with ID: ${job.id}. You will be notified upon completion.`,
+          jobId: job.id,
+          status: "running",
+          background: true,
+          exitCode: 0,
+        });
+      }
+
+      const res = await toolBash(cmd, timeoutMs, {
         cwd: ctx.cwd,
         workspaceRoot: ctx.workspaceRoot,
         sandboxMode: ctx.sandboxMode as "workspace" | "ask" | "full-access" | undefined,
         signal: ctx.signal,
+        onProgress: ctx.onProgress,
       });
       return JSON.stringify({ stdout: res.stdout || "", stderr: res.stderr || res.error || "", exitCode: res.exitCode });
     },

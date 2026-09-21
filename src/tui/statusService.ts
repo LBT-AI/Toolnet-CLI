@@ -1,4 +1,5 @@
 import { tuiState, SPINNER } from "./state";
+import { classifyToolAction } from "../lib/commandClassifier";
 
 /**
  * Maps a tool name and optional arguments to an intuitive realtime status label (like Agy CLI).
@@ -6,10 +7,22 @@ import { tuiState, SPINNER } from "./state";
 export function mapToolToAction(toolName: string, args?: any): string {
   const name = (toolName || "").toLowerCase().trim();
 
-  // Guard 1: Empty / unknown tool
+  // Guard 1: Empty tool
   if (!name) return "Working…";
 
-  // Guard 2: File reading / inspection
+  // Guard 2: Generation / LLM response
+  if (
+    name === "generation" ||
+    name === "model response" ||
+    name === "stream" ||
+    name === "calling api" ||
+    name === "thinking" ||
+    name === "llm"
+  ) {
+    return "Generating…";
+  }
+
+  // Guard 3: File reading / inspection
   if (
     name === "read_file" ||
     name === "read" ||
@@ -22,7 +35,7 @@ export function mapToolToAction(toolName: string, args?: any): string {
     return "Reading file…";
   }
 
-  // Guard 3: File writing / creation
+  // Guard 4: File writing / creation
   if (
     name === "write_file" ||
     name === "create_file" ||
@@ -33,7 +46,7 @@ export function mapToolToAction(toolName: string, args?: any): string {
     return "Writing file…";
   }
 
-  // Guard 4: File editing / patching
+  // Guard 5: File editing / patching
   if (
     name === "edit" ||
     name === "patch" ||
@@ -45,7 +58,15 @@ export function mapToolToAction(toolName: string, args?: any): string {
     return "Editing file…";
   }
 
-  // Guard 5: Testing
+  // Guard 6: Subagent delegation
+  if (name === "task" || name === "spawn_subagent" || name === "delegate_task") {
+    const agentId = String(args?.subagent_type || args?.role || "general").toLowerCase();
+    if (agentId === "coder") return "Implementing (subagent)…";
+    if (agentId === "tester") return "Verifying (subagent)…";
+    return "Delegating…";
+  }
+
+  // Guard 7: Direct testing tools
   if (
     name === "test" ||
     name === "run_test" ||
@@ -57,28 +78,18 @@ export function mapToolToAction(toolName: string, args?: any): string {
     return "Testing…";
   }
 
-  // Guard 6: Building / compiling
+  // Guard 8: Direct build tools
   if (
     name === "build" ||
     name === "compile" ||
     name === "bundle" ||
     name === "webpack" ||
-    name === "vite" ||
-    name === "tsc"
+    name === "vite"
   ) {
     return "Building…";
   }
 
- // Guard 6.5: subagent delegation. Surface WHICH agent is working
-  // so a delegated child is never mistaken for the primary agent's own work.
-  if (name === "task" || name === "spawn_subagent" || name === "delegate_task") {
-    const agentId = String(args?.subagent_type || args?.role || "general").toLowerCase();
-    if (agentId === "coder") return "Implementing (subagent)…";
-    if (agentId === "tester") return "Verifying (subagent)…";
-    return "Delegating…";
-  }
-
-  // Guard 7: Searching / exploration
+  // Guard 9: Searching / exploration
   if (
     name === "search" ||
     name === "grep" ||
@@ -94,43 +105,30 @@ export function mapToolToAction(toolName: string, args?: any): string {
     return "Searching…";
   }
 
-  // Guard 8: Terminal / bash execution
-  if (
-    name === "bash" ||
-    name === "exec" ||
-    name === "run_command" ||
-    name === "shell" ||
-    name === "terminal" ||
-    name === "sh" ||
-    name === "cmd"
-  ) {
-    const cmd = String(args?.command || args?.cmd || args?.CommandLine || "").toLowerCase().trim();
-    if (cmd.includes("test") || cmd.startsWith("jest") || cmd.startsWith("pytest")) {
+  // Classify shell or custom tool actions
+  const info = classifyToolAction(name, args);
+  switch (info.category) {
+    case "test":
       return "Testing…";
-    }
-    if (cmd.includes("build") || cmd.startsWith("cargo build") || cmd.startsWith("make") || cmd.startsWith("tsc")) {
+    case "build":
       return "Building…";
-    }
-    if (cmd.startsWith("grep") || cmd.startsWith("rg") || cmd.startsWith("find") || cmd.startsWith("fd")) {
+    case "install":
+      return "Installing…";
+    case "search":
       return "Searching…";
-    }
-    return "Running command…";
+    case "inspect":
+      return "Inspecting…";
+    case "read":
+      return "Reading file…";
+    case "write":
+      return "Writing file…";
+    case "edit":
+      return "Editing file…";
+    case "shell":
+      return "Running command…";
+    default:
+      return "Working…";
   }
-
-  // Guard 9: Generation / LLM response
-  if (
-    name === "generation" ||
-    name === "model response" ||
-    name === "stream" ||
-    name === "calling api" ||
-    name === "thinking" ||
-    name === "llm"
-  ) {
-    return "Generating…";
-  }
-
-  // Default fallback
-  return "Working…";
 }
 
 /**
@@ -162,7 +160,10 @@ export class StatusManager {
       tuiState.spinnerIdx = (tuiState.spinnerIdx + 1) % SPINNER.length;
       const elapsed = ((Date.now() - tuiState.startTime) / 1000).toFixed(1);
       tuiState.elapsedDisplay = `${elapsed}s`;
-      tuiState.requestRender();
+      if (tuiState.activeToolActivity && tuiState.activeToolActivity.status === "running") {
+        tuiState.activeToolActivity.elapsedMs = Date.now() - tuiState.activeToolActivity.startedAt;
+      }
+      tuiState.requestStreamRender();
     }, this.intervalMs);
 
     tuiState.requestRender();

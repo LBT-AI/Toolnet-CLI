@@ -28,16 +28,21 @@ export function renderHeader(
     modeTag = A.reset + A.fgYellow + A.bold + " Plan" + A.reset;
   }
 
-  // Right side status badge (Idle / Working / Thinking / Error)
+  // Right side status badge (Idle / Working / Thinking / Error / Done)
   let statusBadge = A.reset + A.fgCyan + "● Idle" + A.reset;
   if (state.isStreaming) {
     const sp = SPINNER[(state.spinnerIdx || 0) % SPINNER.length];
     const isThinking = (state.statusText || "").toLowerCase().includes("think");
-    statusBadge = A.reset + (isThinking ? A.fgYellow : A.fgCyan) + A.bold + `${sp} ` + A.reset + (isThinking ? A.fgYellow : A.fgCyan) + (isThinking ? "Thinking" : "Working") + A.reset;
+    const color = isThinking ? A.fgViolet : A.fgAmber;
+    const label = isThinking ? "Thinking" : "Working";
+    statusBadge = A.reset + color + A.bold + `${sp} ` + A.reset + color + label + A.reset;
   } else if (state.statusText) {
-    const isErr = state.statusText.startsWith("✖") || state.statusText.toLowerCase().includes("error");
+    const isErr = state.statusText.startsWith("✖") || state.statusText.startsWith("✗") || state.statusText.toLowerCase().includes("error");
+    const isDone = state.statusText.startsWith("✔") || state.statusText.startsWith("✓") || state.statusText.toLowerCase().includes("done");
     if (isErr) {
       statusBadge = A.reset + A.fgRed + "✖ Error" + A.reset;
+    } else if (isDone) {
+      statusBadge = A.reset + A.fgGreen + "✓ Done" + A.reset;
     }
   }
 

@@ -28,6 +28,7 @@ import { executeBrowserTool } from "./browserTool";
 import { ToolCache } from "./harness/toolPlanner";
 import { toolRegistry } from "./harness/toolRegistry";
 import type { SubagentRuntimeContext, ToolExecutionContext } from "./security/types";
+import { clampTimeout } from "./commandClassifier";
 
 // ── Shared tool cache — used by ALL callers (TUI, AgentRuntime, SubAgent, Harness)
 const _toolCache = new ToolCache();
@@ -80,6 +81,8 @@ export interface ExecuteToolOptions {
   signal?: AbortSignal;
  /** : spawning-turn context for the `task` tool (scope + depth). */
   subagent?: SubagentRuntimeContext;
+  /** Optional progress callback for streaming output */
+  onProgress?: (progress: any) => void;
 }
 
 // ── Raw tool execution (no cache, no compression) ──────────────────────
@@ -114,16 +117,50 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
     } else if (name === "find_path") {
       const res = toolFindPath(args.query, args.root, args.maxDepth, args.type, pathCtx);
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
-    } else if (name === "run_command" || name === "shell") {
-      const cmd = args.command || args.cmd || "";
+    } else if (name === "run_command" || name === "shell" || name === "bash") {
+      const cmd = args.command || args.cmd || args.CommandLine || "";
+      const timeoutMs = clampTimeout(args.timeout_ms, cmd);
+      if (args.background === true) {
+        const { backgroundJobs } = await import("../core/background/service");
+        const job = backgroundJobs.start({
+          type: "tool",
+          title: cmd.slice(0, 80),
+          parentSessionId: options?.sessionId || "default",
+          metadata: { command: cmd, toolName: name },
+          run: async (jobSignal) => {
+            const res = await toolBash(cmd, timeoutMs, {
+              cwd: options?.cwd,
+              workspaceRoot: options?.workspaceRoot,
+              sandboxMode: options?.sandboxMode,
+              env: typeof args.env === "object" && args.env !== null ? args.env : undefined,
+              signal: jobSignal,
+              onProgress: options?.onProgress,
+            });
+            return {
+              stdout: res.stdout || "",
+              stderr: res.stderr || res.error || "",
+              exitCode: res.exitCode,
+            };
+          },
+        });
+        return JSON.stringify({
+          stdout: `Background job started with ID: ${job.id}. You will be notified upon completion.`,
+          jobId: job.id,
+          status: "running",
+          background: true,
+          exitCode: 0,
+        });
+      }
+
       // Hardened executor receives the EXPLICIT execution context — never
       // module-global cwd/workspace/mode when a caller context exists.
-      const res = await toolBash(cmd, 30000, {
+      const res = await toolBash(cmd, timeoutMs, {
         cwd: options?.cwd,
         workspaceRoot: options?.workspaceRoot,
         sandboxMode: options?.sandboxMode,
         env: typeof args.env === "object" && args.env !== null ? args.env : undefined,
         signal: options?.signal,
+        onProgress: options?.onProgress,
       });
       return JSON.stringify({ stdout: res.stdout || "", stderr: res.stderr || res.error || "", exitCode: res.exitCode });
     } else if (name === "tree") {

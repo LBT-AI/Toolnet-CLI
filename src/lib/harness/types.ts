@@ -29,6 +29,7 @@ export type HarnessEventType =
   | "tool:queued"
   | "tool:approval_required"
   | "tool:start"
+  | "tool:progress"
   | "tool:complete"
   | "tool:error"
   | "agent:compact"
