@@ -39,6 +39,15 @@ export interface DecodedKey {
   standalone: boolean;
 }
 
+/**
+ * Bytes handed to handleKey for a decoded key. Text was decoded from UTF-8, so
+ * it must be re-encoded as UTF-8 — a latin1 round-trip corrupts every non-ASCII
+ * character (Vietnamese "à" → U+FFFD). Key sequences are byte-for-byte latin1.
+ */
+export function decodedKeyBytes(key: Pick<DecodedKey, "s" | "kind">): Buffer {
+  return Buffer.from(key.s, key.kind === "text" ? "utf8" : "latin1");
+}
+
 interface PendingSequence {
   bytes: number[];
   /** Monotonic arrival deadline after which the sequence flushes as-is. */
@@ -53,6 +62,9 @@ export class TerminalKeyDecoder {
   private inPaste = false;
   private pasteBytes: number[] = [];
 
+  /** Leading bytes of a UTF-8 character split across stdin chunks. */
+  private textCarry: number[] = [];
+
   constructor(private readonly escTimeoutMs: number = ESC_FLUSH_TIMEOUT_MS) {}
 
   /** True while an escape sequence is mid-assembly. */
@@ -66,7 +78,8 @@ export class TerminalKeyDecoder {
    * control keys dispatch immediately.
    */
   feed(data: Buffer | string, now: number = Date.now()): DecodedKey[] {
-    const bytes = Array.from(typeof data === "string" ? Buffer.from(data, "utf8") : data);
+    const bytes = [...this.textCarry, ...(typeof data === "string" ? Buffer.from(data, "utf8") : data)];
+    this.textCarry = [];
     const out: DecodedKey[] = [];
 
     // The deadline only disambiguates a lone ESC whose next byte could be an
@@ -123,6 +136,13 @@ export class TerminalKeyDecoder {
       // Printable run: decode as UTF-8 text, one DecodedKey per character.
       let j = i;
       while (j < bytes.length && bytes[j] >= 0x20 && bytes[j] !== TerminalKeyDecoder.ESC) j += 1;
+      if (j === bytes.length) {
+        // Hold back a multi-byte character cut off at the chunk boundary.
+        const cut = incompleteUtf8TailLength(bytes, i, j);
+        this.textCarry = bytes.slice(j - cut, j);
+        j -= cut;
+        if (j === i) break;
+      }
       const text = Buffer.from(bytes.slice(i, j)).toString("utf8");
       for (const ch of text) out.push({ s: ch, kind: "text", standalone: false });
       i = j;
@@ -244,6 +264,17 @@ export class TerminalKeyDecoder {
 }
 
 /** Is `bytes` a complete, dispatchable sequence? */
+/** Length of a truncated UTF-8 sequence ending bytes[start..end), else 0. */
+function incompleteUtf8TailLength(bytes: number[], start: number, end: number): number {
+  for (let k = 1; k <= 3 && end - k >= start; k++) {
+    const b = bytes[end - k];
+    if ((b & 0xc0) === 0x80) continue; // continuation byte — keep scanning back
+    const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
+    return need > k ? k : 0;
+  }
+  return 0;
+}
+
 const PASTE_START_BYTES = Array.from(Buffer.from("\u001b[200~", "latin1"));
 const PASTE_END_BYTES = Array.from(Buffer.from("\u001b[201~", "latin1"));
 

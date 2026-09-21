@@ -4,6 +4,8 @@ import { GatewayClient } from "./lib/gateway";
 import { getActiveProviderConfig, getActiveProvider, getActiveBaseUrl, getActiveDefaultModel } from "./providers";
 import { dispatchCommand, getAllCommands } from "./commands";
 import { AgentRuntime } from "./lib/agentRuntime";
+import { matchGreetingFastPath } from "./lib/greeting";
+import { getCwdInfo } from "./lib/codingAgent";
 import { printToolStart, printToolEnd } from "./lib/tool-format";
 import * as readline from "node:readline";
 import { showBannerIfEligible } from "./banner/banner";
@@ -472,6 +474,8 @@ export async function main() {
       return;
     }
 
+    const greeting = v.startsWith("/") ? null : matchGreetingFastPath(v, getCwdInfo().currentCwd);
+
     if (v.startsWith("/")) {
       const ctx = {
         gateway: gw,
@@ -492,6 +496,12 @@ export async function main() {
       };
 
       await dispatchCommand(v, ctx);
+    } else if (greeting) {
+      // Greeting-only input gets a fixed local reply — no model call.
+      addMessage("user", v);
+      print("");
+      print(renderSeparator("assistant", currentModel));
+      addMessage("assistant", greeting);
     } else {
       // Non-command: send to model via AgentRuntime ReAct Loop
       addMessage("user", v);

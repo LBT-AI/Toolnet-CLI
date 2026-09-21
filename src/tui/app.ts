@@ -20,7 +20,7 @@ import { sendMessage } from "./events/agentWiring";
 import { A, T, getSize } from "../term";
 import { renderFallbackFrame } from "./renderers/errorBoundary";
 import { ENABLE_BRACKETED_PASTE } from "../lib/bracketedPaste";
-import { TerminalKeyDecoder, ESC_FLUSH_TIMEOUT_MS } from "./input/keyDecoder";
+import { TerminalKeyDecoder, ESC_FLUSH_TIMEOUT_MS, decodedKeyBytes, type DecodedKey } from "./input/keyDecoder";
 import { setupTerminalLifecycle, restoreTerminal, wrapErrorBoundary, onTerminalResize } from "../lib/terminalLifecycle";
 import { setResponseLanguage } from "../lib/language";
 import { reasoningEffortLabel } from "../lib/reasoning";
@@ -554,12 +554,12 @@ export async function main(): Promise<void> {
   // standalone Esc with a bounded timeout, and unwraps bracketed pastes.
   // Nothing downstream may re-parse raw bytes for sequences.
   const keyDecoder = new TerminalKeyDecoder();
-  const dispatchDecoded = (key: { s: string; kind: string }) => {
+  const dispatchDecoded = (key: DecodedKey) => {
     if (key.kind === "paste") {
       handlePaste(key.s, { renderAll, sendMessage, exitApp, openModelPicker });
       return;
     }
-    handleKey(Buffer.from(key.s, "latin1"), { renderAll, sendMessage, exitApp, openModelPicker });
+    handleKey(decodedKeyBytes(key), { renderAll, sendMessage, exitApp, openModelPicker });
   };
 
   process.stdin.on("data", (data: Buffer) => {

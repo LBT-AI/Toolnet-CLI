@@ -8,6 +8,7 @@ import { describe, expect, it } from "bun:test";
 import {
   TerminalKeyDecoder,
   ESC_FLUSH_TIMEOUT_MS,
+  decodedKeyBytes,
 } from "../../../src/tui/input/keyDecoder";
 
 const DOWN = "\u001b[B";
@@ -158,5 +159,20 @@ describe("TerminalKeyDecoder — bracketed paste", () => {
     );
     expect(keys.map((k) => k.kind)).toEqual(["text", "paste", "text"]);
     expect(keys.map((k) => k.s)).toEqual(["a", "p", "b"]);
+  });
+});
+
+describe("TerminalKeyDecoder → handleKey: non-ASCII text", () => {
+  it("typed Vietnamese reaches the composer intact", async () => {
+    const { handleKey, resetInputState, getInputState } = await import("../../../src/tui/input/inputHandler");
+    resetInputState();
+    const cbs = { renderAll: () => {}, sendMessage: () => {}, exitApp: () => {}, openModelPicker: async () => {} } as any;
+    const d = new TerminalKeyDecoder();
+    // Byte-at-a-time, like a slow mobile SSH link splitting multi-byte chars.
+    for (const b of Buffer.from("xin chào ạ", "utf8")) {
+      for (const key of d.feed(Buffer.from([b]))) handleKey(decodedKeyBytes(key), cbs);
+    }
+    expect(getInputState().buffer).toBe("xin chào ạ");
+    resetInputState();
   });
 });

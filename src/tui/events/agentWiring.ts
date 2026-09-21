@@ -25,6 +25,7 @@ import { providerPicker } from "../providerPicker";
 import { assertPrimarySystemMessageInvariant } from "../../lib/context";
 import { getToolById } from "../../lib/toolsCatalog";
 import { normalizeSectionId } from "../../lib/harnessCatalog";
+import { matchGreetingFastPath } from "../../lib/greeting";
 
 const PLANNER_SYSTEM_PROMPT = `You are ToolNet Planner. Your goal is to analyze the user request, explore the codebase using read-only tools, and create a step-by-step plan. Do not execute the plan yourself. Use the save_plan tool to save the plan.`;
 
@@ -128,6 +129,17 @@ export async function sendMessage(text: string): Promise<void> {
 
   if (text.startsWith("/")) {
     await handleSlashCommand(text.trim());
+    return;
+  }
+
+  // Greeting-only input gets a fixed local reply — no model call.
+  const greeting = matchGreetingFastPath(text, getCwdInfo().currentCwd);
+  if (greeting) {
+    tuiState.messages.push({ role: "user", content: text });
+    tuiState.messages.push({ role: "assistant", content: greeting });
+    tuiState.saveCurrentSession();
+    pinToTail(tuiState.chatViewport);
+    tuiState.requestRender();
     return;
   }
 
