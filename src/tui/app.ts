@@ -245,6 +245,7 @@ function buildFrame(): string {
         currentModel: tuiState.currentModel,
         modelSearchQuery: tuiState.modelSearchQuery,
         pendingProviderId: tuiState.pendingProviderId,
+        availableModels: tuiState.availableModels,
       }));
     }
   }

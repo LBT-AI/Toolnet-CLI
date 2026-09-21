@@ -60,6 +60,44 @@ export function renderProviderStageBox(
   }).join("");
 }
 
+export type ModelPickerRow =
+  | { type: "model"; apiModelId: string }
+  | { type: "info"; text: string }
+  | { type: "action"; action: "add-model"; label: string };
+
+export type SelectableModelPickerRow =
+  | { type: "model"; apiModelId: string }
+  | { type: "action"; action: "add-model"; label: string };
+
+export function buildModelPickerRows(state: {
+  filteredModels: string[];
+  availableModels?: string[];
+  modelSearchQuery?: string;
+}): ModelPickerRow[] {
+  const rows: ModelPickerRow[] = [];
+  const available = state.availableModels && state.availableModels.length > 0
+    ? state.availableModels
+    : state.filteredModels;
+  const isSearching = Boolean(state.modelSearchQuery && state.modelSearchQuery.trim().length > 0);
+
+  if (state.filteredModels.length > 0) {
+    for (const apiModelId of state.filteredModels) {
+      rows.push({ type: "model", apiModelId });
+    }
+  } else if (available.length === 0 && !isSearching) {
+    rows.push({ type: "info", text: "No models available" });
+  } else {
+    rows.push({ type: "info", text: isSearching ? "No matching models" : "No models available" });
+  }
+
+  rows.push({ type: "action", action: "add-model", label: "+ Add model" });
+  return rows;
+}
+
+export function getSelectableRows(rows: ModelPickerRow[]): SelectableModelPickerRow[] {
+  return rows.filter((r): r is SelectableModelPickerRow => r.type === "model" || r.type === "action");
+}
+
 export function renderModelPickerBox(
   cols: number,
   rows: number,
@@ -69,19 +107,23 @@ export function renderModelPickerBox(
     currentModel: string;
     modelSearchQuery: string;
     pendingProviderId?: string | null;
+    availableModels?: string[];
   }
 ): string {
-  const filtered = state.filteredModels.length > 0 ? state.filteredModels : ["No models available"];
-  const total = filtered.length;
-  const winSize = Math.min(MAX_DISPLAY, total);
-  // Defensive clamp: index must never escape [0, total-1].
-  const idx = Math.max(0, Math.min(state.modelPickerIdx, total - 1));
-  // Auto-scroll: keep the selection centered in the window, clamped to bounds.
-  const listStart = Math.max(0, Math.min(idx - Math.floor(winSize / 2), Math.max(0, total - winSize)));
-  const visible = filtered.slice(listStart, listStart + winSize);
+  const pickerRows = buildModelPickerRows(state);
+  const selectableRows = getSelectableRows(pickerRows);
+  const totalSelectable = Math.max(1, selectableRows.length);
+  const selectedIdx = Math.max(0, Math.min(state.modelPickerIdx, totalSelectable - 1));
+  const selectedItem = selectableRows[selectedIdx];
+
+  const modelRows = pickerRows.filter((r): r is { type: "model"; apiModelId: string } => r.type === "model");
+  const infoRow = pickerRows.find((r): r is { type: "info"; text: string } => r.type === "info");
 
   const isNarrow = cols < 60;
-  const { boxW } = computeBoxGeometry(cols, rows, winSize + 3, true, isNarrow ? 46 : 60);
+  const { boxW } = computeBoxGeometry(cols, rows, 10, true, isNarrow ? 46 : 60);
+
+  const maxViewport = Math.max(3, rows - 5);
+  const maxBodyRows = Math.max(1, maxViewport - 3);
 
   const body: string[] = [];
 
@@ -89,53 +131,89 @@ export function renderModelPickerBox(
   const query = state.modelSearchQuery
     ? state.modelSearchQuery + "█"
     : A.fgMuted + "Type to filter…" + A.reset;
-  body.push(A.fgSubtext + "Search " + A.reset + (state.modelSearchQuery ? A.fgText + query + A.reset : query));
+  body.push(A.fgSubtext + "Search  " + A.reset + (state.modelSearchQuery ? A.fgText + query + A.reset : query));
 
   body.push("");
 
-  for (let i = 0; i < visible.length; i++) {
-    const modelIdx = listStart + i;
-    const model = visible[i];
-    const selected = modelIdx === state.modelPickerIdx;
-    const isCurrent = model === state.currentModel;
-    const isCustom = state.pendingProviderId
-      ? isCustomModel(state.pendingProviderId, model)
-      : false;
-    const customBadge = isCustom ? A.fgYellow + " ★" + A.reset : "";
-    const tags = getModelTags(model);
-    // Capability badge — from the API's model metadata (not name guessing).
-    // Narrow terminals get a compact "R" marker right after the name (so it
-    // is never pushed off the end of the row by the descriptive tags).
-    const caps = getModelCapabilities(model);
-    const capBadge = caps?.reasoning
-      ? isNarrow
-        ? A.fgCyan + A.bold + " R" + A.reset
-        : A.fgCyan + A.bold + "  THINKING" + A.reset
-      : "";
-    const maxText = Math.max(8, boxW - 14 - stripAnsi(tags + capBadge).length);
-    let text = truncate(model, maxText);
-    if (isNarrow && caps?.reasoning) {
-      // Keep "R" glued to the model id on mobile even when the row is tight.
-      const nameCap = Math.max(6, boxW - 18 - stripAnsi(tags).length);
-      text = truncate(model, nameCap);
-      text += capBadge;
+  if (modelRows.length === 0) {
+    if (infoRow) {
+      body.push("  " + A.fgMuted + infoRow.text + A.reset);
     }
-    if (selected) {
-      const line = A.bgOverlay + "  " + A.fgCyan + A.bold + "● " + A.reset + A.bgOverlay + A.fgText + A.bold + text + A.reset + customBadge + A.bgOverlay + " " + A.fgMuted + tags + capBadge + A.reset;
-      body.push(line);
-    } else {
-      const marker = isCurrent ? A.fgGreen + "✓ " + A.reset : "  ";
-      body.push(marker + A.fgText + text + A.reset + customBadge + " " + A.fgMuted + tags + capBadge + A.reset);
+  } else {
+    const totalModels = modelRows.length;
+    const isAddSelected = selectedItem?.type === "action";
+    const selectedModelIdx = selectedItem?.type === "model"
+      ? modelRows.findIndex((m) => m.apiModelId === selectedItem.apiModelId)
+      : -1;
+
+    const maxModelDisplay = Math.max(3, Math.min(8, maxBodyRows - 6));
+    const winSize = Math.min(maxModelDisplay, totalModels);
+
+    let listStart = 0;
+    if (isAddSelected) {
+      listStart = Math.max(0, totalModels - winSize);
+    } else if (selectedModelIdx >= 0) {
+      listStart = Math.max(0, Math.min(selectedModelIdx - Math.floor(winSize / 2), Math.max(0, totalModels - winSize)));
+    }
+    const visible = modelRows.slice(listStart, listStart + winSize);
+
+    for (let i = 0; i < visible.length; i++) {
+      const model = visible[i].apiModelId;
+      const isSelected = selectedItem?.type === "model" && selectedItem.apiModelId === model;
+      const isCurrent = model === state.currentModel;
+      const isCustom = state.pendingProviderId
+        ? isCustomModel(state.pendingProviderId, model)
+        : false;
+      const customBadge = isCustom ? A.fgYellow + " ★" + A.reset : "";
+      const tags = getModelTags(model);
+      const caps = getModelCapabilities(model);
+      const capBadge = caps?.reasoning
+        ? isNarrow
+          ? A.fgCyan + A.bold + " R" + A.reset
+          : A.fgCyan + A.bold + "  THINKING" + A.reset
+        : "";
+      const maxText = Math.max(8, boxW - 14 - stripAnsi(tags + capBadge).length);
+      let text = truncate(model, maxText);
+      if (isNarrow && caps?.reasoning) {
+        const nameCap = Math.max(6, boxW - 18 - stripAnsi(tags).length);
+        text = truncate(model, nameCap);
+        text += capBadge;
+      }
+      if (isSelected) {
+        const line = A.bgOverlay + "  " + A.fgCyan + A.bold + "● " + A.reset +
+          A.bgOverlay + A.fgText + A.bold + text + A.reset + customBadge +
+          A.bgOverlay + " " + A.fgMuted + tags + capBadge + A.reset;
+        body.push(line);
+      } else {
+        const marker = isCurrent ? A.fgGreen + "✓ " + A.reset : "  ";
+        body.push(marker + A.fgText + text + A.reset + customBadge + " " + A.fgMuted + tags + capBadge + A.reset);
+      }
+    }
+
+    if (totalModels > winSize) {
+      body.push(A.fgMuted + "… and " + (totalModels - winSize) + " more" + A.reset);
     }
   }
 
-  if (total > winSize) {
-    body.push(A.fgMuted + "… and " + (total - winSize) + " more" + A.reset);
+  body.push("");
+
+  const isAddSelected = selectedItem?.type === "action";
+  if (isAddSelected) {
+    body.push(
+      A.bgOverlay + "  " + A.fgCyan + A.bold + "● " + A.reset +
+      A.bgOverlay + A.fgText + A.bold + "+ Add model" + A.reset
+    );
+  } else {
+    body.push("  " + A.fgText + "+ Add model" + A.reset);
   }
+
+  const footer = isNarrow
+    ? "↑↓ · enter · a add · esc"
+    : "↑↓ navigate · enter select · a add · ⌫ back · esc close";
 
   return composeBox(cols, rows, {
     title: "Select model",
     body,
-    footer: "↑↓ navigate · enter select · a add · ⌫ back · esc close",
+    footer,
   }).join("");
 }

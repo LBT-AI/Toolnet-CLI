@@ -160,9 +160,6 @@ function _handlePasteInternal(
     tuiState.modelSearchQuery += sanitized;
     const query = tuiState.modelSearchQuery.toLowerCase();
     tuiState.filteredModels = tuiState.availableModels.filter((m) => m.toLowerCase().includes(query));
-    if (tuiState.filteredModels.length === 0) {
-      tuiState.filteredModels = ["No matches"];
-    }
     tuiState.modelPickerIdx = 0;
     renderAll();
     return;

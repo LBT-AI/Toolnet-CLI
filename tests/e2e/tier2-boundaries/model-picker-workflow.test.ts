@@ -24,6 +24,8 @@ import {
   commitModelSelection,
   resolveModelArg,
 } from "../../../src/tui/modelPickerWorkflow";
+import { renderModelPickerBox } from "../../../src/tui/renderers/modelPickerRenderer";
+import { stripAnsi } from "../../../src/tui/layout";
 
 const ORIG_ENV = process.env.TOOLNETCLI_CONFIG_DIR;
 let home = "";
@@ -250,5 +252,275 @@ describe("Hierarchical /model workflow", () => {
     expect(registry.getActiveProviderConfig()).toBeNull();
     expect(tuiState.currentModel).not.toBe("m");
     tuiState.showModelPicker = false;
+  });
+
+  describe("Model Picker Visible + Add Model Action UX", () => {
+    it("1. provider with zero models: No models available and + Add model visible, Add row selected by default", async () => {
+      configureToolnet();
+      modelCatalog.replaceProviderModels("toolnet", []);
+      await tuiState.openModelPicker();
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+      expect(tuiState.modelPickerStage).toBe("model");
+      expect(tuiState.availableModels.length).toBe(0);
+
+      const box = renderModelPickerBox(80, 24, {
+        filteredModels: tuiState.filteredModels,
+        modelPickerIdx: tuiState.modelPickerIdx,
+        currentModel: tuiState.currentModel,
+        modelSearchQuery: tuiState.modelSearchQuery,
+        availableModels: tuiState.availableModels,
+      });
+      const stripped = stripAnsi(box);
+      expect(stripped).toContain("No models available");
+      expect(stripped).toContain("+ Add model");
+      expect(tuiState.modelPickerIdx).toBe(0);
+      expect(stripped).toMatch(/●\s+\+\s*Add model/);
+      expect(stripped).not.toMatch(/●\s+No models available/);
+    });
+
+    it("2. Enter on + Add model invokes existing add flow", async () => {
+      configureToolnet();
+      modelCatalog.replaceProviderModels("toolnet", []);
+      await tuiState.openModelPicker();
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+      expect(tuiState.showSecretInput).toBe(true);
+      expect(tuiState.secretInputConfig?.title).toContain("Add model to toolnet");
+      tuiState.resolveSecretInput("");
+      await new Promise((r) => setTimeout(r, 10));
+      expect(tuiState.showModelPicker).toBe(true);
+    });
+
+    it("3. No models available cannot be committed as a model", async () => {
+      configureToolnet();
+      modelCatalog.replaceProviderModels("toolnet", []);
+      await tuiState.openModelPicker();
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+
+      expect(tuiState.currentModel).not.toBe("No models available");
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+      expect(tuiState.currentModel).not.toBe("No models available");
+      tuiState.resolveSecretInput("");
+    });
+
+    it("4. provider with models: models and Add row selectable", async () => {
+      configureToolnet();
+      modelCatalog.replaceProviderModels("toolnet", [
+        { id: "toolnet/m1", providerId: "toolnet", apiModelId: "m1", capabilities: {}, status: "active" },
+        { id: "toolnet/m2", providerId: "toolnet", apiModelId: "m2", capabilities: {}, status: "active" },
+      ]);
+      await tuiState.openModelPicker();
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+
+      expect(tuiState.modelPickerIdx).toBe(0);
+      let box = renderModelPickerBox(80, 24, {
+        filteredModels: tuiState.filteredModels,
+        modelPickerIdx: tuiState.modelPickerIdx,
+        currentModel: tuiState.currentModel,
+        modelSearchQuery: tuiState.modelSearchQuery,
+      });
+      expect(stripAnsi(box)).toMatch(/●\s+m1/);
+
+      handleModelPickerKey(DOWN.hex, DOWN.s, cb);
+      expect(tuiState.modelPickerIdx).toBe(1);
+      box = renderModelPickerBox(80, 24, {
+        filteredModels: tuiState.filteredModels,
+        modelPickerIdx: tuiState.modelPickerIdx,
+        currentModel: tuiState.currentModel,
+        modelSearchQuery: tuiState.modelSearchQuery,
+      });
+      expect(stripAnsi(box)).toMatch(/●\s+m2/);
+
+      handleModelPickerKey(DOWN.hex, DOWN.s, cb);
+      expect(tuiState.modelPickerIdx).toBe(2);
+      box = renderModelPickerBox(80, 24, {
+        filteredModels: tuiState.filteredModels,
+        modelPickerIdx: tuiState.modelPickerIdx,
+        currentModel: tuiState.currentModel,
+        modelSearchQuery: tuiState.modelSearchQuery,
+      });
+      expect(stripAnsi(box)).toMatch(/●\s+\+\s*Add model/);
+    });
+
+    it("5. search with no match: No matching models and Add row remains visible", async () => {
+      configureToolnet();
+      modelCatalog.replaceProviderModels("toolnet", [
+        { id: "toolnet/m1", providerId: "toolnet", apiModelId: "m1", capabilities: {}, status: "active" },
+      ]);
+      await tuiState.openModelPicker();
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+
+      handleModelPickerKey(key("z").hex, "z", cb);
+      handleModelPickerKey(key("z").hex, "z", cb);
+      expect(tuiState.filteredModels.length).toBe(0);
+
+      const box = renderModelPickerBox(80, 24, {
+        filteredModels: tuiState.filteredModels,
+        modelPickerIdx: tuiState.modelPickerIdx,
+        currentModel: tuiState.currentModel,
+        modelSearchQuery: tuiState.modelSearchQuery,
+        availableModels: tuiState.availableModels,
+      });
+      const stripped = stripAnsi(box);
+      expect(stripped).toContain("No matching models");
+      expect(stripped).toContain("+ Add model");
+      expect(stripped).toMatch(/●\s+\+\s*Add model/);
+    });
+
+    it("6. Up/Down skips info rows and wraps correctly", async () => {
+      configureToolnet();
+      modelCatalog.replaceProviderModels("toolnet", []);
+      await tuiState.openModelPicker();
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+
+      expect(tuiState.modelPickerIdx).toBe(0);
+      handleModelPickerKey(DOWN.hex, DOWN.s, cb);
+      expect(tuiState.modelPickerIdx).toBe(0);
+      handleModelPickerKey(UP.hex, UP.s, cb);
+      expect(tuiState.modelPickerIdx).toBe(0);
+
+      const box = renderModelPickerBox(80, 24, {
+        filteredModels: tuiState.filteredModels,
+        modelPickerIdx: tuiState.modelPickerIdx,
+        currentModel: tuiState.currentModel,
+        modelSearchQuery: tuiState.modelSearchQuery,
+        availableModels: tuiState.availableModels,
+      });
+      const stripped = stripAnsi(box);
+      expect(stripped).not.toMatch(/●\s+No models available/);
+      expect(stripped).toMatch(/●\s+\+\s*Add model/);
+    });
+
+    it("7. shortcut 'a' opens add model modal directly", async () => {
+      configureToolnet();
+      modelCatalog.replaceProviderModels("toolnet", [
+        { id: "toolnet/m1", providerId: "toolnet", apiModelId: "m1", capabilities: {}, status: "active" },
+      ]);
+      await tuiState.openModelPicker();
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+
+      handleModelPickerKey(key("a").hex, "a", cb);
+      expect(tuiState.showSecretInput).toBe(true);
+      expect(tuiState.secretInputConfig?.title).toContain("Add model to toolnet");
+      tuiState.resolveSecretInput("");
+    });
+
+    it("8. adding persists custom model, immediately renders new model, no duplicate entry", async () => {
+      configureToolnet();
+      modelCatalog.replaceProviderModels("toolnet", []);
+      await tuiState.openModelPicker();
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+      expect(tuiState.showSecretInput).toBe(true);
+      tuiState.resolveSecretInput("test-custom-model");
+      await new Promise((r) => setTimeout(r, 10));
+      expect(tuiState.showSecretInput).toBe(true);
+      tuiState.resolveSecretInput("Test Custom Model");
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(tuiState.availableModels).toContain("test-custom-model");
+      expect(tuiState.filteredModels).toContain("test-custom-model");
+      expect(tuiState.availableModels.filter((m) => m === "test-custom-model").length).toBe(1);
+      expect(tuiState.filteredModels[tuiState.modelPickerIdx]).toBe("test-custom-model");
+
+      const custom = appConfig.loadAppConfig().config.customModels;
+      expect(custom.some((c) => c.providerId === "toolnet" && c.apiModelId === "test-custom-model")).toBe(true);
+    });
+
+    it("9. 52x20 terminal size: + Add model is visible and not truncated", () => {
+      const box = renderModelPickerBox(52, 20, {
+        filteredModels: ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10"],
+        modelPickerIdx: 0,
+        currentModel: "m1",
+        modelSearchQuery: "",
+      });
+      const stripped = stripAnsi(box);
+      expect(stripped).toContain("+ Add model");
+      expect(stripped).toContain("Select model");
+    });
+
+    it("11. Real Mobile Acceptance: /model -> ToolNet -> + Add model -> add custom model -> restart keeps it", async () => {
+      configureToolnet();
+      modelCatalog.replaceProviderModels("toolnet", [
+        { id: "toolnet/ToolNet1.0", providerId: "toolnet", apiModelId: "ToolNet1.0", capabilities: {}, status: "active" },
+      ]);
+
+      // /model
+      await tuiState.openModelPicker();
+      expect(tuiState.modelPickerStage).toBe("provider");
+
+      // -> ToolNet (select provider)
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+      expect(tuiState.modelPickerStage).toBe("model");
+      expect(tuiState.pendingProviderId).toBe("toolnet");
+
+      // I must visibly see: + Add model
+      let box = renderModelPickerBox(52, 20, {
+        filteredModels: tuiState.filteredModels,
+        modelPickerIdx: tuiState.modelPickerIdx,
+        currentModel: tuiState.currentModel,
+        modelSearchQuery: tuiState.modelSearchQuery,
+        availableModels: tuiState.availableModels,
+      });
+      expect(stripAnsi(box)).toContain("+ Add model");
+
+      // Down -> highlight + Add model
+      handleModelPickerKey(DOWN.hex, DOWN.s, cb);
+      box = renderModelPickerBox(52, 20, {
+        filteredModels: tuiState.filteredModels,
+        modelPickerIdx: tuiState.modelPickerIdx,
+        currentModel: tuiState.currentModel,
+        modelSearchQuery: tuiState.modelSearchQuery,
+        availableModels: tuiState.availableModels,
+      });
+      expect(stripAnsi(box)).toMatch(/●\s+\+\s*Add model/);
+
+      // Enter -> add-model input opens
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+      expect(tuiState.showSecretInput).toBe(true);
+
+      // Add: test-custom-model
+      tuiState.resolveSecretInput("test-custom-model");
+      await new Promise((r) => setTimeout(r, 10));
+      // Display name optional: press enter
+      tuiState.resolveSecretInput("");
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Return: -> test-custom-model visible immediately
+      expect(tuiState.showModelPicker).toBe(true);
+      expect(tuiState.modelPickerStage).toBe("model");
+      box = renderModelPickerBox(52, 20, {
+        filteredModels: tuiState.filteredModels,
+        modelPickerIdx: tuiState.modelPickerIdx,
+        currentModel: tuiState.currentModel,
+        modelSearchQuery: tuiState.modelSearchQuery,
+        availableModels: tuiState.availableModels,
+      });
+      expect(stripAnsi(box)).toContain("test-custom-model");
+      expect(stripAnsi(box)).toMatch(/●\s+test-custom-model/);
+
+      // Restart ToolNet: simulate fresh session / restart
+      modelCatalog.clear();
+      tuiState.showModelPicker = false;
+      tuiState.availableModels = [];
+      tuiState.filteredModels = [];
+
+      // Open /model and navigate to ToolNet again
+      await tuiState.openModelPicker();
+      handleModelPickerKey(ENTER.hex, ENTER.s, cb);
+
+      // -> custom model still present
+      expect(tuiState.availableModels).toContain("test-custom-model");
+      box = renderModelPickerBox(52, 20, {
+        filteredModels: tuiState.filteredModels,
+        modelPickerIdx: tuiState.modelPickerIdx,
+        currentModel: tuiState.currentModel,
+        modelSearchQuery: tuiState.modelSearchQuery,
+        availableModels: tuiState.availableModels,
+      });
+      expect(stripAnsi(box)).toContain("test-custom-model");
+    });
   });
 });

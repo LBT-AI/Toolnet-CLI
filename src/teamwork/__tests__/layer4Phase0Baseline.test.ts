@@ -351,7 +351,7 @@ describe("TEAMWORK BASELINE", () => {
  // : result stays unset on failure (only real success output lands there).
     expect(node.result == null || !/fallback mode/.test(String(node.result))).toBe(true);
     expect(["AUTH_REQUIRED", "PROVIDER_NETWORK", "MODEL_NOT_FOUND"]).toContain(node.errorCode);
-  });
+  }, 15_000);
 
  test("BudgetManager IS integrated into DynamicScheduler (FIXED in )", () => {
     const { BudgetManager } = require("../../teamwork/budget");

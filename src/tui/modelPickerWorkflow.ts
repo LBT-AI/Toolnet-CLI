@@ -30,6 +30,10 @@ import {
   removeCustomModel,
 } from "../core/models/customModels";
 import { modelCatalog } from "../core/models/catalog";
+import {
+  buildModelPickerRows,
+  getSelectableRows,
+} from "./renderers/modelPickerRenderer";
 
 interface PickerCallbacks {
   renderAll: () => void;
@@ -101,9 +105,12 @@ function enterModelStage(providerId: string, callbacks: PickerCallbacks): void {
   tuiState.modelSearchCursor = 0;
 
   const key = providerId.toLowerCase();
-  const models = modelCatalog
+  const catalogModels = modelCatalog
     .listByProvider(key)
-    .map((m) => m.apiModelId)
+    .map((m) => m.apiModelId);
+  const customModels = listCustomModelsForProvider(providerId)
+    .map((m) => m.apiModelId);
+  const models = Array.from(new Set([...catalogModels, ...customModels]))
     .sort((a, b) => a.localeCompare(b));
   // Custom models are appended by the catalog merge already; keep the
   // availableModels surface as apiModelIds scoped to this provider.
@@ -138,19 +145,31 @@ function handleModelStageKey(hex: string, s: string, callbacks: PickerCallbacks)
     callbacks.renderAll();
     return;
   }
+  const selectable = getSelectableRows(
+    buildModelPickerRows({
+      filteredModels: tuiState.filteredModels,
+      availableModels: tuiState.availableModels,
+      modelSearchQuery: tuiState.modelSearchQuery,
+    }),
+  );
+  const selectableCount = Math.max(1, selectable.length);
+
   if (hex === "1b5b41" || hex === "1b4f41") {
-    const len = Math.max(1, tuiState.filteredModels.length);
-    tuiState.modelPickerIdx = (tuiState.modelPickerIdx - 1 + len) % len;
+    tuiState.modelPickerIdx = (tuiState.modelPickerIdx - 1 + selectableCount) % selectableCount;
     callbacks.renderAll();
     return;
   }
   if (hex === "1b5b42" || hex === "1b4f42") {
-    const len = Math.max(1, tuiState.filteredModels.length);
-    tuiState.modelPickerIdx = (tuiState.modelPickerIdx + 1) % len;
+    tuiState.modelPickerIdx = (tuiState.modelPickerIdx + 1) % selectableCount;
     callbacks.renderAll();
     return;
   }
   if (hex === "0d" || hex === "0a") {
+    const selected = selectable[tuiState.modelPickerIdx];
+    if (selected && selected.type === "action" && selected.action === "add-model") {
+      void quickAddModel(callbacks);
+      return;
+    }
     void commitHighlightedModel(callbacks);
     return;
   }
@@ -188,7 +207,6 @@ function refilterModels(): void {
   tuiState.filteredModels = tuiState.availableModels.filter((m) =>
     m.toLowerCase().includes(query),
   );
-  if (tuiState.filteredModels.length === 0) tuiState.filteredModels = ["No matches"];
   tuiState.modelPickerIdx = 0;
   tuiState.modelSearchCursor = Math.min(
     tuiState.modelSearchCursor,
@@ -233,7 +251,18 @@ function closeWorkflow(callbacks: PickerCallbacks): void {
 // ── Atomic commit ───────────────────────────────────────────────────────────
 
 async function commitHighlightedModel(callbacks: PickerCallbacks): Promise<void> {
-  const apiModelId = tuiState.filteredModels[tuiState.modelPickerIdx];
+  const selectable = getSelectableRows(
+    buildModelPickerRows({
+      filteredModels: tuiState.filteredModels,
+      availableModels: tuiState.availableModels,
+      modelSearchQuery: tuiState.modelSearchQuery,
+    }),
+  );
+  const selected = selectable[tuiState.modelPickerIdx];
+  if (!selected || selected.type !== "model") {
+    return;
+  }
+  const apiModelId = selected.apiModelId;
   if (!apiModelId || PLACEHOLDER_MARKERS.some((marker) => apiModelId.includes(marker))) {
     return;
   }
@@ -295,7 +324,16 @@ export async function commitModelSelection(
 function removeHighlightedCustomModel(callbacks: PickerCallbacks): void {
   const providerId = tuiState.pendingProviderId;
   if (!providerId) return;
-  const apiModelId = tuiState.filteredModels[tuiState.modelPickerIdx];
+  const selectable = getSelectableRows(
+    buildModelPickerRows({
+      filteredModels: tuiState.filteredModels,
+      availableModels: tuiState.availableModels,
+      modelSearchQuery: tuiState.modelSearchQuery,
+    }),
+  );
+  const selected = selectable[tuiState.modelPickerIdx];
+  if (!selected || selected.type !== "model") return;
+  const apiModelId = selected.apiModelId;
   if (!apiModelId || PLACEHOLDER_MARKERS.some((m) => apiModelId.includes(m))) return;
   if (!isCustomModel(providerId, apiModelId)) {
     // Discovered-only models are not deletable: no tombstones, no hidden lists.
@@ -305,6 +343,7 @@ function removeHighlightedCustomModel(callbacks: PickerCallbacks): void {
   }
   const removed = removeCustomModel(providerId, apiModelId);
   if (removed) {
+    modelCatalog.remove(`${providerId}/${apiModelId}`);
     tuiState.availableModels = tuiState.availableModels.filter((m) => m !== apiModelId);
     refilterModels();
     tuiState.showToast(`Removed custom model ${providerId}/${apiModelId}`);
@@ -315,7 +354,16 @@ function removeHighlightedCustomModel(callbacks: PickerCallbacks): void {
 async function editHighlightedCustomModel(callbacks: PickerCallbacks): Promise<void> {
   const providerId = tuiState.pendingProviderId;
   if (!providerId) return;
-  const apiModelId = tuiState.filteredModels[tuiState.modelPickerIdx];
+  const selectable = getSelectableRows(
+    buildModelPickerRows({
+      filteredModels: tuiState.filteredModels,
+      availableModels: tuiState.availableModels,
+      modelSearchQuery: tuiState.modelSearchQuery,
+    }),
+  );
+  const selected = selectable[tuiState.modelPickerIdx];
+  if (!selected || selected.type !== "model") return;
+  const apiModelId = selected.apiModelId;
   if (!apiModelId) return;
   if (!isCustomModel(providerId, apiModelId)) {
     tuiState.showToast(`'${apiModelId}' is not a custom model — only custom entries can be edited`);
@@ -329,6 +377,8 @@ async function editHighlightedCustomModel(callbacks: PickerCallbacks): Promise<v
     title: `Edit display name — ${providerId}/${apiModelId}`,
     placeholder: entry?.displayName ?? apiModelId,
   });
+  tuiState.showModelPicker = true;
+  tuiState.modelPickerStage = "model";
   if (nextName && entry) {
     const { upsertCustomModel } = await import("../core/models/customModels");
     upsertCustomModel({ ...entry, displayName: nextName.trim() || undefined });
@@ -343,11 +393,17 @@ async function quickAddModel(callbacks: PickerCallbacks): Promise<void> {
   const providerId = tuiState.pendingProviderId;
   if (!providerId) return;
   // Secret-input modal doubles as a single-field prompt: type the model id.
+  const defaultPlaceholder = tuiState.modelSearchQuery.trim() || "e.g. my-org/my-model";
   const apiModelId = (await tuiState.openSecretInput({
     title: `Add model to ${providerId} — model id`,
-    placeholder: "e.g. my-org/my-model",
+    placeholder: defaultPlaceholder,
   })).trim();
-  if (!apiModelId) return;
+  if (!apiModelId) {
+    tuiState.showModelPicker = true;
+    tuiState.modelPickerStage = "model";
+    callbacks.renderAll();
+    return;
+  }
   const displayName = (await tuiState.openSecretInput({
     title: "Display name (optional)",
     placeholder: apiModelId,
@@ -359,11 +415,30 @@ async function quickAddModel(callbacks: PickerCallbacks): Promise<void> {
     apiModelId,
     ...(displayName && displayName !== apiModelId ? { displayName } : {}),
   });
+
+  const { modelCatalog } = await import("../core/models/catalog");
+  if (!modelCatalog.get(`${providerId}/${apiModelId}`)) {
+    modelCatalog.add({
+      id: `${providerId}/${apiModelId}`,
+      providerId: providerId.toLowerCase(),
+      apiModelId,
+      ...(displayName ? { displayName } : {}),
+      capabilities: {},
+      status: "active",
+    });
+  }
+
   // Materialize immediately so the new entry is selectable without a refresh.
   tuiState.availableModels = [...tuiState.availableModels, apiModelId]
     .filter((m, i, arr) => arr.indexOf(m) === i)
     .sort((a, b) => a.localeCompare(b));
-  refilterModels();
+  tuiState.modelSearchQuery = "";
+  tuiState.modelSearchCursor = 0;
+  tuiState.filteredModels = [...tuiState.availableModels];
+  const newIdx = tuiState.filteredModels.indexOf(apiModelId);
+  tuiState.modelPickerIdx = newIdx >= 0 ? newIdx : 0;
+  tuiState.showModelPicker = true;
+  tuiState.modelPickerStage = "model";
   tuiState.showToast(`Added custom model ${providerId}/${apiModelId}`);
   callbacks.renderAll();
 }

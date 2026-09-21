@@ -88,8 +88,9 @@ describe(`PTY model picker — fragmented Down (${COLS}x${ROWS} mobile SSH)${ski
         cells.join("").trimEnd(),
       );
 
-      // Picker still open in the final frame.
+      // Picker still open in the final frame, and "+ Add model" is visible on screen.
       expect(grid.some((row: string) => row.includes("Select model"))).toBe(true);
+      expect(grid.some((row: string) => row.includes("+ Add model"))).toBe(true);
 
       // No fragment byte ever reached the search field.
       const searchRow = grid.find((row: string) => row.includes("Search")) ?? "";
