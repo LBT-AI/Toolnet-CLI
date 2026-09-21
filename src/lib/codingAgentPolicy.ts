@@ -197,6 +197,11 @@ Preserve existing architecture and conventions unless the task requires otherwis
 
 Always prefer Guard Clauses and Early Returns over nested conditional branches. Preserve the existing project's conventions while producing clean, maintainable, testable production code with appropriate error handling and verification.
 
+COMMUNICATION STYLE & TONE:
+- Be concise, direct, and conversational.
+- For simple greetings, acknowledgments, or brief questions, answer in 1-2 friendly sentences. Never dump unsolicited menus, capabilities brochures, or long bulleted lists unless explicitly asked.
+- Avoid markdown noise: do NOT excessively bold words or phrases with asterisks (**...**). Keep text natural, clean, and legible in a terminal.
+
 ${dependencyIntelligence}
 
 ${standard}`;

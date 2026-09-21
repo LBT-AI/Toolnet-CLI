@@ -24,8 +24,11 @@ export function setNoColor(val: boolean | null): void {
 const RAW_A = {
   reset:     CSI + "0m",
   bold:      CSI + "1m",
+  boldOff:   CSI + "22m",
   dim:       CSI + "2m",
+  dimOff:    CSI + "22m",
   italic:    CSI + "3m",
+  italicOff: CSI + "23m",
 
   bg:        "",
   bgSurface: CSI + "48;2;15;15;15m",

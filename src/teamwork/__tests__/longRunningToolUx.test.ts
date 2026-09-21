@@ -20,7 +20,7 @@ import {
   cancelActiveToolActivity,
   closeActiveToolActivity,
 } from "../../tui/state";
-import { renderActiveToolActivity, renderChatMessages } from "../../tui/renderers/chatRenderer";
+import { renderActiveToolActivity, renderChatMessages, formatInlineMarkdown } from "../../tui/renderers/chatRenderer";
 import { A, theme, setNoColor, isNoColor } from "../../term";
 import { stripAnsi, computeLayoutGeometry } from "../../tui/layout";
 import { redactOutputSecrets } from "../../lib/security/outputRedactor";
@@ -352,6 +352,33 @@ describe("Long-Running Tool UX & Semantic Color System", () => {
       // Clean up job
       backgroundJobs.cancel(job.id);
       expect(backgroundJobs.get(job.id)?.status).toBe("cancelled");
+    });
+  });
+
+  describe("11. Inline Markdown & Asterisk Elimination", () => {
+    it("converts bold markdown **text** into bold ANSI without literal asterisks", () => {
+      const formatted = formatInlineMarkdown("- **Exploring your codebase** — finding files");
+      expect(formatted).not.toContain("**");
+      expect(formatted).toContain(A.bold);
+      expect(stripAnsi(formatted)).toBe("- Exploring your codebase — finding files");
+    });
+
+    it("converts inline code and bold italic cleanly", () => {
+      const formatted = formatInlineMarkdown("Run `npm test` for ***full verification***");
+      expect(formatted).not.toContain("`");
+      expect(formatted).not.toContain("***");
+      expect(stripAnsi(formatted)).toBe("Run npm test for full verification");
+    });
+
+    it("renders formatted markdown in chat messages without raw asterisks", () => {
+      const msgs: Msg[] = [
+        { role: "assistant", content: "I can help with:\n- **Reading files**\n- **Running tests**" },
+      ];
+      const lines = renderChatMessages(msgs, 80, A.fgCyan);
+      const text = lines.map((l) => stripAnsi(l)).join("\n");
+      expect(text).not.toContain("**Reading files**");
+      expect(text).toContain("Reading files");
+      expect(text).toContain("Running tests");
     });
   });
 });

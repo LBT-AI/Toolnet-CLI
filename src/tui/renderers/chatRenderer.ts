@@ -42,6 +42,21 @@ export function renderActiveToolActivity(activity: ActiveToolActivity, cols: num
   return lines;
 }
 
+export function formatInlineMarkdown(text: string, baseColor = A.fgText): string {
+  if (!text) return "";
+  let s = text;
+  // Inline code: `code`
+  s = s.replace(/`([^`]+)`/g, (_m, code) => `${A.fgCyan}${code}${baseColor}`);
+  // Bold italic: ***text***
+  s = s.replace(/\*\*\*([^*]+)\*\*\*/g, (_m, content) => `${A.bold}${A.italic}${content}${A.boldOff}${A.italicOff}`);
+  // Bold: **text** or __text__
+  s = s.replace(/\*\*([^*]+)\*\*/g, (_m, content) => `${A.bold}${content}${A.boldOff}`);
+  s = s.replace(/__([^_]+)__/g, (_m, content) => `${A.bold}${content}${A.boldOff}`);
+  // Italic: *text* (excluding bullet point at start of line: ^\s*\*\s)
+  s = s.replace(/(^|[^\*])\*([^\*\s][^\*]*?[^\*\s]|[^\*\s])\*(?!\*)/g, (_m, pfx, content) => `${pfx}${A.italic}${content}${A.italicOff}`);
+  return s;
+}
+
 export function renderChatMessages(
   messages: Msg[],
   chatCols: number,
@@ -215,8 +230,24 @@ export function renderChatMessages(
     let inThoughtBlock = false;
 
     for (let lIdx = 0; lIdx < rawLines.length; lIdx++) {
-      const rawLine = rawLines[lIdx];
-      const wrapped = wrapText(rawLine, wrapWidth);
+      let rawLine = rawLines[lIdx];
+
+      // Code block and syntax formatting
+      if (rawLine.trim().startsWith("```")) {
+        inCodeBlock = !inCodeBlock;
+        const linePrefix = lIdx === 0 ? prefix : prefixIndent;
+        if (inCodeBlock) {
+          codeLang = rawLine.trim().slice(3).toLowerCase();
+          chatLines.push(msgBg + linePrefix + A.fgBorder + "┌─ " + A.fgCyan + (codeLang || "code") + " " + "─".repeat(Math.max(0, wrapWidth - 8 - (codeLang || "code").length)) + A.reset);
+          continue;
+        } else {
+          chatLines.push(msgBg + linePrefix + A.fgBorder + "└" + "─".repeat(Math.max(0, wrapWidth - 2)) + A.reset);
+          continue;
+        }
+      }
+
+      const formattedLine = !inCodeBlock && !inThoughtBlock ? formatInlineMarkdown(rawLine, isUser ? A.fgText : A.fgText) : rawLine;
+      const wrapped = wrapText(formattedLine, wrapWidth);
 
       for (let wIdx = 0; wIdx < wrapped.length; wIdx++) {
         const isFirstLine = lIdx === 0 && wIdx === 0;
@@ -232,19 +263,6 @@ export function renderChatMessages(
         const closeThought = content.includes("</thought>") || content.includes("</thinking>");
         if (closeThought) {
           content = content.replace(/<\/thought>|<\/thinking>/g, A.reset);
-        }
-
-        // Code block and syntax formatting
-        if (content.trim().startsWith("```")) {
-          inCodeBlock = !inCodeBlock;
-          if (inCodeBlock) {
-            codeLang = content.trim().slice(3).toLowerCase();
-            chatLines.push(msgBg + linePrefix + A.fgBorder + "┌─ " + A.fgCyan + (codeLang || "code") + " " + "─".repeat(Math.max(0, wrapWidth - 8 - (codeLang || "code").length)) + A.reset);
-            continue;
-          } else {
-            chatLines.push(msgBg + linePrefix + A.fgBorder + "└" + "─".repeat(Math.max(0, wrapWidth - 2)) + A.reset);
-            continue;
-          }
         }
 
         if (inCodeBlock) {
