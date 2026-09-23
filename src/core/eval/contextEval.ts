@@ -66,7 +66,7 @@ function largeTranscript(): EstimatableMessage[] {
 interface ContextEvalCase {
   id: string;
   name: string;
-  run: () => ContextEvalResult;
+  run: () => ContextEvalResult | Promise<ContextEvalResult>;
 }
 
 function pass(id: string, name: string, detail: string, extra: Partial<ContextEvalResult> = {}): ContextEvalResult {
@@ -111,10 +111,10 @@ const CASES: ContextEvalCase[] = [
   {
     id: "large-transcript-compacts",
     name: "a transcript over threshold compacts and shrinks",
-    run() {
+    async run() {
       const messages = largeTranscript();
       const force = { messages, model: "gpt-4o", force: true, prune: pruneStep } satisfies CompactionRunInput;
-      const outcome = runBoundedCompaction(force);
+      const outcome = await runBoundedCompaction(force);
       if (!outcome.compacted) return fail(this.id, this.name, `did not compact: ${outcome.reason}`);
       if (outcome.afterTokens >= outcome.beforeTokens) {
         return fail(this.id, this.name, "compaction did not reduce the estimate");
@@ -208,9 +208,9 @@ const CASES: ContextEvalCase[] = [
   {
     id: "current-goal-preserved-through-compaction",
     name: "compaction keeps the current task rather than summarizing it away",
-    run() {
+    async run() {
       const messages = largeTranscript();
-      const outcome = runBoundedCompaction({ messages, model: "gpt-4o", force: true, prune: pruneStep });
+      const outcome = await runBoundedCompaction({ messages, model: "gpt-4o", force: true, prune: pruneStep });
       if (!outcome.compacted) return fail(this.id, this.name, "did not compact");
       const kept = (outcome.messages as EstimatableMessage[]).some((message) =>
         String(message.content).includes("Now fix the failing test"),
@@ -222,9 +222,9 @@ const CASES: ContextEvalCase[] = [
   {
     id: "no-progress-compaction-terminates",
     name: "a compaction that cannot reduce the estimate fails instead of looping",
-    run() {
+    async run() {
       const messages = largeTranscript();
-      const outcome = runBoundedCompaction({
+      const outcome = await runBoundedCompaction({
         messages,
         model: "gpt-4o",
         force: true,
@@ -240,10 +240,10 @@ const CASES: ContextEvalCase[] = [
   {
     id: "compaction-passes-are-bounded",
     name: "a repeatedly-succeeding strategy is still bounded by the pass limit",
-    run() {
+    async run() {
       const messages = largeTranscript();
       let calls = 0;
-      const outcome = runBoundedCompaction({
+      const outcome = await runBoundedCompaction({
         messages,
         model: "gpt-4o",
         force: true,
@@ -265,9 +265,9 @@ const CASES: ContextEvalCase[] = [
   {
     id: "compaction-increase-is-rejected",
     name: "a summary that grows the estimate is rejected, not applied",
-    run() {
+    async run() {
       const messages = largeTranscript();
-      const outcome = runBoundedCompaction({
+      const outcome = await runBoundedCompaction({
         messages,
         model: "gpt-4o",
         force: true,
@@ -283,13 +283,13 @@ const CASES: ContextEvalCase[] = [
   {
     id: "small-request-untouched",
     name: "a normal short request is returned unchanged and never compacts",
-    run() {
+    async run() {
       const messages: EstimatableMessage[] = [
         { role: "system", content: "sys" },
         { role: "user", content: "what does this function do?" },
         { role: "assistant", content: "It parses the config." },
       ];
-      const result = contextManager.prepare({ messages, model: "gpt-4o", prune: pruneStep });
+      const result = await contextManager.prepare({ messages, model: "gpt-4o", prune: pruneStep });
       if (result.compacted) return fail(this.id, this.name, "a short request was compacted");
       if (result.messages !== messages) return fail(this.id, this.name, "the message list was rewritten");
       return pass(this.id, this.name, "short request untouched");
@@ -328,12 +328,12 @@ const CASES: ContextEvalCase[] = [
 
 export const CONTEXT_EVAL_CASES: string[] = CASES.map((entry) => entry.id);
 
-export function runContextEval(ids: string[] = CONTEXT_EVAL_CASES): ContextEvalReport {
+export async function runContextEval(ids: string[] = CONTEXT_EVAL_CASES): Promise<ContextEvalReport> {
   const selected = ids.length === 0 ? CASES : CASES.filter((entry) => ids.includes(entry.id));
   const results: ContextEvalResult[] = [];
   for (const entry of selected) {
     try {
-      results.push(entry.run.call(entry));
+      results.push(await entry.run.call(entry));
     } catch (error) {
       results.push(
         fail(entry.id, entry.name, `threw: ${error instanceof Error ? error.message : String(error)}`),

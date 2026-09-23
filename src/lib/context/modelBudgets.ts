@@ -1,5 +1,5 @@
 import type { ContextBudget, ContextMessage, ModelContextSpec } from "./types";
-import { resolveModelLimits } from "../../core/context/limits";
+import { resolveModelLimits, resolveUsableInput } from "../../core/context/limits";
 import { estimateMessageChars, estimateMessageTokens, estimateTotalTokens } from "./tokenEstimator";
 
 /**
@@ -9,30 +9,24 @@ import { estimateMessageChars, estimateMessageTokens, estimateTotalTokens } from
  * dangerous direction — an over-estimated window fills past what the provider
  * accepts — so an unknown model is treated as narrow and reported as such.
  *
- * The compaction trigger is expressed as a fraction of the window instead of a
- * per-model number, so a model this layer has never heard of still compacts
- * before it overflows. Capacity is reserved for the answer separately, so a
- * trigger at three quarters of the window cannot consume the whole of it.
+ * The auto-compaction trigger is NOT a fraction and NOT a global constant: it is
+ * the same per-model `usable` capacity the canonical budget computes
+ * (`resolveUsableInput`), so the compatibility layer and the canonical layer
+ * cannot disagree about when a model is full.
  */
-const COMPACTION_THRESHOLD_RATIO = 0.75;
-
-function thresholdFor(contextWindow: number, established?: number): number {
-  // An identity that already had a trigger keeps it; only a model this layer
-  // has never budgeted gets the derived one.
-  if (established !== undefined && established > 0) return Math.max(1, established);
-  return Math.max(1, Math.floor(contextWindow * COMPACTION_THRESHOLD_RATIO));
-}
 
 /**
  * Resolves the context specification for a model identifier.
  */
 export function getModelContextSpec(modelName?: string): ModelContextSpec {
   const limits = resolveModelLimits(modelName);
+  const usable = resolveUsableInput(limits);
   return {
     modelName: modelName && modelName.trim() ? modelName : "default",
     maxContextTokens: limits.contextWindow,
     maxOutputTokens: limits.maxOutputTokens,
-    autoCompactThresholdTokens: thresholdFor(limits.contextWindow, limits.compactionThreshold),
+    autoCompactThresholdTokens: usable.usable,
+    usableRule: usable.rule,
     charsPerTokenEstimate: 3.8,
   };
 }
@@ -49,6 +43,9 @@ export function calculateContextBudget(messages: ContextMessage[], modelName?: s
   const spec = getModelContextSpec(modelName);
   const totalTokens = estimateTotalTokens(messages);
   const totalChars = estimateMessageChars(messages);
+  // Space left for input is measured against the SAME per-model usable capacity
+  // the trigger uses, so "how full" and "when to compact" cannot drift apart.
+  const usable = spec.autoCompactThresholdTokens;
 
   let systemTokens = 0;
   let memoryTokens = 0;
@@ -74,9 +71,9 @@ export function calculateContextBudget(messages: ContextMessage[], modelName?: s
     }
   }
 
-  const availableTokens = Math.max(0, spec.maxContextTokens - totalTokens - spec.maxOutputTokens);
+  const availableTokens = Math.max(0, usable - totalTokens);
   const utilizationPercent = Math.min(100, Math.round((totalTokens / spec.maxContextTokens) * 100));
-  const needsCompaction = totalTokens >= spec.autoCompactThresholdTokens;
+  const needsCompaction = totalTokens >= usable;
 
   return {
     modelName: spec.modelName,
@@ -90,5 +87,7 @@ export function calculateContextBudget(messages: ContextMessage[], modelName?: s
     activeToolTokens,
     availableTokens,
     needsCompaction,
+    usableTokens: usable,
+    usableRule: spec.usableRule,
   };
 }

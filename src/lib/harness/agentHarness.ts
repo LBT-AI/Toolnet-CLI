@@ -36,6 +36,8 @@ import { hookRegistry } from "../../core/hooks";
 import { createWorkspaceContext, type WorkspaceContext } from "./workspace";
 import { AgentStateMachine } from "./agentState";
 import { ModelAdapter, type AgentModelResponse, type AgentToolCall } from "./modelAdapter";
+import { makeCheckpointSummarizer } from "./checkpointSummarizer";
+import { asContextOverflow } from "../../core/context/overflow";
 import {
   requireStreamTerminal,
   StreamStallWatch,
@@ -1200,9 +1202,18 @@ export class AgentHarness {
 
  // — the profile picks the compression strategy; token
       // accounting stays the ContextEngine's (one estimator, not two).
-      const prep = contextEngine.prepareMessagesForApi(messages, {
+      //
+      // The checkpoint summary is written through THIS loop's single model path,
+      // with tools disabled and a bounded output — the compaction layer never
+      // reaches for a provider itself.
+      const prep = await contextEngine.prepareMessagesForApi(messages, {
         model,
         sessionId,
+        summarizeWithModel: makeCheckpointSummarizer({
+          provider,
+          model,
+          ...(combinedSignal ? { signal: combinedSignal } : {}),
+        }),
         ...prepareOptionsFor(this.profile.contextPolicy),
       });
       accumulatedTokens = prep.budget.currentEstimatedTokens;
@@ -1223,7 +1234,7 @@ export class AgentHarness {
           permissionDecisionsRetained: denials.length,
         });
       }
-      const preparedMessages =
+      let preparedMessages =
         retention.appended && (prep.compacted || prep.prunedCount > 0)
           ? retention.messages
           : prep.messages;
@@ -1232,6 +1243,8 @@ export class AgentHarness {
         this.emitEvent("agent:compact", mode, {
           originalTokens: prep.budget.currentEstimatedTokens,
           newCount: prep.messages.length,
+          usableTokens: prep.budget.usableTokens,
+          usableRule: prep.budget.usableRule,
         });
       }
 
@@ -1248,6 +1261,12 @@ export class AgentHarness {
             options.toolsOverride || this.toolsForProfile();
 
       let modelRes: { response: AgentModelResponse; hadMessage: boolean };
+      // A provider reporting context overflow is the ONE failure compaction can
+      // actually fix: compact the model-facing context and retry this same turn.
+      // `overflowRetried` bounds that to a single attempt, so a request that is
+      // genuinely too large fails loudly instead of compacting in a loop.
+      let overflowRetried = false;
+      for (;;) {
       try {
         modelRes = await this.completeModel(
           provider,
@@ -1270,6 +1289,7 @@ export class AgentHarness {
           // present when fallback is configured) enables bounded fallback.
           modelResolution.resolved?.routes
         );
+        break;
       } catch (netErr: any) {
         if (options.signal?.aborted || abort.signal?.aborted) {
           this.lastRunState.cancelled = true;
@@ -1297,6 +1317,54 @@ export class AgentHarness {
         // not a network failure.
         if (timeoutSignal.aborted) this.lastRunState.timedOut = true;
         const ev = redactedErrorEvidence(netErr);
+
+        // Overflow recovery: classify BEFORE treating this as a network error,
+        // because routing a payload the model already rejected to another
+        // provider would just replay it against a different counter.
+        if (!overflowRetried) {
+          const overflow = asContextOverflow(
+            {
+              message: ev.message,
+              ...(ev.code ? { code: ev.code } : {}),
+              ...(ev.status !== undefined ? { status: ev.status } : {}),
+            },
+            { provider: provider.id, model, cause: netErr },
+          );
+          if (overflow) {
+            overflowRetried = true;
+            try {
+              const recovered = await contextEngine.prepareMessagesForApi(messages, {
+                model,
+                sessionId,
+                // The provider already rejected this request: compaction is not
+                // optional here, it is the only way the turn can proceed.
+                forceCompact: true,
+                summarizeWithModel: makeCheckpointSummarizer({
+                  provider,
+                  model,
+                  ...(combinedSignal ? { signal: combinedSignal } : {}),
+                }),
+              });
+              if (recovered.compacted) {
+                preparedMessages = recovered.messages;
+                accumulatedTokens = recovered.budget.currentEstimatedTokens;
+                this.emitEvent("agent:compact", mode, {
+                  trigger: "provider_overflow",
+                  matchedBy: overflow.matchedBy,
+                  originalTokens: prep.budget.currentEstimatedTokens,
+                  compactedTokens: recovered.budget.currentEstimatedTokens,
+                  newCount: recovered.messages.length,
+                  usableTokens: recovered.budget.usableTokens,
+                  usableRule: recovered.budget.usableRule,
+                });
+                continue;
+              }
+            } catch {
+              // Recovery is best-effort: fall through to the honest error below.
+            }
+          }
+        }
+
         const errorMsg = `Gateway network error: Network/Gateway connection failed: ${ev.message}`;
         this.agentState.transition("error", "network");
         this.emitEvent("agent:error", mode, { error: errorMsg });
@@ -1319,6 +1387,7 @@ export class AgentHarness {
           sessionId,
           error: errorMsg,
         };
+      }
       }
 
       const agentRes = modelRes.response;

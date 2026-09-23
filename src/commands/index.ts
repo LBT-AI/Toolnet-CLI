@@ -68,6 +68,12 @@ export interface CommandContext {
   setReasoningEffort?: (effort: "auto" | "low" | "medium" | "high" | "off") => boolean;
   /** Human summary of the current reasoning setting. */
   getReasoningStatus?: () => string;
+  /**
+   * Model call used to write a compaction checkpoint summary. Hosts that own a
+   * harness supply the canonical one; /compact falls back to `ctx.provider` and
+   * then to the deterministic checkpoint when neither is available.
+   */
+  summarizeWithModel?: (request: { prompt: string; maxTokens: number }) => Promise<string>;
 }
 
 export interface Command {

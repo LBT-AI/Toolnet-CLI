@@ -98,6 +98,13 @@ export interface ModelPricing {
 
 export interface ModelLimits {
   contextWindow?: number;
+  /**
+   * Declared INPUT capacity, when the provider separates it from the window.
+   * Present on models whose context window includes the answer, so the input
+   * budget is strictly smaller than `contextWindow`. Absent means "the window
+   * is the input capacity" — never defaulted to the window here.
+   */
+  input?: number;
   maxOutputTokens?: number;
 }
 

@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { ModelCatalog } from "../../models/catalog";
 import type { ModelDefinition } from "../../models/types";
 import { TokenEstimator, tokenEstimator } from "../estimator";
-import { resolveModelLimits } from "../limits";
+import { COMPACTION_BUFFER, resolveModelLimits, resolveUsableInput } from "../limits";
 import { computeContextBudget, estimateToolOverhead, projectedRequestTokens } from "../budget";
 import { planContext, carriesPermissionDecision } from "../planner";
 import { PERMISSION_DECISIONS_MARKER } from "../../harness/context";
@@ -88,15 +88,55 @@ describe("model limits", () => {
     expect(resolveModelLimits("closed-weight-9000").source).toBe("fallback");
   });
 
-  test("a pre-catalog identity keeps the compaction trigger it already had", () => {
-    // Regression: deriving a uniform threshold silently moved these identities'
-    // cadence, so a transcript that used to compact no longer did.
-    expect(resolveModelLimits("openai/gpt-4o").compactionThreshold).toBe(96_000);
-    expect(resolveModelLimits("anthropic/claude-3-5-sonnet").compactionThreshold).toBe(150_000);
-    expect(resolveModelLimits("default").compactionThreshold).toBe(8_000);
-    expect(resolveModelLimits(undefined).compactionThreshold).toBe(8_000);
-    // A catalog model carries no compatibility threshold — the budget derives it.
-    expect(resolveModelLimits("acme/big-model", catalogWith({ id: "acme/big-model", providerId: "acme", apiModelId: "big-model", contextWindow: 555_000 })).compactionThreshold).toBeUndefined();
+  test("a declared input limit is used only when it is smaller than the window", () => {
+    const catalog = catalogWith({
+      id: "acme/split",
+      providerId: "acme",
+      apiModelId: "split",
+      contextWindow: 200_000,
+      maxOutputTokens: 8_000,
+      limits: { input: 150_000 },
+    });
+    expect(resolveModelLimits("acme/split", catalog).inputLimit).toBe(150_000);
+
+    // A value at or above the window says nothing new and is not an input limit.
+    const contradictory = catalogWith({
+      id: "acme/odd",
+      providerId: "acme",
+      apiModelId: "odd",
+      contextWindow: 100_000,
+      maxOutputTokens: 8_000,
+      limits: { input: 100_000 },
+    });
+    expect(resolveModelLimits("acme/odd", contradictory).inputLimit).toBeUndefined();
+  });
+
+  test("usable input follows the model's own metadata, not a global threshold", () => {
+    // No input limit: the window minus the model's output allowance.
+    const plain = resolveUsableInput({ contextWindow: 128_000, maxOutputTokens: 4_096 });
+    expect(plain.rule).toBe("context_minus_output");
+    expect(plain.usable).toBe(123_904);
+
+    // An input limit: the limit minus the withheld answer capacity.
+    const split = resolveUsableInput({ contextWindow: 200_000, maxOutputTokens: 8_000, inputLimit: 150_000 });
+    expect(split.rule).toBe("input_minus_reserved");
+    expect(split.reserved).toBe(8_000);
+    expect(split.usable).toBe(142_000);
+    expect(split.usable + split.reserved).toBe(150_000);
+  });
+
+  test("the withheld capacity is capped so a large output allowance cannot starve input", () => {
+    const split = resolveUsableInput({ contextWindow: 400_000, maxOutputTokens: 100_000, inputLimit: 300_000 });
+    expect(split.reserved).toBe(COMPACTION_BUFFER);
+    expect(split.usable).toBe(280_000);
+
+    // A configured reservation wins, and can never widen capacity past the limit.
+    const configured = resolveUsableInput(
+      { contextWindow: 400_000, maxOutputTokens: 100_000, inputLimit: 300_000 },
+      50_000,
+    );
+    expect(configured.reserved).toBe(50_000);
+    expect(configured.usable).toBe(250_000);
   });
 });
 
@@ -114,11 +154,29 @@ describe("context budgeting", () => {
       model: "acme/wide",
       catalog,
     });
-    // Only the capped reserve is withheld, not the full 32k output allowance.
-    expect(budget.reservedOutput).toBeGreaterThan(0);
-    expect(budget.reservedOutput).toBeLessThan(32_000);
+    // No declared input limit: the window minus this model's output allowance is
+    // what input may use, so the answer keeps 32k of room.
+    expect(budget.usableRule).toBe("context_minus_output");
+    expect(budget.reservedOutput).toBe(32_000);
+    expect(budget.usableInput).toBe(96_000);
     expect(budget.usableInput).toBeLessThan(128_000);
     expect(budget.usableInput + budget.reservedOutput).toBeLessThanOrEqual(128_000);
+  });
+
+  test("a declared input limit withholds only the capped reserve, not the whole output allowance", () => {
+    const catalog = catalogWith({
+      id: "acme/split",
+      providerId: "acme",
+      apiModelId: "split",
+      contextWindow: 400_000,
+      maxOutputTokens: 100_000,
+      limits: { input: 300_000 },
+    });
+    const budget = computeContextBudget({ messages: [{ role: "user", content: "hi" }], model: "acme/split", catalog });
+    expect(budget.reservedOutput).toBe(COMPACTION_BUFFER);
+    expect(budget.reservedOutput).toBeLessThan(100_000);
+    expect(budget.usableInput).toBe(280_000);
+    expect(budget.usableInput + budget.reservedOutput).toBe(300_000);
   });
 
   test("system instructions and tool schemas are withheld rather than double-charged", () => {
@@ -146,11 +204,67 @@ describe("context budgeting", () => {
     expect(estimateToolOverhead([])).toBe(0);
   });
 
-  test("the compaction threshold sits strictly below usable capacity", () => {
+  test("the compaction trigger is the usable capacity itself", () => {
     const budget = computeContextBudget({ messages: [{ role: "user", content: "x" }], model: "openai/gpt-4o" });
-    expect(budget.threshold).toBeLessThan(budget.usableInput);
+    // gpt-4o declares 128k window and 4096 output, so usable is 123,904.
+    expect(budget.usableInput).toBe(123_904);
+    expect(budget.usableRule).toBe("context_minus_output");
+    expect(budget.threshold).toBe(budget.usableInput);
     expect(budget.overThreshold).toBe(false);
     expect(budget.overflow).toBe(false);
+    // usedInput is the whole request, and that is what the trigger compares.
+    expect(budget.usedInput).toBe(budget.reservedSystem + budget.reservedTools + budget.estimatedInput);
+  });
+
+  test("a model that declares an input limit gets a smaller, per-model trigger", () => {
+    const catalog = catalogWith({
+      id: "acme/split",
+      providerId: "acme",
+      apiModelId: "split",
+      contextWindow: 200_000,
+      maxOutputTokens: 8_000,
+      limits: { input: 150_000 },
+    });
+    const budget = computeContextBudget({ messages: [{ role: "user", content: "x" }], model: "acme/split", catalog });
+    expect(budget.usableRule).toBe("input_minus_reserved");
+    expect(budget.usableInput).toBe(142_000);
+    expect(budget.usableInput).toBeLessThan(budget.contextWindow);
+    expect(budget.overThreshold).toBe(false);
+  });
+
+  test("the trigger compares the WHOLE request against usable capacity", () => {
+    const catalog = catalogWith({
+      id: "acme/tiny",
+      providerId: "acme",
+      apiModelId: "tiny",
+      contextWindow: 4_000,
+      maxOutputTokens: 1_000,
+      limits: { input: 3_000 },
+    });
+
+    const small = computeContextBudget({ messages: [{ role: "user", content: "hi" }], model: "acme/tiny", catalog });
+    expect(small.usableInput).toBe(2_000);
+    expect(small.overThreshold).toBe(false);
+    expect(small.overflow).toBe(false);
+
+    const large = computeContextBudget({
+      messages: [{ role: "user", content: "word ".repeat(4_000) }],
+      model: "acme/tiny",
+      catalog,
+    });
+    expect(large.usedInput).toBeGreaterThan(large.usableInput);
+    expect(large.overThreshold).toBe(true);
+    expect(large.overflow).toBe(true);
+
+    // Tool schemas count towards the request, so they can push it over on their
+    // own even when the transcript is small.
+    const withTools = computeContextBudget({
+      messages: [{ role: "user", content: "word ".repeat(1_200) }],
+      model: "acme/tiny",
+      catalog,
+      tools: [{ name: "read_file", description: "read a file", parameters: { type: "object" } }],
+    });
+    expect(withTools.usedInput).toBe(withTools.reservedSystem + withTools.reservedTools + withTools.estimatedInput);
   });
 
   test("an unknown model still produces a usable, conservative budget", () => {

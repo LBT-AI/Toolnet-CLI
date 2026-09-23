@@ -221,7 +221,7 @@ async function cmdCompact(io: ContextCliIO, args: string[]): Promise<number> {
   const model = pickModel(args, resolved.model) ?? "default";
   const before = contextManager.budget({ messages: resolved.messages, model });
 
-  const result = contextEngine.prepareMessagesForApi(resolved.messages as never, {
+  const result = await contextEngine.prepareMessagesForApi(resolved.messages as never, {
     model,
     forceCompact: force,
     sessionId,

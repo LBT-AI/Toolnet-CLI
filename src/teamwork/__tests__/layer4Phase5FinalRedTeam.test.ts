@@ -75,7 +75,7 @@ describe("Layer 4 FINAL — residual hardening and red team", () => {
     expect(getSessionContext(a).memory.getSnapshot().userGoals).toContain("goal-a");
   });
 
-  test("context: one primary system message and valid tool pairing survive compaction", () => {
+  test("context: one primary system message and valid tool pairing survive compaction", async () => {
     const messages: any[] = [
       { role: "system", content: "primary" },
       { role: "user", content: "first " + "x".repeat(5000) },
@@ -85,7 +85,7 @@ describe("Layer 4 FINAL — residual hardening and red team", () => {
       { role: "user", content: "second" },
       { role: "assistant", content: "answer" },
     ];
-    const result = compactMessagesAtomically(messages, { force: true, model: "test", summaryRole: "user" });
+    const result = await compactMessagesAtomically(messages, { force: true, model: "test", summaryRole: "user" });
     expect(result.compacted).toBe(true);
     expect(validateToolCallPairs(result.messages).valid).toBe(true);
     expect(() => assertPrimarySystemMessageInvariant(result.messages)).not.toThrow();

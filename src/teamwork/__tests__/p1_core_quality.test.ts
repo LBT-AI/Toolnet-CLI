@@ -249,7 +249,7 @@ describe("P1 — Tool-call pairing atomicity", () => {
 // ---------------------------------------------------------------------------
 
 describe("P1 — Context compaction schema", () => {
-  it("compacted messages maintain role/content structure", () => {
+  it("compacted messages maintain role/content structure", async () => {
     const { compactMessagesAtomically } = require("../../lib/context/atomicCompactor");
     const messages = [
       { role: "system", content: "You are a helpful assistant." },
@@ -262,7 +262,7 @@ describe("P1 — Context compaction schema", () => {
       { role: "user", content: "Now summarize" },
       { role: "assistant", content: "Here is the summary." },
     ];
-    const result = compactMessagesAtomically(messages, { force: true, model: "default" });
+    const result = await compactMessagesAtomically(messages, { force: true, model: "default" });
     // All messages must have role
     for (const msg of result.messages) {
       expect(["system", "user", "assistant", "tool"]).toContain(msg.role);
@@ -364,13 +364,13 @@ describe("P1 — File change updates index", () => {
 // ---------------------------------------------------------------------------
 
 describe("P1 — Sub-agent context pipeline", () => {
-  it("contextEngine.prepareMessagesForApi works for sub-agent messages", () => {
+  it("contextEngine.prepareMessagesForApi works for sub-agent messages", async () => {
     const { contextEngine } = require("../../lib/context");
     const messages = [
       { role: "system", content: "You are a sub-agent." },
       { role: "user", content: "Do something" },
     ];
-    const result = contextEngine.prepareMessagesForApi(messages, { model: "default" });
+    const result = await contextEngine.prepareMessagesForApi(messages, { model: "default" });
     expect(result.messages.length).toBeGreaterThanOrEqual(2);
     expect(result.budget).toBeDefined();
   });

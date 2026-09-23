@@ -4,16 +4,16 @@ import { buildMetrics } from "../../eval/runner";
 import type { EvalCaseResult } from "../../eval/types";
 
 describe("context eval suite", () => {
-  test("every deterministic case passes", () => {
-    const report = runContextEval();
+  test("every deterministic case passes", async () => {
+    const report = await runContextEval();
     const failures = report.results.filter((result) => !result.passed);
     expect(failures.map((failure) => `${failure.id}: ${failure.detail}`)).toEqual([]);
     expect(report.passed).toBe(CONTEXT_EVAL_CASES.length);
     expect(report.failed).toBe(0);
   });
 
-  test("a subset can be replayed by id", () => {
-    const report = runContextEval(["output-capacity-reserved", "no-progress-compaction-terminates"]);
+  test("a subset can be replayed by id", async () => {
+    const report = await runContextEval(["output-capacity-reserved", "no-progress-compaction-terminates"]);
     expect(report.results.map((result) => result.id)).toEqual([
       "output-capacity-reserved",
       "no-progress-compaction-terminates",
@@ -21,8 +21,8 @@ describe("context eval suite", () => {
     expect(report.failed).toBe(0);
   });
 
-  test("compaction cases report a measurable before/after", () => {
-    const report = runContextEval(["large-transcript-compacts"]);
+  test("compaction cases report a measurable before/after", async () => {
+    const report = await runContextEval(["large-transcript-compacts"]);
     const result = report.results[0];
     expect(result.passed).toBe(true);
     expect(result.beforeTokens).toBeGreaterThan(result.afterTokens!);

@@ -16,9 +16,11 @@ export {
 } from "./estimator";
 export {
   resolveModelLimits,
+  resolveUsableInput,
   findCatalogModel,
   describeLimitSource,
-  OUTPUT_RESERVE_CAP,
+  COMPACTION_BUFFER,
+  COMPACTION_KEEP_RECENT_TOKENS,
   FALLBACK_CONTEXT_WINDOW,
   FALLBACK_OUTPUT_TOKENS,
 } from "./limits";
@@ -27,7 +29,6 @@ export {
   estimateToolOverhead,
   projectedRequestTokens,
   describeBudget,
-  DEFAULT_HEADROOM_RATIO,
   type BudgetInput,
 } from "./budget";
 export {

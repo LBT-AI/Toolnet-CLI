@@ -138,6 +138,11 @@ function applyCustomOverrides(model: ModelDefinition, entry: CustomModelEntry): 
   if (entry.displayName !== undefined) merged.displayName = entry.displayName;
   if (entry.contextWindow !== undefined) merged.contextWindow = entry.contextWindow;
   if (entry.maxOutputTokens !== undefined) merged.maxOutputTokens = entry.maxOutputTokens;
+  // A declared input limit is carried as metadata (never as a top-level window),
+  // because the budget has to tell "input capacity" from "context window".
+  if (entry.inputTokens !== undefined) {
+    merged.limits = { ...(merged.limits ?? {}), input: entry.inputTokens };
+  }
 
   if (entry.capabilities) {
     const caps: ModelCapabilities = { ...merged.capabilities };
@@ -174,6 +179,7 @@ function customToDefinition(providerId: string, entry: CustomModelEntry): ModelD
     ...(entry.displayName !== undefined ? { displayName: entry.displayName } : {}),
     ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
     ...(entry.maxOutputTokens !== undefined ? { maxOutputTokens: entry.maxOutputTokens } : {}),
+    ...(entry.inputTokens !== undefined ? { limits: { input: entry.inputTokens } } : {}),
     capabilities: caps,
     status: "active",
     metadata: { custom: true },

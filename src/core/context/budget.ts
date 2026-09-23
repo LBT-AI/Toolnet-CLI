@@ -1,30 +1,28 @@
 /**
  * Context budgeting.
  *
- * The invariant is that INPUT NEVER CONSUMES THE WHOLE WINDOW. Capacity is
- * withheld, in this order, before any transcript is admitted:
+ * The invariant is that INPUT NEVER CONSUMES THE WHOLE WINDOW. How much of the
+ * window is actually available for input comes from the model's OWN metadata
+ * (see `resolveUsableInput`) instead of a single hard-coded number:
  *
- *   reservedOutput  room for the answer (a full window of input cannot be answered)
- *   reservedTools   tool schemas, which are paid on every request
- *   reservedSystem  instructions that must always be present
+ *   model declares an input limit → input - reserved
+ *   otherwise                    → context - maxOutputTokens
  *
- * System and tool capacity is withheld rather than counted inside
- * `estimatedInput`, so the two are never double-charged. `estimatedInput` is
- * therefore the transcript alone, and the effective request size is
- * `reservedSystem + reservedTools + estimatedInput`.
+ * The answer's capacity is withheld first (a full window of input cannot be
+ * answered), then tool schemas and system instructions are measured. System and
+ * tool capacity is reported separately rather than folded into
+ * `estimatedInput`, so the two are never double-charged: `estimatedInput` is the
+ * transcript alone, and `usedInput` is the whole request.
  *
- * The compaction threshold sits strictly below `usableInput`: compaction should
- * happen before a provider rejects the request, not after.
+ * Compaction fires as soon as the request REACHES `usableInput` — that is the
+ * per-model trigger, which is why there is no separate headroom fraction here.
  */
 
 import { modelCatalog } from "../models/catalog";
 import type { ModelCatalog } from "../models/catalog";
 import { tokenEstimator, type EstimatableMessage } from "./estimator";
-import { OUTPUT_RESERVE_CAP, resolveModelLimits } from "./limits";
+import { resolveModelLimits, resolveUsableInput } from "./limits";
 import type { ContextBudget } from "./types";
-
-/** Fraction of usable input kept free so compaction can happen before overflow. */
-export const DEFAULT_HEADROOM_RATIO = 0.15;
 
 export interface BudgetInput {
   messages: EstimatableMessage[];
@@ -35,7 +33,11 @@ export interface BudgetInput {
   outputBudget?: number;
   /** Extra capacity withheld for attachments carried outside the transcript. */
   attachmentTokens?: number;
-  headroomRatio?: number;
+  /**
+   * Override how much capacity is withheld for the answer. Only consulted for
+   * models that declare an input limit, and never applied to the window.
+   */
+  configuredReserved?: number;
   catalog?: ModelCatalog;
 }
 
@@ -64,10 +66,12 @@ export function estimateToolOverhead(tools: unknown[] | undefined, model?: strin
 export function computeContextBudget(input: BudgetInput): ContextBudget {
   const limits = resolveModelLimits(input.model, input.catalog);
 
-  // Output capacity: honour an explicit allowance, otherwise reserve the
-  // model's output size capped so it never withholds more than it needs to.
-  const requestedOutput = input.outputBudget ?? limits.maxOutputTokens;
-  const reservedOutput = Math.max(1, Math.min(OUTPUT_RESERVE_CAP, requestedOutput));
+  // How much of THIS model's capacity the request may occupy — from the model's
+  // declared limits, with the answer's reservation resolved per rule.
+  const resolved = resolveUsableInput(
+    limits,
+    input.configuredReserved !== undefined ? input.configuredReserved : input.outputBudget,
+  );
 
   const reservedTools = estimateToolOverhead(input.tools, input.model);
   const attachmentTokens = Math.max(0, input.attachmentTokens ?? 0);
@@ -82,41 +86,38 @@ export function computeContextBudget(input: BudgetInput): ContextBudget {
     }
   }
 
-  const usableInput = Math.max(
-    0,
-    limits.contextWindow - reservedOutput - reservedTools - reservedSystem - attachmentTokens,
-  );
+  // Attachments ride outside the transcript, so they withhold capacity rather
+  // than being added to `usedInput` (which would charge them twice).
+  const usableInput = Math.max(0, resolved.usable - attachmentTokens);
   const estimatedInput = tokenEstimator.estimateMessages(transcript, input.model).tokens;
-  const remaining = Math.max(0, usableInput - estimatedInput);
-
-  const headroom = clampRatio(input.headroomRatio ?? DEFAULT_HEADROOM_RATIO);
-  const threshold = Math.max(1, Math.floor(usableInput * (1 - headroom)));
+  const usedInput = reservedSystem + reservedTools + estimatedInput;
+  const remaining = Math.max(0, usableInput - usedInput);
 
   return {
     model: input.model ?? "default",
     contextWindow: limits.contextWindow,
-    reservedOutput,
+    reservedOutput: resolved.reserved,
     reservedSystem,
     reservedTools,
     usableInput,
+    usableRule: resolved.rule,
     estimatedInput,
+    usedInput,
     remaining,
-    threshold,
+    // The trigger IS the usable capacity: reaching it means this model has no
+    // room left for the turn, so there is no separate frontier to derive.
+    threshold: usableInput,
     source: limits.source,
     confidence: "low",
-    overThreshold: estimatedInput >= threshold,
-    overflow: estimatedInput >= usableInput,
+    overThreshold: usedInput >= usableInput,
+    overflow: usedInput > usableInput,
   };
-}
-
-function clampRatio(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_HEADROOM_RATIO;
-  return Math.min(0.9, Math.max(0, value));
 }
 
 /**
  * The size a request will actually be, for reporting. This is the number to
- * compare against the window — not `estimatedInput` alone.
+ * compare against the window — not `estimatedInput` alone. It is the same figure
+ * the trigger compares against `usableInput` (`budget.usedInput`).
  */
 export function projectedRequestTokens(budget: ContextBudget): number {
   return budget.reservedSystem + budget.reservedTools + budget.estimatedInput;
@@ -131,7 +132,8 @@ export function describeBudget(budget: ContextBudget): string {
     `reserved output ${budget.reservedOutput}`,
     `reserved tools ${budget.reservedTools}`,
     `reserved system ${budget.reservedSystem}`,
-    `usable input ${budget.usableInput}`,
+    `usable input ${budget.usableInput} (${budget.usableRule})`,
+    `used ${budget.usedInput} of ${budget.usableInput} (${percent}% of window)`,
     `projected ${projected} (${percent}%)`,
     `remaining ${budget.remaining}`,
     `threshold ${budget.threshold}`,

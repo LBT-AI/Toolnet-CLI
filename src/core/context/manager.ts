@@ -67,8 +67,11 @@ export class ContextManager {
   /**
    * Budget → plan → bounded compaction. Compaction is skipped entirely when the
    * estimate is inside the budget, so a normal short request is untouched.
+   *
+   * Async because the summary step is written by a model; the trigger decision
+   * and every measurement stay exactly where they were.
    */
-  prepare(input: PrepareInput): PrepareResult {
+  async prepare(input: PrepareInput): Promise<PrepareResult> {
     const budget = this.budget(input);
     const plan = this.plan({ messages: input.messages, budget });
     input.onEvent?.({ type: "context:planned", budget, compactionNeeded: plan.compactionNeeded });
@@ -81,7 +84,7 @@ export class ContextManager {
     }
 
     input.onEvent?.({ type: "context:compaction_started", beforeTokens: budget.estimatedInput });
-    const compaction = runBoundedCompaction({
+    const compaction = await runBoundedCompaction({
       messages: input.messages,
       ...(input.model ? { model: input.model } : {}),
       ...(input.tools ? { tools: input.tools } : {}),
@@ -90,7 +93,6 @@ export class ContextManager {
       ...(input.maxPasses !== undefined ? { maxPasses: input.maxPasses } : {}),
       ...(input.minSavingsTokens !== undefined ? { minSavingsTokens: input.minSavingsTokens } : {}),
       ...(input.minSavingsRatio !== undefined ? { minSavingsRatio: input.minSavingsRatio } : {}),
-      ...(input.headroomRatio !== undefined ? { headroomRatio: input.headroomRatio } : {}),
       ...(input.outputBudget !== undefined ? { outputBudget: input.outputBudget } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
       ...(input.prune ? { prune: input.prune } : {}),

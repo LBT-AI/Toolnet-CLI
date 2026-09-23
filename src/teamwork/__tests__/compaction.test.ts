@@ -11,17 +11,17 @@ describe("Context Compaction & Memory Management", () => {
     expect(len).toBe("Hello world".length + "Response string".length);
   });
 
-  test("compactMessages skips compaction when below threshold", () => {
+  test("compactMessages skips compaction when below threshold", async () => {
     const msgs: Msg[] = [
       { role: "user", content: "Short message" },
       { role: "assistant", content: "Short reply" }
     ];
-    const res = compactMessages(msgs, { force: false, thresholdChars: 10000 });
+    const res = await compactMessages(msgs, { force: false, thresholdChars: 10000 });
     expect(res.compacted).toBe(false);
     expect(res.messages.length).toBe(2);
   });
 
-  test("compactMessages forces compaction when force=true and creates structured summary", () => {
+  test("compactMessages forces compaction when force=true and creates structured summary", async () => {
     const msgs: Msg[] = [
       { role: "system", content: "System prompt 1" },
       { role: "user", content: "Initial user request: Fix login bug in auth.ts" },
@@ -37,7 +37,10 @@ describe("Context Compaction & Memory Management", () => {
       { role: "assistant", content: "Recent answer 3" }
     ];
 
-    const res = compactMessages(msgs, { force: true, keepRecentCount: 6 });
+    // An explicit 2-turn recent window: retention is token-based by default, and
+    // this fixture is small enough that a 8K window would keep everything —
+    // leaving nothing older to summarize.
+    const res = await compactMessages(msgs, { force: true, keepRecentCount: 2 });
     expect(res.compacted).toBe(true);
     expect(res.newCount).toBeLessThan(msgs.length);
 

@@ -525,3 +525,171 @@ describe(" — fake success is not SUCCESS", () => {
     expect(result.verdict).toBe("FAILED");
   });
 });
+
+// ── provider context overflow ────────────────────────────────────────────────
+
+describe("provider context overflow — compact once, then retry the same turn", () => {
+  interface RecordedRequest {
+    bytes: number;
+    messages: number;
+    tools: number;
+    failed: boolean;
+  }
+  interface OverflowStub {
+    requests: RecordedRequest[];
+    calls: () => number;
+  }
+
+  /**
+   * Call 1 answers with a tool call (so the run has real history), call 2 fails
+   * the way a provider reports an oversized request, and everything after that
+   * succeeds. Request sizes are recorded so the retry can be compared with the
+   * request the provider actually rejected.
+   */
+  function stubOverflowOnSecondCall(): OverflowStub {
+    let turn = 0;
+    let failed = false;
+    const requests: RecordedRequest[] = [];
+    globalThis.fetch = (async (_url: string, options?: { body?: string }) => {
+      const raw = options?.body ?? "";
+      const payload = raw ? JSON.parse(raw) : {};
+      const messages = Array.isArray(payload.messages) ? payload.messages.length : 0;
+      const tools = Array.isArray(payload.tools) ? payload.tools.length : 0;
+      const current = turn;
+      turn++;
+
+      // The overflow lands on the LOOP's own request, never on the (single-
+      // message) checkpoint summarizer call. It also grows the transcript past
+      // the keep window, which is what makes the failure recoverable.
+      const shouldFail = !failed && messages >= 3;
+      requests.push({ bytes: raw.length, messages, tools, failed: shouldFail });
+
+      if (shouldFail) {
+        failed = true;
+        const errorBody = JSON.stringify({
+          error: {
+            message: "This model's maximum context length is 128000 tokens, however you requested 200000 tokens",
+            type: "invalid_request_error",
+            code: "context_length_exceeded",
+          },
+        });
+        return {
+          ok: false,
+          status: 400,
+          statusText: "Bad Request",
+          type: "default",
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => JSON.parse(errorBody),
+          text: async () => errorBody,
+          clone: async () => ({ json: async () => JSON.parse(errorBody), text: async () => errorBody }),
+        } as never;
+      }
+
+      const response =
+        current === 0
+          ? {
+              content: "",
+              tool_calls: [
+                {
+                  id: "c1",
+                  type: "function",
+                  function: { name: "write_file", arguments: JSON.stringify({ path: "overflow.txt", content: "hello\n" }) },
+                },
+              ],
+            }
+          : { content: "Recovered after compaction.", tool_calls: [] };
+
+      const body = JSON.stringify({
+        id: `chatcmpl-${turn}`,
+        object: "chat.completion",
+        created: Date.now(),
+        model: "test-model",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: response.content ?? "",
+              ...(response.tool_calls?.length ? { tool_calls: response.tool_calls } : {}),
+            },
+            finish_reason: response.tool_calls?.length ? "tool_calls" : "stop",
+          },
+        ],
+        usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+      });
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        type: "default",
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => JSON.parse(body),
+        text: async () => body,
+        clone: async () => ({ json: async () => JSON.parse(body), text: async () => body }),
+      } as never;
+    }) as never;
+    return { requests, calls: () => turn };
+  }
+
+  test("an overflow compacts the context and retries the turn exactly once", async () => {
+    const stub = stubOverflowOnSecondCall();
+    const harness = makeHarness("default");
+    const events: Array<{ type: string; payload?: any }> = [];
+    harness.on((event) => events.push({ type: event.type, payload: event.payload }));
+
+    // Large enough that the rejected request has real history to compact (the
+    // keep window is a TOKEN budget), but under the auto-compaction trigger — so
+    // the ONLY thing that can rescue this turn is the overflow path itself.
+    const prompt = `Fix the build.\n${"previous context line\n".repeat(2_200)}`;
+    const result = await harness.run(prompt, { maxTurns: 6 });
+
+    const rejected = stub.requests.filter((request) => request.failed);
+    // Exactly one failed attempt: the retry is bounded.
+    expect(rejected).toHaveLength(1);
+
+    const compactions = events.filter((event) => event.type === "agent:compact");
+    const overflowCompaction = compactions.filter((event) => event.payload?.trigger === "provider_overflow");
+    expect(overflowCompaction).toHaveLength(1);
+    expect(overflowCompaction[0].payload.matchedBy).toContain("context_length_exceeded");
+    expect(overflowCompaction[0].payload.compactedTokens).toBeLessThan(overflowCompaction[0].payload.originalTokens);
+
+    // The recovery summary ran with NO tools attached, and the retried request
+    // was measurably smaller than the one the provider rejected.
+    const summarizer = stub.requests.find((request) => request.messages === 1);
+    expect(summarizer?.tools).toBe(0);
+    const retry = stub.requests[stub.requests.length - 1];
+    expect(retry.failed).toBe(false);
+    expect(retry.bytes).toBeLessThan(rejected[0].bytes);
+    expect(result.success).toBe(true);
+  });
+
+  test("an overflow that cannot be reduced fails loudly instead of retrying", async () => {
+    let turn = 0;
+    const requests: number[] = [];
+    globalThis.fetch = (async (_url: string, options?: { body?: string }) => {
+      requests.push((options?.body ?? "").length);
+      turn++;
+      const errorBody = JSON.stringify({
+        error: { message: "maximum context length exceeded", type: "invalid_request_error" },
+      });
+      return {
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        type: "default",
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => JSON.parse(errorBody),
+        text: async () => errorBody,
+        clone: async () => ({ json: async () => JSON.parse(errorBody), text: async () => errorBody }),
+      } as never;
+    }) as never;
+
+    // Tiny transcript: there is nothing older than the keep window to summarize,
+    // so recovery is impossible and the honest failure is reported — once.
+    const result = await makeHarness("default").run("do the thing", { maxTurns: 4 });
+    expect(turn).toBe(1);
+    expect(requests).toHaveLength(1);
+    expect(result.success).toBe(false);
+    expect(result.error ?? "").toContain("maximum context length exceeded");
+  });
+});

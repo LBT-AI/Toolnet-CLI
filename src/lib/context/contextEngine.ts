@@ -44,15 +44,25 @@ const PRUNE_UTILIZATION_PERCENT = 70;
  *
  * `force` is set because the manager has already made the trigger decision; the
  * compactor's own size threshold would otherwise second-guess it.
+ *
+ * `summarizeWithModel` is the model call, injected from outside (the agent loop
+ * owns provider access). When it is absent — eval, CLI without a provider, tests
+ * — the checkpoint is built deterministically instead.
  */
-function summarizeAtomically(
+async function summarizeAtomically(
   messages: ContextMessage[],
-  options: { model: string; memory: SessionMemoryStore; sessionId?: string },
-): SummaryStepResult {
-  const result = compactMessagesAtomically(messages, {
+  options: {
+    model: string;
+    memory: SessionMemoryStore;
+    sessionId?: string;
+    summarizeWithModel?: ModelSummarizer;
+  },
+): Promise<SummaryStepResult> {
+  const result = await compactMessagesAtomically(messages, {
     force: true,
     model: options.model,
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+    ...(options.summarizeWithModel ? { summarizeWithModel: options.summarizeWithModel } : {}),
     memory: options.memory,
   });
   return {
@@ -61,6 +71,12 @@ function summarizeAtomically(
     ...(result.reason ? { reason: result.reason } : {}),
   };
 }
+
+/** Injected model call used to write a checkpoint summary. */
+export type ModelSummarizer = (request: {
+  prompt: string;
+  maxTokens: number;
+}) => Promise<string>;
 
 export class ContextEngine {
   private defaultModel: string;
@@ -105,7 +121,7 @@ export class ContextEngine {
    *
    * The model's context spec determines when to start pruning/compacting.
    */
-  prepareMessagesForApi(
+  async prepareMessagesForApi(
     messages: ContextMessage[],
     options?: {
       model?: string;
@@ -113,13 +129,15 @@ export class ContextEngine {
       forceCompact?: boolean;
       autoPrune?: boolean;
       sessionId?: string;
+      /** Model-backed checkpoint summarizer; see `summarizeAtomically`. */
+      summarizeWithModel?: ModelSummarizer;
     }
-  ): {
+  ): Promise<{
     messages: ContextMessage[];
     budget: ContextBudget;
     compacted: boolean;
     prunedCount: number;
-  } {
+  }> {
     const model = options?.model || this.defaultModel;
     const memory = this.resolveMemory(options?.sessionId);
     const sessionId = this.resolveSessionId(options?.sessionId);
@@ -157,7 +175,7 @@ export class ContextEngine {
     // already depends on it; when it fires, compaction is requested explicitly
     // rather than second-guessed by the derived threshold.
     const compatibilityNeedsCompaction = calculateContextBudget(workingMessages, model).needsCompaction;
-    const prepared = contextManager.prepare({
+    const prepared = await contextManager.prepare({
       messages: workingMessages,
       model,
       ...(options?.forceCompact || compatibilityNeedsCompaction ? { force: true } : {}),
@@ -175,6 +193,7 @@ export class ContextEngine {
           model,
           memory,
           ...(sessionId ? { sessionId } : {}),
+          ...(options?.summarizeWithModel ? { summarizeWithModel: options.summarizeWithModel } : {}),
         }),
     });
 
@@ -208,7 +227,7 @@ export class ContextEngine {
     };
   }
 
-  compact(messages: ContextMessage[], options?: CompactionOptions): CompactionResult {
+  async compact(messages: ContextMessage[], options?: CompactionOptions): Promise<CompactionResult> {
     return compactMessagesAtomically(messages, {
       ...options,
       memory: options?.memory || this.resolveMemory(options?.sessionId),

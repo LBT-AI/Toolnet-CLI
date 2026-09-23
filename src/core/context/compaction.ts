@@ -48,14 +48,16 @@ export interface CompactionRunInput {
   maxPasses?: number;
   minSavingsTokens?: number;
   minSavingsRatio?: number;
-  headroomRatio?: number;
   keepRecentToolResults?: number;
   outputBudget?: number;
   signal?: AbortSignal;
   /** Deterministic cleanup step (no model call). */
   prune?: (messages: EstimatableMessage[]) => PruneStepResult;
-  /** Model-assisted step. Injected so this layer never calls a provider. */
-  summarize?: (messages: EstimatableMessage[]) => SummaryStepResult;
+  /**
+   * Model-assisted step. Injected so this layer never calls a provider, and
+   * async-capable because the summary is written by a model.
+   */
+  summarize?: (messages: EstimatableMessage[]) => SummaryStepResult | Promise<SummaryStepResult>;
   /** Set when the request already failed with a verified overflow. */
   overflowObserved?: boolean;
 }
@@ -72,7 +74,7 @@ function makeRecordId(): string {
   return `cmp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function runBoundedCompaction(input: CompactionRunInput): CompactionOutcome {
+export async function runBoundedCompaction(input: CompactionRunInput): Promise<CompactionOutcome> {
   const model = input.model;
   const beforeTokens = estimateMessages(input.messages, model);
   const maxPasses = Math.max(1, Math.floor(input.maxPasses ?? DEFAULT_MAX_PASSES));
@@ -83,7 +85,6 @@ export function runBoundedCompaction(input: CompactionRunInput): CompactionOutco
     messages: input.messages,
     model,
     ...(input.tools ? { tools: input.tools } : {}),
-    ...(input.headroomRatio !== undefined ? { headroomRatio: input.headroomRatio } : {}),
     ...(input.outputBudget !== undefined ? { outputBudget: input.outputBudget } : {}),
   });
 
@@ -128,7 +129,7 @@ export function runBoundedCompaction(input: CompactionRunInput): CompactionOutco
     const outcome =
       step === "prune"
         ? runPruneStep(input.prune, working, currentTokens)
-        : runSummaryStep(input.summarize, working, currentTokens);
+        : await runSummaryStep(input.summarize, working, currentTokens);
 
     if (!outcome) {
       // The strategy is unavailable; move on to the next one rather than
@@ -248,13 +249,13 @@ function runPruneStep(
   return { result: pruned.messages, afterTokens, reason: `pruned ${pruned.prunedCount} tool result(s)` };
 }
 
-function runSummaryStep(
+async function runSummaryStep(
   summarize: CompactionRunInput["summarize"],
   messages: EstimatableMessage[],
   currentTokens: number,
-): (StepOutcome & { result: EstimatableMessage[] }) | null {
+): Promise<(StepOutcome & { result: EstimatableMessage[] }) | null> {
   if (!summarize) return null;
-  const summary = summarize(messages);
+  const summary = await summarize(messages);
   if (!summary.compacted) {
     return {
       result: messages,

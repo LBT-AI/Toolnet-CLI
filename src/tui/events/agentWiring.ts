@@ -4,6 +4,7 @@ import { tuiState } from "../state";
 import { getCwdInfo } from "../../lib/codingAgent";
 import { getVersion } from "../../lib/version";
 import { contextEngine, type ContextMessage } from "../../lib/context";
+import { makeCheckpointSummarizer } from "../../lib/harness/checkpointSummarizer";
 import { parseAndProcessInput } from "../../lib/attachments";
 import { getAgentSystemPrompt } from "../../lib/agentRuntime";
 import { extractLanguageRequest, setResponseLanguage } from "../../lib/language";
@@ -279,7 +280,11 @@ export async function sendMessage(text: string): Promise<void> {
 
     tuiState.setStatus("Calling API…");
 
-    const autoPrep = contextEngine.prepareMessagesForApi(tuiState.messages as any, { model: tuiState.currentModel, sessionId: tuiState.currentSessionId });
+    const autoPrep = await contextEngine.prepareMessagesForApi(tuiState.messages as any, {
+      model: tuiState.currentModel,
+      sessionId: tuiState.currentSessionId,
+      summarizeWithModel: makeCheckpointSummarizer({ provider, model: tuiState.currentModel }),
+    });
     if (autoPrep.compacted) {
       tuiState.replaceMessages(autoPrep.messages);
       tuiState.saveCurrentSession();

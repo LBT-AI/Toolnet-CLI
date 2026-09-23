@@ -29,14 +29,37 @@ export type LimitSource = "catalog" | "legacy_table" | "fallback";
 
 export interface ModelLimits {
   contextWindow: number;
+  /**
+   * Declared input capacity, when the provider declares one separately from the
+   * window. Undefined means the model has no separate input limit, which is a
+   * different fact from "the input limit equals the window".
+   */
+  inputLimit?: number;
   maxOutputTokens: number;
   source: LimitSource;
-  /**
-   * Compatibility only: the compaction trigger established for a pre-catalog
-   * identity. Absent when the catalog declares the model, in which case the
-   * canonical budget derives its own threshold from the window.
-   */
-  compactionThreshold?: number;
+}
+
+/**
+ * How much of the model's capacity this request may actually use.
+ *
+ * Two rules, chosen by what the model's own metadata declares — never by a
+ * single hard-coded number:
+ *
+ *  - the model declares an input limit → `input - reserved`, where `reserved`
+ *    is the configured value or `min(COMPACTION_BUFFER, maxOutputTokens)`;
+ *  - no input limit → `context - maxOutputTokens`.
+ *
+ * Auto-compaction fires when the request reaches `usable`, so the trigger is
+ * per-model instead of a global threshold, and a model that declares nothing
+ * still gets a defensible one.
+ */
+export interface UsableInput {
+  /** Capacity this request may occupy before compaction is required. */
+  usable: number;
+  /** Capacity withheld from `usable` for the answer. */
+  reserved: number;
+  /** Which rule produced `usable`; surfaced so callers can report provenance. */
+  rule: "input_minus_reserved" | "context_minus_output";
 }
 
 export interface ContextBudget {
@@ -48,13 +71,24 @@ export interface ContextBudget {
   reservedSystem: number;
   /** Capacity withheld for tool schemas/framing. */
   reservedTools: number;
-  /** Context capacity left for transcript after every reservation. */
+  /**
+   * Capacity the request may occupy before compaction is required, derived from
+   * this model's own declared limits (see `UsableInput`). System and tool
+   * capacity stays inside this number rather than being charged twice.
+   */
   usableInput: number;
+  /** Which metadata rule produced `usableInput`. */
+  usableRule: UsableInput["rule"];
   /** Estimated size of the transcript that would be sent. */
   estimatedInput: number;
-  /** usableInput - estimatedInput (never negative). */
+  /** Estimated size of the WHOLE request: system + tools + transcript. */
+  usedInput: number;
+  /** usableInput - usedInput (never negative). */
   remaining: number;
-  /** Compaction trigger: a frontier strictly below usableInput. */
+  /**
+   * Compaction trigger. Equals `usableInput`: the request is over budget as soon
+   * as it reaches the capacity this model's metadata allows for input.
+   */
   threshold: number;
   source: LimitSource;
   confidence: Confidence;

@@ -56,7 +56,9 @@ describe("Unified Context Engine", () => {
     test("resolves correct specs for known model families", () => {
       const gpt4o = getModelContextSpec("openai/gpt-4o");
       expect(gpt4o.maxContextTokens).toBe(128000);
-      expect(gpt4o.autoCompactThresholdTokens).toBe(96000);
+      // The trigger is per-model from declared metadata: window minus the
+      // model's own output allowance (128,000 - 4,096), not a global fraction.
+      expect(gpt4o.autoCompactThresholdTokens).toBe(123904);
 
       const claude = getModelContextSpec("anthropic/claude-3-5-sonnet");
       expect(claude.maxContextTokens).toBe(200000);
@@ -168,7 +170,7 @@ describe("Unified Context Engine", () => {
   });
 
   describe("4. Atomic Compactor & Pair Integrity", () => {
-    test("preserves assistant.tool_calls and role:tool pairings atomically without breaking schema", () => {
+    test("preserves assistant.tool_calls and role:tool pairings atomically without breaking schema", async () => {
       const messages: ContextMessage[] = [
         { role: "system", content: "System instructions" },
         // Turn 1
@@ -200,7 +202,7 @@ describe("Unified Context Engine", () => {
         { role: "assistant", content: "Finished turn 3" },
       ];
 
-      const res = compactMessagesAtomically(messages, { force: true, keepRecentCount: 1 });
+      const res = await compactMessagesAtomically(messages, { force: true, keepRecentCount: 1 });
       expect(res.compacted).toBe(true);
 
       // Verify system prompt is at index 0
@@ -247,23 +249,31 @@ describe("Unified Context Engine", () => {
   });
 
   describe("6. ContextEngine Full Pipeline", () => {
-    test("prepareMessagesForApi runs auto-pruning, budgeting, and compaction smoothly", () => {
-      const largeContent = "data block\n".repeat(200);
-      const messages: ContextMessage[] = [
-        { role: "system", content: "You are ToolNet Agent." },
-        { role: "user", content: "Task 1" },
+    test("prepareMessagesForApi runs auto-pruning, budgeting, and compaction smoothly", async () => {
+      // The recent window is a TOKEN budget (8K by default), so a transcript that
+      // fits inside it has nothing older to summarize. This fixture therefore
+      // carries real history: several large tool steps well past the budget.
+      const largeContent = "data block\n".repeat(2_000);
+      const step = (n: number): ContextMessage[] => [
         {
           role: "assistant",
           content: "",
-          tool_calls: [{ id: "call_1", type: "function", function: { name: "read_file", arguments: '{"path":"file1.ts"}' } }],
+          tool_calls: [{ id: `call_${n}`, type: "function", function: { name: "read_file", arguments: `{"path":"file${n}.ts"}` } }],
         },
-        { role: "tool", name: "read_file", tool_call_id: "call_1", content: JSON.stringify({ stdout: largeContent, exitCode: 0 }) },
-        { role: "assistant", content: "Done 1" },
+        { role: "tool", name: "read_file", tool_call_id: `call_${n}`, content: JSON.stringify({ stdout: largeContent, exitCode: 0 }) },
+        { role: "assistant", content: `Done ${n}` },
+      ];
+      const messages: ContextMessage[] = [
+        { role: "system", content: "You are ToolNet Agent." },
+        { role: "user", content: "Task 1" },
+        ...step(1),
+        ...step(2),
+        ...step(3),
         { role: "user", content: "Task 2" },
         { role: "assistant", content: "Done 2" },
       ];
 
-      const prep = contextEngine.prepareMessagesForApi(messages, {
+      const prep = await contextEngine.prepareMessagesForApi(messages, {
         model: "openai/gpt-4o",
         forceCompact: true,
       });

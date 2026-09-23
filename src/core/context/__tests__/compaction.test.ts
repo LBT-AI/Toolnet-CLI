@@ -26,18 +26,18 @@ function filler(targetTokens: number): EstimatableMessage {
 const pruneNothing = (): PruneStepResult => ({ messages: [], prunedCount: 0 });
 
 describe("bounded compaction", () => {
-  test("does not run at all when the context is inside its budget", () => {
+  test("does not run at all when the context is inside its budget", async () => {
     const messages: EstimatableMessage[] = [{ role: "user", content: "small task" }];
-    const outcome = runBoundedCompaction({ messages, model: "openai/gpt-4o" });
+    const outcome = await runBoundedCompaction({ messages, model: "openai/gpt-4o" });
     expect(outcome.compacted).toBe(false);
     expect(outcome.failure).toBe("nothing_to_compact");
     expect(outcome.passes).toBe(0);
     expect(outcome.messages).toBe(messages);
   });
 
-  test("a verified overflow forces a run even inside the estimated budget", () => {
+  test("a verified overflow forces a run even inside the estimated budget", async () => {
     const messages: EstimatableMessage[] = [{ role: "user", content: "small task" }];
-    const outcome = runBoundedCompaction({
+    const outcome = await runBoundedCompaction({
       messages,
       model: "openai/gpt-4o",
       overflowObserved: true,
@@ -48,9 +48,9 @@ describe("bounded compaction", () => {
     expect(outcome.failure).not.toBe("nothing_to_compact");
   });
 
-  test("a pass that reduces nothing terminates the run instead of repeating", () => {
+  test("a pass that reduces nothing terminates the run instead of repeating", async () => {
     const messages: EstimatableMessage[] = [filler(40_000)];
-    const outcome = runBoundedCompaction({
+    const outcome = await runBoundedCompaction({
       messages,
       model: "openai/gpt-4o",
       force: true,
@@ -61,9 +61,9 @@ describe("bounded compaction", () => {
     expect(outcome.passes).toBeLessThanOrEqual(DEFAULT_MAX_PASSES);
   });
 
-  test("a pass that makes the estimate larger is refused", () => {
+  test("a pass that makes the estimate larger is refused", async () => {
     const messages: EstimatableMessage[] = [filler(40_000)];
-    const outcome = runBoundedCompaction({
+    const outcome = await runBoundedCompaction({
       messages,
       model: "openai/gpt-4o",
       force: true,
@@ -73,10 +73,10 @@ describe("bounded compaction", () => {
     expect(outcome.failure).toBe("increased");
   });
 
-  test("a reduction too small to matter is reported as insufficient, not as success", () => {
+  test("a reduction too small to matter is reported as insufficient, not as success", async () => {
     const messages: EstimatableMessage[] = [filler(100_000)];
     const trimmed: EstimatableMessage[] = [{ role: "user", content: "x".repeat(100_000 * 4 - 4) }];
-    const outcome = runBoundedCompaction({
+    const outcome = await runBoundedCompaction({
       messages,
       model: "openai/gpt-4o",
       force: true,
@@ -86,10 +86,10 @@ describe("bounded compaction", () => {
     expect(outcome.failure).toBe("insufficient_reduction");
   });
 
-  test("progress is required proportionally, so a narrow window can still compact", () => {
+  test("progress is required proportionally, so a narrow window can still compact", async () => {
     const messages: EstimatableMessage[] = [filler(4_000)];
     const trimmed: EstimatableMessage[] = [{ role: "user", content: "x".repeat(1_000 * 4) }];
-    const outcome = runBoundedCompaction({
+    const outcome = await runBoundedCompaction({
       messages,
       model: "openai/gpt-4o",
       force: true,
@@ -100,10 +100,10 @@ describe("bounded compaction", () => {
     expect(outcome.record).toBeDefined();
   });
 
-  test("a refused summary is never retried", () => {
+  test("a refused summary is never retried", async () => {
     let attempts = 0;
     const messages: EstimatableMessage[] = [filler(40_000)];
-    const outcome = runBoundedCompaction({
+    const outcome = await runBoundedCompaction({
       messages,
       model: "openai/gpt-4o",
       force: true,
@@ -120,9 +120,9 @@ describe("bounded compaction", () => {
     expect(outcome.record?.strategy).toBe("prune");
   });
 
-  test("a refused summary with nothing else to fall back on fails deterministically", () => {
+  test("a refused summary with nothing else to fall back on fails deterministically", async () => {
     const messages: EstimatableMessage[] = [filler(40_000)];
-    const outcome = runBoundedCompaction({
+    const outcome = await runBoundedCompaction({
       messages,
       model: "openai/gpt-4o",
       force: true,
@@ -133,10 +133,10 @@ describe("bounded compaction", () => {
     expect(outcome.messages).toBe(messages);
   });
 
-  test("passes are bounded, so a strategy that keeps succeeding cannot loop forever", () => {
+  test("passes are bounded, so a strategy that keeps succeeding cannot loop forever", async () => {
     const messages: EstimatableMessage[] = [filler(60_000)];
     let calls = 0;
-    const outcome = runBoundedCompaction({
+    const outcome = await runBoundedCompaction({
       messages,
       model: "openai/gpt-4o",
       force: true,
@@ -150,10 +150,10 @@ describe("bounded compaction", () => {
     expect(outcome.passes).toBeLessThanOrEqual(1);
   });
 
-  test("a pre-aborted signal cancels before any step runs", () => {
+  test("a pre-aborted signal cancels before any step runs", async () => {
     const messages: EstimatableMessage[] = [filler(40_000)];
     let calls = 0;
-    const outcome = runBoundedCompaction({
+    const outcome = await runBoundedCompaction({
       messages,
       model: "openai/gpt-4o",
       force: true,
@@ -168,10 +168,10 @@ describe("bounded compaction", () => {
     expect(outcome.compacted).toBe(false);
   });
 
-  test("an abort observed mid-run stops the remaining passes", () => {
+  test("an abort observed mid-run stops the remaining passes", async () => {
     const controller = new AbortController();
     const messages: EstimatableMessage[] = [filler(60_000)];
-    const outcome = runBoundedCompaction({
+    const outcome = await runBoundedCompaction({
       messages,
       model: "openai/gpt-4o",
       force: true,
@@ -184,9 +184,9 @@ describe("bounded compaction", () => {
     expect(outcome.failure).toBe("cancelled");
   });
 
-  test("a prune-only strategy reports success when it alone clears the requirement", () => {
+  test("a prune-only strategy reports success when it alone clears the requirement", async () => {
     const messages: EstimatableMessage[] = [filler(60_000)];
-    const outcome = runBoundedCompaction({
+    const outcome = await runBoundedCompaction({
       messages,
       model: "openai/gpt-4o",
       force: true,
@@ -306,14 +306,14 @@ afterEach(() => {
 });
 
 describe("context manager", () => {
-  test("a normal short request is returned untouched and never compacts", () => {
+  test("a normal short request is returned untouched and never compacts", async () => {
     const events: string[] = [];
     const manager = new ContextManager();
     const messages: EstimatableMessage[] = [
       { role: "system", content: "instructions" },
       { role: "user", content: "say hello" },
     ];
-    const result = manager.prepare({
+    const result = await manager.prepare({
       messages,
       model: "openai/gpt-4o",
       onEvent: (event) => events.push(event.type),
@@ -326,10 +326,10 @@ describe("context manager", () => {
     expect(events).toEqual(["context:planned"]);
   });
 
-  test("compaction is reported through the context lifecycle events", () => {
+  test("compaction is reported through the context lifecycle events", async () => {
     const events: string[] = [];
     const manager = new ContextManager();
-    const result = manager.prepare({
+    const result = await manager.prepare({
       messages: [filler(60_000)],
       model: "openai/gpt-4o",
       force: true,
@@ -342,12 +342,12 @@ describe("context manager", () => {
     expect(events).toContain("context:compaction_completed");
   });
 
-  test("a compaction that cannot progress reports failure instead of looping", () => {
+  test("a compaction that cannot progress reports failure instead of looping", async () => {
     const events: string[] = [];
     let attempts = 0;
     const manager = new ContextManager();
     const messages: EstimatableMessage[] = [filler(60_000)];
-    const result = manager.prepare({
+    const result = await manager.prepare({
       messages,
       model: "openai/gpt-4o",
       force: true,
@@ -362,9 +362,9 @@ describe("context manager", () => {
     expect(events).toContain("context:compaction_failed");
   });
 
-  test("compaction does not terminate the task: the working window survives", () => {
+  test("compaction does not terminate the task: the working window survives", async () => {
     const manager = new ContextManager();
-    const result = manager.prepare({
+    const result = await manager.prepare({
       messages: [filler(60_000), { role: "user", content: "keep going" }],
       model: "openai/gpt-4o",
       force: true,
@@ -383,11 +383,11 @@ describe("context manager", () => {
     expect(result.budget.estimatedInput).toBeLessThan(60_000);
   });
 
-  test("a successful compaction is journaled and checkpointed for the session", () => {
+  test("a successful compaction is journaled and checkpointed for the session", async () => {
     const workspace = normalizeWorkspaceIdentity(tmpDir);
     const session = sessionStore.create({ title: "context", workspace });
     const manager = new ContextManager();
-    const result = manager.prepare({
+    const result = await manager.prepare({
       messages: [filler(60_000)],
       model: "openai/gpt-4o",
       force: true,
@@ -406,9 +406,9 @@ describe("context manager", () => {
     expect(result.record?.sourceEventRange).toBeDefined();
   });
 
-  test("a context optimization never creates session files for an unknown session id", () => {
+  test("a context optimization never creates session files for an unknown session id", async () => {
     const manager = new ContextManager();
-    const result = manager.prepare({
+    const result = await manager.prepare({
       messages: [filler(60_000)],
       model: "openai/gpt-4o",
       force: true,
@@ -419,14 +419,14 @@ describe("context manager", () => {
     expect(fs.readdirSync(tmpDir)).toEqual([]);
   });
 
-  test("planning and budgeting are local work: no provider is contacted", () => {
+  test("planning and budgeting are local work: no provider is contacted", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (() => {
       throw new Error("the context layer must not perform network calls");
     }) as unknown as typeof fetch;
     try {
       const manager = new ContextManager();
-      const result = manager.prepare({
+      const result = await manager.prepare({
         messages: [filler(60_000)],
         model: "openai/gpt-4o",
         force: true,

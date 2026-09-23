@@ -22,7 +22,7 @@
 
 - **⚙️ Unified AgentHarness 2.0 Kernel**: Central execution engine coordinating Context, Security, Tool Registry, MCP Gateway, and Session Persistence across all runtime modes.
 - **🤖 Real Sub-Agent Execution Engine**: Autonomous child agent loop with specialized personas (`RESEARCHER`, `CODER`, `TESTER`, `REVIEWER`, `ARCHITECT`, `GENERAL`), role-based tool filtering, and dependency chaining.
-- **🧠 Unified Context Management Engine**: Exact token estimation across model families, automatic bulky tool output pruning, atomic turn compaction (preserving `assistant.tool_calls` and `role: "tool"` pairs), and persistent session memory.
+- **🧠 Unified Context Management Engine**: Exact token estimation across model families, automatic bulky tool output pruning, and lossy checkpoint compaction — the older history is summarized (preserving `assistant.tool_calls` / `role: "tool"` pairs and a ~8K recent tail), the session id and durable history are untouched, and repeated compactions chain the previous summary instead of re-reading raw history.
 - **🛡️ Security & Permissions 2.0 (SecretGuard)**: 5-tier semantic command risk classification (`CRITICAL_DENY`, `DANGEROUS`, `SAFE_BUILD`, `SAFE_READ`, `MODERATE_WRITE`), sensitive file shielding (`.env*`, `.ssh`, `.aws`, `.npmrc`), and smart session trust (`[A] Allow for Session`).
 - **🖥️ Native ANSI Full-Screen TUI**: Zero-dependency TUI compatible with Termius, mobile SSH, tmux, and all standard terminal emulators. Supports bracketed paste, streaming markdown rendering, and live tool status indicators.
 - **🔌 Model Context Protocol (MCP)**: Seamless integration with local and remote MCP servers via stdio and SSE.
@@ -148,7 +148,7 @@ toolnet -p "Check for TypeScript errors in src/" --json
 | `/harness` | `/kernel`, `/sys` | Displays Unified AgentHarness status, active subsystems, framework detection, and token telemetry |
 | `/subagent [role] <task>` | `/sub`, `/agent` | Spawns a dedicated subagent (`RESEARCHER`, `CODER`, `TESTER`, `REVIEWER`, `ARCHITECT`) |
 | `/sandbox [mode]` | `/sb` | Inspects or sets sandbox mode (`workspace`, `ask`, `full-access`, or `clear` session rules) |
-| `/compact` | `/compress` | Triggers atomic context compaction and displays context token budget utilization |
+| `/compact` | `/compress`, `/summarize` | Compacts the current session's model-facing context into a summary + recent tail (same session, durable history kept) and displays the token budget before/after |
 | `/status` | `/st` | Checks ToolNet API Gateway connectivity, active providers, and tunnels |
 | `/model [name]` | `/m` | Switches the active language model or lists available models |
 | `/teamwork <prompt>` | `/tw` | Decomposes a complex objective into an autonomous DAG task graph |

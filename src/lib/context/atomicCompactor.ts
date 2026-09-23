@@ -1,9 +1,17 @@
 import type { CompactionOptions, CompactionResult, ContextMessage } from "./types";
 import { estimateMessageChars, estimateMessageTokens, estimateTotalTokens } from "./tokenEstimator";
 import { getModelContextSpec } from "./modelBudgets";
+import { COMPACTION_KEEP_RECENT_TOKENS } from "../../core/context/limits";
 import { SessionMemoryStore } from "./sessionMemory";
 import { getSessionContext, getSessionContext as ensureContext } from "./contextRegistry";
 import { redactSecrets } from "../security/secretGuard";
+import {
+  buildSummaryPrompt,
+  CHECKPOINT_SUMMARY_MARKER,
+  serializeHeadTranscript,
+  SUMMARY_MAX_TOKENS,
+  SUMMARY_TOOL_RESULT_CHAR_CAP,
+} from "./checkpointSummary";
 import { validateToolCallPairs } from "./toolCallValidator";
 import { assertPrimarySystemMessageInvariant, normalizePrimarySystemMessage } from "./messageInvariants";
 
@@ -18,7 +26,24 @@ interface AtomicTurn {
  * Groups raw messages into atomic conversation turns to guarantee tool_call_id integrity.
  * Each turn preserves the ORIGINAL message order so the relative position of
  * `assistant(tool_calls)` and the matching `tool(tool_call_id)` is never broken.
+ *
+ * A turn starts at a USER message and at a model step that USES tools. Tool
+ * results — and the assistant text that closes the step — stay with the step
+ * that produced them, which is what keeps `assistant(tool_calls)` next to its
+ * `tool(tool_call_id)` in every slice.
+ *
+ * Splitting only on user messages would collapse an entire agent run (one
+ * prompt, many tool-calling steps) into a single turn, which cannot be compacted
+ * at all — so the long runs that actually need compaction would never get one.
+ *
+ * The system message is excluded by the caller's flag; it is kept separately at
+ * index 0.
  */
+function startsNewTurn(message: ContextMessage): boolean {
+  if (message.role === "user") return true;
+  return message.role === "assistant" && Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+}
+
 function groupIntoAtomicTurns(messages: ContextMessage[]): {
   systemMessages: ContextMessage[];
   turns: AtomicTurn[];
@@ -37,16 +62,9 @@ function groupIntoAtomicTurns(messages: ContextMessage[]): {
       }
     }
 
-    if (msg.role === "user") {
-      if (currentTurn) {
-        turns.push(currentTurn);
-      }
-      currentTurn = {
-        messages: [msg],
-        totalChars: (msg.content || "").length,
-        totalTokens: estimateMessageTokens(msg),
-      };
-      continue;
+    if (startsNewTurn(msg) && currentTurn) {
+      turns.push(currentTurn);
+      currentTurn = null;
     }
 
     if (!currentTurn) {
@@ -86,10 +104,10 @@ function groupIntoAtomicTurns(messages: ContextMessage[]): {
  *     which some providers reject (Anthropic, Gemini strict mode, etc.).
  *   - The summary is redacted of secrets before persistence.
  */
-export function compactMessagesAtomically(
+export async function compactMessagesAtomically(
   messages: ContextMessage[],
   options?: CompactionOptions & { memory?: SessionMemoryStore; sessionId?: string; summaryRole?: "user" | "system" | "assistant" }
-): CompactionResult {
+): Promise<CompactionResult> {
   const force = options?.force ?? false;
   const spec = getModelContextSpec(options?.model);
   const thresholdChars = options?.thresholdChars ?? (spec.autoCompactThresholdTokens * 3.8);
@@ -144,15 +162,46 @@ export function compactMessagesAtomically(
     };
   }
 
-  // Determine split index: keep recent turns while compacting older history
-  let keepTurns = options?.keepRecentCount ?? 2;
-  if (keepTurns > 3 && keepTurns >= turns.length) {
-    keepTurns = Math.max(1, Math.floor(turns.length / 2));
-  }
+  // Determine the split: HEAD (summarized) vs RECENT (kept verbatim).
+  //
+  // Retention is a TOKEN budget by default (`keep.tokens`), not a turn count: a
+  // couple of turns can be enormous and defeat the purpose, while a long run of
+  // small turns is still worth keeping. An explicit `keepRecentCount` still
+  // wins when a caller asked for it.
+  let splitIdx: number;
+  if (options?.keepRecentCount !== undefined) {
+    let keepTurns = options.keepRecentCount;
+    if (keepTurns > 3 && keepTurns >= turns.length) {
+      keepTurns = Math.max(1, Math.floor(turns.length / 2));
+    }
+    splitIdx = Math.max(1, turns.length - keepTurns);
+    if (splitIdx >= turns.length) {
+      splitIdx = Math.max(1, turns.length - 1);
+    }
+  } else {
+    const keepRecentTokens = options?.keepRecentTokens ?? COMPACTION_KEEP_RECENT_TOKENS;
+    // The newest turn is always kept, and at least one turn is always summarized.
+    splitIdx = turns.length - 1;
+    let kept = turns[splitIdx].totalTokens;
+    for (let i = turns.length - 2; i >= 1; i--) {
+      const next = kept + turns[i].totalTokens;
+      if (next > keepRecentTokens) break;
+      kept = next;
+      splitIdx = i;
+    }
 
-  let splitIdx = Math.max(1, turns.length - keepTurns);
-  if (splitIdx >= turns.length) {
-    splitIdx = Math.max(1, turns.length - 1);
+    // The newest USER instruction is not negotiable: it is the task the agent is
+    // working on. A single enormous paste can blow the whole keep budget, and
+    // summarizing away the request itself would leave the model with a summary
+    // of work it can no longer be asked to continue.
+    let lastUserTurn = -1;
+    for (let i = turns.length - 1; i >= 1; i--) {
+      if (turns[i].messages.some((message) => message.role === "user")) {
+        lastUserTurn = i;
+        break;
+      }
+    }
+    if (lastUserTurn > 0 && lastUserTurn < splitIdx) splitIdx = lastUserTurn;
   }
 
   const turnsToCompact = turns.slice(0, splitIdx);
@@ -225,7 +274,7 @@ export function compactMessagesAtomically(
   }
 
   const memorySnapshot = memory.getSnapshot();
-  const summaryHeader = options?.customSummaryPrefix || "[Context Compaction Summary]";
+  const summaryHeader = options?.customSummaryPrefix || CHECKPOINT_SUMMARY_MARKER;
 
   const summaryLines = [
     summaryHeader,
@@ -249,7 +298,37 @@ export function compactMessagesAtomically(
     `Note: All recent turns below are active. Continue directly with current objectives.`
   );
 
-  const rawSummary = summaryLines.join("\n");
+  const deterministicSummary = summaryLines.join("\n");
+
+  // The checkpoint being replaced is an INPUT to this one, not something to
+  // re-derive from raw history: it is handed over as `<prior-summary>` and the
+  // summarizer is told it will be discarded afterwards.
+  const priorSummary = resolvePriorSummary(options);
+
+  const headMessages = turnsToCompact.flatMap((turn) => turn.messages);
+  let modelSummary: string | null = null;
+  if (options?.summarizeWithModel) {
+    try {
+      const prompt = buildSummaryPrompt({
+        headTranscript: serializeHeadTranscript(headMessages, {
+          ...(priorSummary ? { priorSummary } : {}),
+          maxToolResultChars: SUMMARY_TOOL_RESULT_CHAR_CAP,
+        }),
+        ...(priorSummary ? { priorSummary } : {}),
+      });
+      const answer = await options.summarizeWithModel({ prompt, maxTokens: SUMMARY_MAX_TOKENS });
+      const cleaned = typeof answer === "string" ? answer.trim() : "";
+      if (cleaned.length > 0) modelSummary = cleaned;
+    } catch {
+      // A failed summary must not lose the compaction: the deterministic
+      // summary below still produces a valid, smaller checkpoint.
+      modelSummary = null;
+    }
+  }
+
+  const rawSummary = modelSummary
+    ? `${summaryHeader}\n${modelSummary}`
+    : deterministicSummary;
   // Secret redaction BEFORE persisting/summary: keys, bearer tokens, blocks.
   const redactedSummary = redactSecrets(rawSummary);
 
@@ -341,5 +420,25 @@ export function compactMessagesAtomically(
     originalTokens: totalTokens,
     newTokens,
     savedTokens,
+    summarySource: modelSummary ? "model" : "deterministic",
+    chainedFromPriorSummary: priorSummary !== undefined,
   };
+}
+
+/**
+ * The checkpoint this compaction replaces, if any. Session state is the
+ * authority; an explicit option exists for callers that own the checkpoint
+ * themselves (tests, subagent isolation).
+ */
+function resolvePriorSummary(
+  options: (CompactionOptions & { sessionId?: string }) | undefined,
+): string | undefined {
+  if (options?.priorSummary && options.priorSummary.trim()) return options.priorSummary.trim();
+  if (!options?.sessionId) return undefined;
+  try {
+    const existing = getSessionContext(options.sessionId).summary;
+    return existing && existing.trim() ? existing.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }

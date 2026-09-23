@@ -437,7 +437,7 @@ describe("COMPACTION (14–18) — atomic tool-call pairs", () => {
     expect(repaired.find((m) => m.role === "tool" && m.tool_call_id === "call_rep")).toBeTruthy();
   });
 
-  test("17. repeated compaction is stable (same input → same output)", () => {
+  test("17. repeated compaction is stable (same input → same output)", async () => {
     const sessionId = uniqueId("stable");
     const mem = getSessionMemory(sessionId);
     const msgs: ContextMessage[] = [
@@ -445,14 +445,14 @@ describe("COMPACTION (14–18) — atomic tool-call pairs", () => {
       { role: "user", content: "long conversation " + "x".repeat(8000) },
       { role: "assistant", content: "ack " + "y".repeat(8000) },
     ];
-    const r1 = compactMessagesAtomically(msgs, {
+    const r1 = await compactMessagesAtomically(msgs, {
       force: true,
       summaryRole: "user",
       model: "test",
       sessionId,
       memory: mem,
     });
-    const r2 = compactMessagesAtomically(r1.messages, {
+    const r2 = await compactMessagesAtomically(r1.messages, {
       force: true,
       summaryRole: "user",
       model: "test",
@@ -464,7 +464,7 @@ describe("COMPACTION (14–18) — atomic tool-call pairs", () => {
     expect(r2.messages.length).toBe(r1.messages.length);
   });
 
-  test("18. session A compaction does not affect B", () => {
+  test("18. session A compaction does not affect B", async () => {
     const A = uniqueId("cmpA");
     const B = uniqueId("cmpB");
     const memA = getSessionMemory(A);
@@ -475,7 +475,7 @@ describe("COMPACTION (14–18) — atomic tool-call pairs", () => {
     const msgs: ContextMessage[] = [
       { role: "user", content: "x".repeat(8000) },
     ];
-    compactMessagesAtomically(msgs, {
+    await compactMessagesAtomically(msgs, {
       force: true,
       sessionId: A,
       memory: memA,
@@ -494,7 +494,7 @@ describe("COMPACTION (14–18) — atomic tool-call pairs", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("SUMMARY (19–22) — provider-compatible", () => {
-  test("19. summary keeps goals/files/errors", () => {
+  test("19. summary keeps goals/files/errors", async () => {
     const sessionId = uniqueId("sum");
     const ctx = getSessionContext(sessionId);
     const mem = ctx.memory;
@@ -511,7 +511,7 @@ describe("SUMMARY (19–22) — provider-compatible", () => {
       { role: "user", content: "do thing B " + "x".repeat(200) },
       { role: "assistant", content: "ack B" },
     ];
-    const r = compactMessagesAtomically(msgs, {
+    const r = await compactMessagesAtomically(msgs, {
       force: true,
       sessionId,
       memory: mem,
@@ -527,7 +527,7 @@ describe("SUMMARY (19–22) — provider-compatible", () => {
     expect(summary!.content as string).toContain("important goal");
   });
 
-  test("20. summary redacts secrets", () => {
+  test("20. summary redacts secrets", async () => {
     const secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
     const msgs: ContextMessage[] = [
       { role: "system", content: "sys" },
@@ -536,7 +536,7 @@ describe("SUMMARY (19–22) — provider-compatible", () => {
       { role: "user", content: "second turn " + "z".repeat(200) },
       { role: "assistant", content: "ack" },
     ];
-    const r = compactMessagesAtomically(msgs, {
+    const r = await compactMessagesAtomically(msgs, {
       force: true,
       model: "test",
       summaryRole: "user",
@@ -549,7 +549,7 @@ describe("SUMMARY (19–22) — provider-compatible", () => {
     expect(summary!.content as string).not.toContain(secret);
   });
 
-  test("21. summary placement provider compatible (default role='user', not 'system')", () => {
+  test("21. summary placement provider compatible (default role='user', not 'system')", async () => {
     const msgs: ContextMessage[] = [
       { role: "system", content: "primary system" },
       { role: "user", content: "turn A " + "x".repeat(8000) },
@@ -557,7 +557,7 @@ describe("SUMMARY (19–22) — provider-compatible", () => {
       { role: "user", content: "turn B" },
       { role: "assistant", content: "ack B" },
     ];
-    const r = compactMessagesAtomically(msgs, {
+    const r = await compactMessagesAtomically(msgs, {
       force: true,
       model: "test",
       summaryRole: "user",
@@ -571,13 +571,13 @@ describe("SUMMARY (19–22) — provider-compatible", () => {
     expect(systemAfter0).toBeUndefined();
   });
 
-  test("22. primary system message remains at index 0 after compaction", () => {
+  test("22. primary system message remains at index 0 after compaction", async () => {
     const msgs: ContextMessage[] = [
       { role: "system", content: "PRIMARY-SYSTEM" },
       { role: "user", content: "x".repeat(8000) },
       { role: "assistant", content: "y".repeat(8000) },
     ];
-    const r = compactMessagesAtomically(msgs, {
+    const r = await compactMessagesAtomically(msgs, {
       force: true,
       model: "test",
       summaryRole: "user",

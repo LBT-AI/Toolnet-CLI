@@ -15,44 +15,51 @@
 
 import { modelCatalog } from "../models/catalog";
 import type { ModelDefinition } from "../models/types";
-import type { LimitSource, ModelLimits } from "./types";
+import type { LimitSource, ModelLimits, UsableInput } from "./types";
 
 /** Conservative assumptions for a model with no declared limits. */
 export const FALLBACK_CONTEXT_WINDOW = 32_000;
 export const FALLBACK_OUTPUT_TOKENS = 4_096;
 
 /**
- * Output reservation is capped: reserving a model's full output allowance can
- * withhold more input capacity than the answer will ever need, while reserving
- * nothing guarantees an overflow on the first long reply.
+ * Capacity withheld for the answer when a model declares its input limit.
+ *
+ * The reservation is capped because reserving a model's full output allowance
+ * can withhold more input capacity than the answer will ever need, while
+ * reserving nothing guarantees an overflow on the first long reply. This is the
+ * ONLY global number in the budget: which rule applies, and how large `usable`
+ * is, comes from each model's own declared limits.
  */
-export const OUTPUT_RESERVE_CAP = 20_000;
+export const COMPACTION_BUFFER = 20_000;
+
+/**
+ * How much of the newest conversation survives a compaction VERBATIM.
+ *
+ * This is the `keep` budget, not a threshold: everything older than the newest
+ * ~8K tokens is summarized into the checkpoint, while the tail stays in the
+ * request untouched so the model keeps the exact context it is working on.
+ * Completely independent of `COMPACTION_BUFFER`, which is about the answer.
+ */
+export const COMPACTION_KEEP_RECENT_TOKENS = 8_000;
 
 interface LegacySpec {
   contextWindow: number;
   maxOutputTokens: number;
-  /**
-   * The trigger this identity compacted at before the canonical budget existed.
-   * Kept so sessions on these names keep their cadence instead of suddenly
-   * filling a window they were never measured against.
-   */
-  compactionThreshold: number;
 }
 
 /** Retained verbatim so previously-working model names keep their capacity. */
 const LEGACY_SPECS: Record<string, LegacySpec> = {
-  "openai/gpt-4o": { contextWindow: 128_000, maxOutputTokens: 4_096, compactionThreshold: 96_000 },
-  "openai/gpt-4o-mini": { contextWindow: 128_000, maxOutputTokens: 4_096, compactionThreshold: 96_000 },
-  "anthropic/claude-3-5-sonnet": { contextWindow: 200_000, maxOutputTokens: 8_192, compactionThreshold: 150_000 },
-  "anthropic/claude-3-haiku": { contextWindow: 200_000, maxOutputTokens: 4_096, compactionThreshold: 150_000 },
-  "google/gemini-2.0-flash": { contextWindow: 1_048_576, maxOutputTokens: 8_192, compactionThreshold: 500_000 },
-  "google/gemini-1.5-pro": { contextWindow: 2_097_152, maxOutputTokens: 8_192, compactionThreshold: 800_000 },
-  "deepseek/deepseek-chat": { contextWindow: 64_000, maxOutputTokens: 4_096, compactionThreshold: 48_000 },
-  "deepseek/deepseek-coder": { contextWindow: 64_000, maxOutputTokens: 4_096, compactionThreshold: 48_000 },
+  "openai/gpt-4o": { contextWindow: 128_000, maxOutputTokens: 4_096 },
+  "openai/gpt-4o-mini": { contextWindow: 128_000, maxOutputTokens: 4_096 },
+  "anthropic/claude-3-5-sonnet": { contextWindow: 200_000, maxOutputTokens: 8_192 },
+  "anthropic/claude-3-haiku": { contextWindow: 200_000, maxOutputTokens: 4_096 },
+  "google/gemini-2.0-flash": { contextWindow: 1_048_576, maxOutputTokens: 8_192 },
+  "google/gemini-1.5-pro": { contextWindow: 2_097_152, maxOutputTokens: 8_192 },
+  "deepseek/deepseek-chat": { contextWindow: 64_000, maxOutputTokens: 4_096 },
+  "deepseek/deepseek-coder": { contextWindow: 64_000, maxOutputTokens: 4_096 },
   default: {
     contextWindow: FALLBACK_CONTEXT_WINDOW,
     maxOutputTokens: FALLBACK_OUTPUT_TOKENS,
-    compactionThreshold: 8_000,
   },
 };
 
@@ -97,14 +104,34 @@ export function findCatalogModel(model: string | undefined, catalog = modelCatal
  * Resolve limits with provenance. A catalog entry that declares only one of the
  * two values is still used for the value it declares; the other falls back.
  */
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * A declared input limit is only meaningful when it is smaller than the window
+ * it belongs to. A value at or above the window says nothing new, so it is
+ * treated as undeclared rather than as a third, contradictory number.
+ */
+function inputLimitFor(
+  contextWindow: number,
+  declared: unknown,
+): number | undefined {
+  const input = positiveNumber(declared);
+  if (input === undefined) return undefined;
+  return input < contextWindow ? input : undefined;
+}
+
 export function resolveModelLimits(model: string | undefined, catalog = modelCatalog): ModelLimits {
   const definition = findCatalogModel(model, catalog);
   if (definition) {
     const contextWindow = definition.contextWindow ?? definition.limits?.contextWindow;
     const maxOutputTokens = definition.maxOutputTokens ?? definition.limits?.maxOutputTokens;
     if (typeof contextWindow === "number" && contextWindow > 0) {
+      const inputLimit = inputLimitFor(contextWindow, definition.limits?.input);
       return {
         contextWindow,
+        ...(inputLimit !== undefined ? { inputLimit } : {}),
         maxOutputTokens:
           typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? maxOutputTokens : FALLBACK_OUTPUT_TOKENS,
         source: "catalog",
@@ -118,7 +145,6 @@ export function resolveModelLimits(model: string | undefined, catalog = modelCat
       contextWindow: legacy.contextWindow,
       maxOutputTokens: legacy.maxOutputTokens,
       source: "legacy_table",
-      compactionThreshold: legacy.compactionThreshold,
     };
   }
 
@@ -126,9 +152,41 @@ export function resolveModelLimits(model: string | undefined, catalog = modelCat
     contextWindow: FALLBACK_CONTEXT_WINDOW,
     maxOutputTokens: FALLBACK_OUTPUT_TOKENS,
     source: "fallback",
-    // An unknown model was budgeted at three quarters of the conservative
-    // window before this layer existed; keep that rather than compacting later.
-    compactionThreshold: 24_000,
+  };
+}
+
+/**
+ * Resolve how much of a model's capacity this request may use.
+ *
+ * Rule selection is metadata-driven, so the trigger is per-model:
+ *   - the model declares an input limit → `input - reserved`;
+ *   - otherwise → `context - maxOutputTokens`.
+ *
+ * `configuredReserved` lets a deployment override the withheld amount for the
+ * first rule; it never widens capacity past the declared input limit.
+ */
+export function resolveUsableInput(
+  limits: Pick<ModelLimits, "contextWindow" | "maxOutputTokens"> & { inputLimit?: number | undefined },
+  configuredReserved?: number,
+): UsableInput {
+  if (limits.inputLimit !== undefined && limits.inputLimit > 0) {
+    const reserved = Math.max(
+      1,
+      configuredReserved !== undefined
+        ? configuredReserved
+        : Math.min(COMPACTION_BUFFER, limits.maxOutputTokens),
+    );
+    return {
+      usable: Math.max(0, limits.inputLimit - reserved),
+      reserved,
+      rule: "input_minus_reserved",
+    };
+  }
+
+  return {
+    usable: Math.max(0, limits.contextWindow - limits.maxOutputTokens),
+    reserved: limits.maxOutputTokens,
+    rule: "context_minus_output",
   };
 }
 

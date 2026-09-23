@@ -27,18 +27,20 @@ export function estimateMessageChars(messages: Msg[]): number {
   return engineEstimateChars(messages as ContextMessage[]);
 }
 
-export function compactMessages(
+export async function compactMessages(
   messages: Msg[],
   options?: {
     force?: boolean;
     thresholdChars?: number;
     keepRecentCount?: number;
+    summarizeWithModel?: (request: { prompt: string; maxTokens: number }) => Promise<string>;
   }
-): CompactionResult {
-  const result = compactMessagesAtomically(messages as ContextMessage[], {
+): Promise<CompactionResult> {
+  const result = await compactMessagesAtomically(messages as ContextMessage[], {
     force: options?.force,
     thresholdChars: options?.thresholdChars ?? DEFAULT_COMPACTION_THRESHOLD_CHARS,
     keepRecentCount: options?.keepRecentCount ?? 6,
+    ...(options?.summarizeWithModel ? { summarizeWithModel: options.summarizeWithModel } : {}),
   });
 
   return {

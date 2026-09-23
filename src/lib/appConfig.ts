@@ -44,6 +44,12 @@ export interface CustomModelEntry {
   displayName?: string;
   capabilities?: Partial<Record<"tools" | "nativeToolCalls" | "streaming" | "reasoning" | "vision" | "structuredOutput" | "jsonMode", boolean>>;
   contextWindow?: number;
+  /**
+   * Declared INPUT capacity, for endpoints whose context window includes the
+   * answer. Optional: absent means the endpoint declares no separate limit, and
+   * the budget falls back to `contextWindow - maxOutputTokens`.
+   */
+  inputTokens?: number;
   maxOutputTokens?: number;
 }
 

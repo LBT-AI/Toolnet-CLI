@@ -58,6 +58,11 @@ export interface AgentModelRequest {
   reasoningEffort?: "low" | "medium" | "high";
   /** Sampling temperature — planner-style callers rely on low values. */
   temperature?: number;
+  /**
+   * Upper bound on the answer. Used by callers whose output is bounded by
+   * contract (checkpoint summaries), not as a general preference knob.
+   */
+  maxTokens?: number;
  /** session id for hook metadata (observability only). */
   sessionId?: string;
 }
@@ -366,6 +371,7 @@ export class ModelAdapter {
       signal: req.signal,
       reasoningEffort,
       temperature,
+      ...(typeof req.maxTokens === "number" && req.maxTokens > 0 ? { max_tokens: req.maxTokens } : {}),
       ...(streaming ? { stream: true } : {}),
     };
 
