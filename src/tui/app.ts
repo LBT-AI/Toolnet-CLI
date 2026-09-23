@@ -214,6 +214,7 @@ function buildFrame(): string {
     agentMode: tuiState.agentMode,
     bypassMode: tuiState.bypassMode,
     lastTokens: tuiState.lastTokens,
+    sessionTitle: tuiState.sessionTitle,
   }));
 
   // Erase anything below the freshly-painted frame (prevents stale duplicate

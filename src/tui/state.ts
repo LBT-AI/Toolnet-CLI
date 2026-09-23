@@ -68,6 +68,13 @@ export class TuiState {
     this._currentSessionId = sessionId;
     bindCurrentContextSession(sessionId);
   }
+  /**
+   * Durable session title (`title` on the session record). Undefined while the
+   * session is still untitled — the workspace path is only a DISPLAY fallback
+   * and is never written here. Populated by the background auto-title task, an
+   * explicit rename, or a resume.
+   */
+  sessionTitle: string | undefined = undefined;
   currentModel = "";
   agentMode: "Build" | "Plan" = "Build";
   /** Response language preference — "auto" follows the user's latest message. */
@@ -892,6 +899,7 @@ export class TuiState {
     this.availableSessions = summaries.map((s) => ({
       sessionId: s.id,
       name: s.title,
+      preview: s.preview,
       model: s.model,
       provider: s.provider,
       messagesCount: s.messageCount,
@@ -1000,6 +1008,8 @@ export class TuiState {
 
     this.currentSessionId = loaded.sessionId;
     this.replaceMessages((loaded.messages as any) || []);
+    this.sessionTitle = loaded.title
+      ?? (typeof loaded.metadata?.name === "string" && loaded.metadata.name ? loaded.metadata.name : undefined);
     if (loaded.metadata?.model) this.currentModel = loaded.metadata.model;
     if (loaded.metadata?.provider) this.providerName = loaded.metadata.provider;
     if (loaded.metadata?.agentMode) this.agentMode = loaded.metadata.agentMode;
@@ -1045,10 +1055,13 @@ export class TuiState {
         const next = remaining[0];
         this.currentSessionId = next.sessionId;
         this.replaceMessages(next.messages as any);
+        this.sessionTitle = next.title
+          ?? (typeof next.metadata?.name === "string" && next.metadata.name ? next.metadata.name : undefined);
         if (next.metadata?.model) this.currentModel = next.metadata.model;
       } else {
         const newS = createNewSession();
         this.currentSessionId = newS.sessionId;
+        this.sessionTitle = undefined;
         this.clearMessages();
         messageQueue.clear();
       }

@@ -304,9 +304,11 @@ describe("Session UX & Interactive Manager Regression Suite", () => {
 
     const stripped = stripAnsi(box);
     expect(stripped).toContain("Sessions (1 session)");
-    expect(stripped).toContain(curId);
+    // Title-first picker: with no title/preview, the project name is shown
+    // instead of the raw session id.
     expect(stripped).toContain("(current)");
     expect(stripped).toContain("10 msgs");
     expect(stripped).toContain("enter resume");
+    expect(stripped).not.toContain(curId);
   });
 });

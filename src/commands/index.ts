@@ -59,6 +59,8 @@ export interface CommandContext {
   setBypassMode?: (enabled: boolean, level?: string) => void;
   getCurrentSessionId?: () => string;
   setCurrentSessionId?: (id: string) => void;
+  /** Reflect a session title (rename or background generation) in the running UI. */
+  setSessionTitle?: (title: string | undefined) => void;
   getMessages?: () => any[];
   setMessages?: (messages: any[]) => void;
   clearMessages?: () => void;

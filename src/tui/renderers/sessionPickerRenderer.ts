@@ -1,10 +1,14 @@
 import { A } from "../../term";
 import { stripAnsi, truncate } from "../layout";
 import { composeBox, computeBoxGeometry } from "./composeBox";
+import { workspaceDisplayName } from "../../lib/sessionTitle";
 
 export interface SessionItem {
   sessionId: string;
+  /** Durable session title. */
   name?: string;
+  /** Preview of the first substantive task — shown only while untitled. */
+  preview?: string;
   model?: string;
   provider?: string;
   messagesCount: number;
@@ -105,7 +109,10 @@ export function renderSessionPickerBox(
       const isCur = s.sessionId === currentSessionId || s.isCurrent;
 
       const maxNameLen = Math.max(16, contentMax - 12);
-      const cleanName = truncate(s.name ? `${s.name} (${s.sessionId})` : s.sessionId, maxNameLen);
+      // Title first, then a preview of the first real task, then the project
+      // name, then the id. A long prompt is never dumped here.
+      const fallback = s.preview || workspaceDisplayName(s.workspace) || s.sessionId;
+      const cleanName = truncate(s.name ? `${s.name} (${s.sessionId})` : fallback, maxNameLen);
       const curBadge = isCur ? " " + A.fgCyan + "(current)" + A.reset : "";
 
       if (isSel) {

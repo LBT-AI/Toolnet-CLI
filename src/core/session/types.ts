@@ -233,9 +233,21 @@ export interface SessionRecord {
  * Cheap list metadata. The picker and `continue` read this instead of loading
  * every transcript, which keeps listing O(index) rather than O(transcripts).
  */
+/**
+ * Where a session's `title` came from. `manual` (the user renamed it) always
+ * beats `auto` (generated in the background from the first real task).
+ */
+export type SessionTitleSource = "auto" | "manual";
+
 export interface SessionIndexEntry {
   id: string;
   title?: string;
+  /**
+   * First substantive user message, for sessions that are still untitled. Kept
+   * in the index so the picker can label a session without loading every
+   * transcript (listing stays O(index)).
+   */
+  preview?: string;
   workspacePath: string;
   workspaceKey: string;
   createdAt: string;

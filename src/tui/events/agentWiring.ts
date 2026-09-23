@@ -27,6 +27,8 @@ import { assertPrimarySystemMessageInvariant } from "../../lib/context";
 import { getToolById } from "../../lib/toolsCatalog";
 import { normalizeSectionId } from "../../lib/harnessCatalog";
 import { matchGreetingFastPath } from "../../lib/greeting";
+import { requestAutoTitle } from "../../lib/autoTitle";
+import { makeTitleGenerator } from "../../lib/harness/titleGenerator";
 
 const PLANNER_SYSTEM_PROMPT = `You are ToolNet Planner. Your goal is to analyze the user request, explore the codebase using read-only tools, and create a step-by-step plan. Do not execute the plan yourself. Use the save_plan tool to save the plan.`;
 
@@ -313,6 +315,25 @@ export async function sendMessage(text: string): Promise<void> {
     assertPrimarySystemMessageInvariant(apiMessages as any);
 
     const toolsOverride = buildToolsForMode(tuiState.agentMode);
+
+    // ── Session title (background, never awaited) ────────────────
+    // The turn below starts immediately; the title is only a label. A session
+    // is titled once, from its first substantive task — greetings and nudges
+    // fall through `isSubstantiveTask`, resumed/renamed sessions are skipped by
+    // the service, and `SessionStore.setAutoTitle` refuses to overwrite a
+    // manual rename that races with us.
+    void requestAutoTitle({
+      sessionId: tuiState.currentSessionId,
+      prompt: text,
+      generate: makeTitleGenerator({
+        provider,
+        model: tuiState.currentModel || getActiveDefaultModel() || "default",
+      }),
+      onTitle: (title) => {
+        tuiState.sessionTitle = title;
+        tuiState.requestRender();
+      },
+    });
 
     tuiState.setStatus("Streaming response…");
 
@@ -688,6 +709,10 @@ export function buildTuiCommandContext(): any {
     openSkillsPicker: (initialSkillName?: string) => tuiState.openSkillsPicker(initialSkillName),
     openQueueManager: () => tuiState.openQueueManager(),
     openSessionPicker: () => tuiState.openSessionPicker(),
+    setSessionTitle: (title?: string) => {
+      tuiState.sessionTitle = title;
+      tuiState.requestRender();
+    },
     openToolsPanel: (initialToolName?: string) => {
       if (initialToolName && getToolById(initialToolName)) {
         tuiState.openToolDetail(initialToolName);

@@ -41,6 +41,7 @@ import {
   type SessionPaths,
 } from "./paths";
 import { replaySession, selectCheckpointHead } from "./resume";
+import { buildSessionPreview } from "../../lib/sessionTitle";
 import {
   ACTIVE_SESSION_STATUSES,
   SESSION_SCHEMA_VERSION,
@@ -315,9 +316,11 @@ export class SessionStore {
   }
 
   private entryFromRecord(record: SessionRecord): SessionIndexEntry {
+    const preview = record.title ? null : buildSessionPreview(record.messages);
     return {
       id: record.id,
       ...(record.title ? { title: record.title } : {}),
+      ...(preview ? { preview } : {}),
       workspacePath: record.workspace.path,
       workspaceKey: record.workspace.key,
       createdAt: record.createdAt,
@@ -694,7 +697,50 @@ export class SessionStore {
     // `metadata.name` is the long-standing display field front-ends read; the
     // structured `title` is its durable twin. Keep both in step so existing
     // consumers keep working.
-    record.metadata = { ...record.metadata, name: title };
+    record.metadata = { ...record.metadata, name: title, titleSource: "manual" };
+    record.updatedAt = new Date(this.clock()).toISOString();
+    this.persistRecord(record);
+    this.updateIndex(record);
+    return record;
+  }
+
+  /**
+   * Record a title generated from the session's first substantive task.
+   *
+   * Best-effort and race-safe by construction: it is a no-op when the session
+   * has been removed, when a HUMAN already named it (manual always wins, even if
+   * the rename happened while the generator was still running), and when a newer
+   * auto title already landed. Returns the updated record, or null when the
+   * write was refused.
+   */
+  setAutoTitle(
+    sessionId: string,
+    title: string,
+    options: { revision?: number } = {},
+  ): SessionRecord | null {
+    const clean = title.trim();
+    if (!clean) return null;
+    const id = normalizeSessionId(sessionId);
+    const record = this.load(id);
+    if (!record) return null;
+    // `manual` wins. Records written before titleSource existed used
+    // `metadata.name` as the human-set display name — treat that as manual too.
+    const source = record.metadata?.titleSource;
+    const legacyManual = !source && typeof record.metadata?.name === "string" && record.metadata.name.length > 0;
+    if (source === "manual" || legacyManual) return null;
+
+    // A newer auto title is never overwritten by an older generator.
+    const revision = options.revision ?? 1;
+    const current = Number(record.metadata?.autoTitleRevision ?? 0);
+    if (source === "auto" && current >= revision) return null;
+
+    record.title = clean;
+    record.metadata = {
+      ...record.metadata,
+      name: clean,
+      titleSource: "auto",
+      autoTitleRevision: revision,
+    };
     record.updatedAt = new Date(this.clock()).toISOString();
     this.persistRecord(record);
     this.updateIndex(record);

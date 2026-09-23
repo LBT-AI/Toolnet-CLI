@@ -343,11 +343,13 @@ describe("TUI Renderers Unit Tests", () => {
     });
     const stripped = stripAnsi(sessionBox);
     expect(stripped).toContain("Sessions (2 sessions)");
-    expect(stripped).toContain("sess_1234567890_abc");
+    // Title-first picker: untitled sessions fall back to the project name,
+    // never the raw session id.
     expect(stripped).toContain("(current)");
     expect(stripped).toContain("toolnet/openai/gpt-4o");
     expect(stripped).toContain("8 msgs");
-    expect(stripped).toContain("sess_9876543210_xyz");
+    expect(stripped).not.toContain("sess_1234567890_abc");
+    expect(stripped).not.toContain("sess_9876543210_xyz");
     expect(stripped).toContain("root/other-project");
     expect(stripped).toContain("enter resume");
     expect(stripped).toContain("d delete");

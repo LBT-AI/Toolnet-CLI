@@ -22,6 +22,8 @@ export interface FooterState {
   lastTokens?: string;
   agentMode?: string;
   bypassMode?: boolean;
+  /** Durable session title; omitted (never an empty separator) when absent. */
+  sessionTitle?: string;
 }
 
 /**
@@ -210,6 +212,15 @@ export function renderFooter(
   }
   if (lastTokens) segments.push(A.reset + A.fgSubtext + lastTokens + A.reset);
   segments.push(item(wsFg, wsPath || process.cwd(), 28));
+  // Session title — only when the session actually has one, so an untitled
+  // session shows `model · workspace` with no dangling separator.
+  const sessionTitle = state?.sessionTitle ?? tuiState.sessionTitle;
+  if (sessionTitle) {
+    // The title takes whatever width is left after model/mode/workspace, so a
+    // wide terminal shows the whole label instead of a fixed stub.
+    const used = visibleWidth(" " + segments.join(sep));
+    segments.push(item(A.fgSubtext, sessionTitle, Math.max(12, cols - 2 - used)));
+  }
 
   const content = " " + segments.join(sep);
 

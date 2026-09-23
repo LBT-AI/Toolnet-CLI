@@ -169,6 +169,9 @@ function rename(args: string[], ctx: CommandContext) {
   const name = args.join(" ");
   const activeId = ctx.getCurrentSessionId ? ctx.getCurrentSessionId() : "";
   if (activeId && renameSessionFile(activeId, name)) {
+    // A rename is MANUAL: it wins over any pending background auto-title and is
+    // reflected in the status line immediately (no restart required).
+    ctx.setSessionTitle?.(name);
     addMessage("assistant", `\u001b[32m✓\u001b[0m Session renamed to: \u001b[1m${name}\u001b[0m`);
   } else {
     addMessage("assistant", `\u001b[31mFailed to rename session.\u001b[0m`);
