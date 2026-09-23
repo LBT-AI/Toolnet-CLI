@@ -4,6 +4,7 @@ import { getAllCommands } from "../../commands";
 import { providerPicker } from "../providerPicker";
 import { startOAuthDeviceFlow } from "../events/agentWiring";
 import { MultilineInputBuffer } from "./multilineInput";
+import type { ComposerDraftSnapshot } from "./composerDocument";
 import { getKeyManagerProviders } from "../renderers/keyManagerRenderer";
 import { saveCliKey, deleteCliKey, getCliKey } from "../../lib/keys";
 import { syncProviderOnKeySave, setActiveProvider } from "../../providers";
@@ -16,6 +17,13 @@ import { overlayIsActive, handleOverlayKey } from "./overlayInput";
 import { workspaceAccessAnimation } from "../animations/modalAnimation";
 
 const inputBufferManager = new MultilineInputBuffer();
+
+/**
+ * The draft parked when prompt-history navigation began. Stored as a document
+ * snapshot (not the display string) so collapsed paste blocks come back
+ * verbatim instead of being re-typed as literal `[N lines pasted]` text.
+ */
+let savedDraft: ComposerDraftSnapshot | null = null;
 
 export interface InputCallbacks {
   renderAll?: () => void;
@@ -213,9 +221,12 @@ function _handlePasteInternal(
     return;
   }
 
-  // 5. Default: Command line multiline input
+  // 5. Default: Command line multiline input.
+  // A large paste becomes ONE atomic collapsed block (token in the composer,
+  // full text preserved for submit); small pastes stay inline as before.
   const sanitized = stripBracketedPaste(pastedText).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
-  inputBufferManager.insertText(sanitized);
+  if (!sanitized) return;
+  inputBufferManager.insertPaste(sanitized);
   tuiState.inputBuffer = inputBufferManager.getText();
   tuiState.cursorPos = inputBufferManager.getCursor();
   tuiState.cmdSuggestIdx = 0;
@@ -954,7 +965,7 @@ function _handleKeyInternal(
       if (tuiState.activeToolActivity && tuiState.activeToolActivity.status === "running") {
         const cancelled = tuiState.cancelActiveToolActivity();
         if (cancelled) {
-          tuiState.messages.push({
+          tuiState.appendMessage({
             role: "tool",
             tool_call_id: cancelled.callId,
             name: cancelled.name,
@@ -1112,7 +1123,7 @@ function _handleKeyInternal(
       if (tuiState.activeToolActivity && tuiState.activeToolActivity.status === "running") {
         const cancelled = tuiState.cancelActiveToolActivity();
         if (cancelled) {
-          tuiState.messages.push({
+          tuiState.appendMessage({
             role: "tool",
             tool_call_id: cancelled.callId,
             name: cancelled.name,
@@ -1160,8 +1171,10 @@ function _handleKeyInternal(
 
   // 13. Page Up / Page Down — scrolling (detaches from the tail; PgUp/PgDn do
   // not re-arm follow-tail — only scrolling back to the bottom does).
-  if (hex === "1b5b357e") { scrollPage(tuiState.chatViewport, tuiState.messages.length, 30, 1); renderAll(); return; } // PgUp
-  if (hex === "1b5b367e") { scrollPage(tuiState.chatViewport, tuiState.messages.length, 30, -1); renderAll(); return; } // PgDn
+  const chatRows = Math.max(1, tuiState.chatRows);
+  const totalChatRows = tuiState.chatLineMessageIds.length;
+  if (hex === "1b5b357e") { scrollPage(tuiState.chatViewport, totalChatRows, chatRows, 1, tuiState.chatLineMessageIds); renderAll(); return; } // PgUp
+  if (hex === "1b5b367e") { scrollPage(tuiState.chatViewport, totalChatRows, chatRows, -1, tuiState.chatLineMessageIds); renderAll(); return; } // PgDn
 
   // 14. Shift+Enter / Alt+Enter / Ctrl+J — Insert newline in input
   const isShiftEnter =
@@ -1180,18 +1193,24 @@ function _handleKeyInternal(
   }
 
   // 15. Up / Down arrow navigation
-  if (hex === "1b5b41" || hex === "1b4f41") { // Up arrow
-    if (inputBufferManager.isMultiline() && !inputBufferManager.isAtFirstLine()) {
-      inputBufferManager.moveUp();
-      tuiState.inputBuffer = inputBufferManager.getText();
-      tuiState.cursorPos = inputBufferManager.getCursor();
+  if (hex === "1b5b41" || hex === "1b4f41" || hex === "10" || s === "\x10") { // Up / Ctrl+P
+    if (hex === "1b5b41" || hex === "1b4f41") {
+      if (inputBufferManager.isMultiline() && !inputBufferManager.isAtFirstLine()) {
+        inputBufferManager.moveUp();
+        tuiState.inputBuffer = inputBufferManager.getText();
+        tuiState.cursorPos = inputBufferManager.getCursor();
+        renderAll();
+        return;
+      }
+      scrollUp(tuiState.chatViewport, totalChatRows, chatRows, tuiState.chatLineMessageIds);
       renderAll();
       return;
     }
-    // History up
     if (tuiState.promptHistory.length > 0) {
       if (tuiState.historyIndex === -1) {
-        tuiState.savedInput = inputBufferManager.getText();
+        // Park the whole draft (blocks included), not just what it displays.
+        tuiState.savedInput = inputBufferManager.getContent();
+        savedDraft = inputBufferManager.snapshot();
         tuiState.historyIndex = tuiState.promptHistory.length - 1;
       } else if (tuiState.historyIndex > 0) {
         tuiState.historyIndex--;
@@ -1203,8 +1222,7 @@ function _handleKeyInternal(
       renderAll();
       return;
     }
-    // Scroll chat up if history empty
-    scrollUp(tuiState.chatViewport, tuiState.messages.length, 30);
+    scrollUp(tuiState.chatViewport, totalChatRows, chatRows, tuiState.chatLineMessageIds);
     renderAll();
     return;
   }
@@ -1217,7 +1235,6 @@ function _handleKeyInternal(
       renderAll();
       return;
     }
-    // History down
     if (tuiState.historyIndex !== -1) {
       if (tuiState.historyIndex < tuiState.promptHistory.length - 1) {
         tuiState.historyIndex++;
@@ -1225,15 +1242,19 @@ function _handleKeyInternal(
         inputBufferManager.setText(histText);
       } else {
         tuiState.historyIndex = -1;
-        inputBufferManager.setText(tuiState.savedInput);
+        if (savedDraft) {
+          inputBufferManager.restore(savedDraft);
+          savedDraft = null;
+        } else {
+          inputBufferManager.setText(tuiState.savedInput);
+        }
       }
       tuiState.inputBuffer = inputBufferManager.getText();
       tuiState.cursorPos = inputBufferManager.getCursor();
       renderAll();
       return;
     }
-    // Scroll chat down
-    scrollDown(tuiState.chatViewport, tuiState.messages.length, 30);
+    scrollDown(tuiState.chatViewport, totalChatRows, chatRows, tuiState.chatLineMessageIds);
     renderAll();
     return;
   }
@@ -1252,9 +1273,11 @@ function _handleKeyInternal(
     return;
   }
 
-  // 17. Enter — submit prompt or enqueue if working
+  // 17. Enter — submit prompt or enqueue if working.
+  // Submit serializes the LOGICAL document: collapsed paste blocks contribute
+  // their real content, never the token shown in the composer.
   if (hex === "0d") {
-    const text = inputBufferManager.getText().trim();
+    const text = inputBufferManager.getContent().trim();
     if (!text) return;
     if (tuiState.appState !== "ready" && text !== "/exit") return;
 

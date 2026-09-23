@@ -1,140 +1,141 @@
+import {
+  ComposerDocument,
+  type ComposerSegment,
+  type ComposerDraftSnapshot,
+  type InsertPasteResult,
+  type PastedBlock,
+} from "./composerDocument";
+
+/**
+ * Composer edit buffer.
+ *
+ * Thin, stable facade over `ComposerDocument`: the document owns the segmented
+ * draft (text runs + atomic collapsed paste blocks) and this class keeps the
+ * long-standing API the input handler, layout and renderers already depend on.
+ *
+ * `getText()` is the DISPLAY string (paste tokens included) — that is what the
+ * renderer draws. `getContent()` is what submit must send. Only a real paste
+ * event creates a block, so typed multi-line text is never re-classified.
+ */
 export class MultilineInputBuffer {
-  private text: string;
-  private cursor: number;
+  private readonly doc: ComposerDocument;
 
   constructor(initialText = "", initialCursor?: number) {
-    this.text = initialText;
-    this.cursor = initialCursor !== undefined ? initialCursor : initialText.length;
+    this.doc = new ComposerDocument(initialText, initialCursor);
   }
 
+  /** The display string (collapsed paste blocks render as short tokens). */
   getText(): string {
-    return this.text;
+    return this.doc.getText();
+  }
+
+  /** The full text submit must send — real paste content, never a token. */
+  getContent(): string {
+    return this.doc.getContent();
   }
 
   getCursor(): number {
-    return this.cursor;
+    return this.doc.getCursor();
+  }
+
+  /** Segmented view of the draft (text runs + collapsed paste blocks). */
+  getSegments(): readonly ComposerSegment[] {
+    return this.doc.getSegments();
+  }
+
+  /** Collapsed pastes currently held by this draft. */
+  getPasteBlocks(): PastedBlock[] {
+    return this.doc.getPasteBlocks();
+  }
+
+  hasCollapsedPaste(): boolean {
+    return this.doc.hasCollapsedPaste();
   }
 
   setText(newText: string, newCursor?: number): void {
-    this.text = newText;
-    this.cursor = newCursor !== undefined ? Math.min(newCursor, newText.length) : newText.length;
+    this.doc.setText(newText, newCursor);
   }
 
+  /** Clear the draft AND release every collapsed paste block it held. */
   clear(): void {
-    this.text = "";
-    this.cursor = 0;
+    this.doc.clear();
+  }
+
+  /** Park/restore the whole draft so paste blocks survive history navigation. */
+  snapshot(): ComposerDraftSnapshot {
+    return this.doc.snapshot();
+  }
+
+  restore(snapshot: ComposerDraftSnapshot): void {
+    this.doc.restore(snapshot);
   }
 
   insertText(str: string): void {
-    this.text = this.text.slice(0, this.cursor) + str + this.text.slice(this.cursor);
-    this.cursor += str.length;
+    this.doc.insertText(str);
+  }
+
+  /** Insert a paste; large pastes collapse into one atomic block. */
+  insertPaste(content: string): InsertPasteResult {
+    return this.doc.insertPaste(content);
   }
 
   insertNewline(): void {
-    this.insertText("\n");
+    this.doc.insertNewline();
   }
 
   deleteBackward(): boolean {
-    if (this.cursor > 0) {
-      this.text = this.text.slice(0, this.cursor - 1) + this.text.slice(this.cursor);
-      this.cursor--;
-      return true;
-    }
-    return false;
+    return this.doc.deleteBackward();
   }
 
   deleteForward(): boolean {
-    if (this.cursor < this.text.length) {
-      this.text = this.text.slice(0, this.cursor) + this.text.slice(this.cursor + 1);
-      return true;
-    }
-    return false;
+    return this.doc.deleteForward();
   }
 
   deleteWordBackward(): boolean {
-    if (this.cursor <= 0) return false;
-    const before = this.text.slice(0, this.cursor);
-    const after = this.text.slice(this.cursor);
-    const trimmed = before.replace(/\S+\s*$/, "");
-    this.text = trimmed + after;
-    this.cursor = trimmed.length;
-    return true;
+    return this.doc.deleteWordBackward();
   }
 
   killToEndOfLine(): boolean {
-    const newlineIdx = this.text.indexOf("\n", this.cursor);
-    if (newlineIdx !== -1) {
-      this.text = this.text.slice(0, this.cursor) + this.text.slice(newlineIdx);
-    } else {
-      this.text = this.text.slice(0, this.cursor);
-    }
-    return true;
+    return this.doc.killToEndOfLine();
   }
 
   clearLine(): void {
-    this.text = "";
-    this.cursor = 0;
+    this.doc.clearLine();
   }
 
   moveLeft(): boolean {
-    if (this.cursor > 0) {
-      this.cursor--;
-      return true;
-    }
-    return false;
+    return this.doc.moveLeft();
   }
 
   moveRight(): boolean {
-    if (this.cursor < this.text.length) {
-      this.cursor++;
-      return true;
-    }
-    return false;
+    return this.doc.moveRight();
   }
 
   moveToStartOfLine(): void {
-    const lastNewline = this.text.lastIndexOf("\n", this.cursor - 1);
-    this.cursor = lastNewline === -1 ? 0 : lastNewline + 1;
+    this.doc.moveToStartOfLine();
   }
 
   moveToEndOfLine(): void {
-    const nextNewline = this.text.indexOf("\n", this.cursor);
-    this.cursor = nextNewline === -1 ? this.text.length : nextNewline;
+    this.doc.moveToEndOfLine();
   }
 
   isMultiline(): boolean {
-    return this.text.includes("\n");
+    return this.doc.isMultiline();
   }
 
   isAtFirstLine(): boolean {
-    const lastNewline = this.text.lastIndexOf("\n", this.cursor - 1);
-    return lastNewline === -1;
+    return this.doc.isAtFirstLine();
   }
 
   isAtLastLine(): boolean {
-    const nextNewline = this.text.indexOf("\n", this.cursor);
-    return nextNewline === -1;
+    return this.doc.isAtLastLine();
   }
 
   moveUp(): boolean {
-    if (this.isAtFirstLine()) return false;
-    const currentLineStart = this.text.lastIndexOf("\n", this.cursor - 1) + 1;
-    const colOffset = this.cursor - currentLineStart;
-    const prevLineEnd = currentLineStart - 1;
-    const prevLineStart = this.text.lastIndexOf("\n", prevLineEnd - 1) + 1;
-    const prevLineLen = prevLineEnd - prevLineStart;
-    this.cursor = prevLineStart + Math.min(colOffset, prevLineLen);
-    return true;
+    return this.doc.moveUp();
   }
 
   moveDown(): boolean {
-    if (this.isAtLastLine()) return false;
-    const currentLineStart = this.text.lastIndexOf("\n", this.cursor - 1) + 1;
-    const colOffset = this.cursor - currentLineStart;
-    const nextLineStart = this.text.indexOf("\n", this.cursor) + 1;
-    const nextLineEnd = this.text.indexOf("\n", nextLineStart);
-    const nextLineLen = (nextLineEnd === -1 ? this.text.length : nextLineEnd) - nextLineStart;
-    this.cursor = nextLineStart + Math.min(colOffset, nextLineLen);
-    return true;
+    return this.doc.moveDown();
   }
 }

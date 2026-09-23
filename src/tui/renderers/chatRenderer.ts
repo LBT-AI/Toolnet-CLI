@@ -9,6 +9,32 @@ import { redactOutputSecrets } from "../../lib/security/outputRedactor";
 import { renderReasoningPanel } from "./reasoningPanel";
 import type { ReasoningBlock } from "../../lib/reasoning";
 import { tuiState, type ActiveToolActivity } from "../state";
+import { countLines } from "../input/composerDocument";
+
+/**
+ * Transcript view collapse bounds. A submitted user message keeps its FULL
+ * content in state/session (model context, resume, export); only the rendered
+ * rows are compacted, so nothing is ever lost to the UI.
+ */
+export const TRANSCRIPT_COLLAPSE_MIN_LINES = 12;
+export const TRANSCRIPT_COLLAPSE_MIN_CHARS = 1200;
+
+export function shouldCollapseTranscriptMessage(content: string): boolean {
+  return (
+    countLines(content) >= TRANSCRIPT_COLLAPSE_MIN_LINES ||
+    content.length >= TRANSCRIPT_COLLAPSE_MIN_CHARS
+  );
+}
+
+export interface RenderedChatMessages {
+  lines: string[];
+  messageIds: Array<string | null>;
+}
+
+export interface RenderedChatFrame {
+  chat: RenderedChatMessages;
+  activityLines: string[];
+}
 
 export function renderActiveToolActivity(activity: ActiveToolActivity, cols: number): string[] {
   const isNarrow = cols <= 60;
@@ -53,17 +79,36 @@ export function formatInlineMarkdown(text: string, baseColor = A.fgText): string
   s = s.replace(/\*\*([^*]+)\*\*/g, (_m, content) => `${A.bold}${content}${A.boldOff}`);
   s = s.replace(/__([^_]+)__/g, (_m, content) => `${A.bold}${content}${A.boldOff}`);
   // Italic: *text* (excluding bullet point at start of line: ^\s*\*\s)
-  s = s.replace(/(^|[^\*])\*([^\*\s][^\*]*?[^\*\s]|[^\*\s])\*(?!\*)/g, (_m, pfx, content) => `${pfx}${A.italic}${content}${A.italicOff}`);
+  s = s.replace(/(^|[^\*])\*([^\*\s][^\*\s]*?[^\*\s]|[^\*\s])\*(?!\*)/g, (pfx, content) => {
+    return `${pfx}${A.italic}${content}${A.italicOff}`;
+  });
   return s;
 }
 
-export function renderChatMessages(
+function pushRenderedLines(
+  result: RenderedChatMessages,
+  lines: readonly string[],
+  message: Msg | null,
+): void {
+  for (const line of lines) {
+    result.lines.push(line);
+    result.messageIds.push(message?.id ?? null);
+  }
+}
+
+function findToolCallMessage(messages: Msg[], callId: string): Msg | undefined {
+  return messages.find((message) =>
+    message.tool_calls?.some((call) => call.id === callId)
+  );
+}
+
+export function renderChatMessagesWithMetadata(
   messages: Msg[],
   chatCols: number,
   primaryColor: string,
-  verbose = false
-): string[] {
-  const chatLines: string[] = [];
+  verbose = false,
+): RenderedChatMessages {
+  const result: RenderedChatMessages = { lines: [], messageIds: [] };
 
   for (let mIdx = 0; mIdx < messages.length; mIdx++) {
     const msg = messages[mIdx];
@@ -85,7 +130,7 @@ export function renderChatMessages(
           tokens: block?.tokens || (msg as any).tokens || 0,
           streaming: false,
         });
-        chatLines.push(...panelLines);
+        pushRenderedLines(result, panelLines, msg);
       }
       continue;
     }
@@ -133,7 +178,7 @@ export function renderChatMessages(
       const durationMs = (msg as any).durationMs ?? parsedTool?.durationMs;
       const status = isCancelled ? "cancelled" : isSuccess ? "success" : "error";
       const headerText = renderToolLine(toolName, argsObj, status, durationMs);
-      chatLines.push(headerText);
+      pushRenderedLines(result, [headerText], msg);
 
       const tNameLower = toolName.toLowerCase();
       const isDiffTool =
@@ -159,8 +204,7 @@ export function renderChatMessages(
 
       if (outStr.trim()) {
         if (isDiffTool && (outStr.includes("@@") || outStr.includes("+++") || outStr.includes("---"))) {
-          const diffLines = renderUnifiedDiffLines(outStr, 25, chatCols - 6);
-          chatLines.push(...diffLines);
+          pushRenderedLines(result, renderUnifiedDiffLines(outStr, 25, chatCols - 6), msg);
         } else if (isCancelled) {
           // No output tail dumped for cancelled operations
         } else if (verbose || isDiffTool || !isSuccess) {
@@ -168,10 +212,10 @@ export function renderChatMessages(
           const maxLines = isDiffTool ? 20 : (chatCols < 60 ? 3 : 6);
           const tail = lines.slice(-maxLines);
           for (let i = 0; i < tail.length; i++) {
-            chatLines.push("    " + A.fgSubtext + A.dim + truncate(tail[i], chatCols - 6) + A.reset);
+            pushRenderedLines(result, ["    " + A.fgSubtext + A.dim + truncate(tail[i], chatCols - 6) + A.reset], msg);
           }
           if (lines.length > maxLines) {
-            chatLines.push("    " + A.fgMuted + `… (${lines.length - maxLines} more lines)` + A.reset);
+            pushRenderedLines(result, ["    " + A.fgMuted + `… (${lines.length - maxLines} more lines)` + A.reset], msg);
           }
         } else {
           // Successful verbose commands: show small tail/summary (1-3 lines)
@@ -180,12 +224,12 @@ export function renderChatMessages(
           if (lines.length > 0) {
             const tail = lines.slice(-maxSummaryLines);
             for (let i = 0; i < tail.length; i++) {
-              chatLines.push("    " + A.fgSubtext + A.dim + truncate(tail[i], chatCols - 6) + A.reset);
+              pushRenderedLines(result, ["    " + A.fgSubtext + A.dim + truncate(tail[i], chatCols - 6) + A.reset], msg);
             }
           }
         }
       }
-      chatLines.push("");
+      pushRenderedLines(result, [""], msg);
       continue;
     }
 
@@ -207,7 +251,7 @@ export function renderChatMessages(
         try {
           argsObj = JSON.parse(tc.function?.arguments || "{}");
         } catch {}
-        chatLines.push(formatToolStart(tc.function?.name || "tool", argsObj));
+        pushRenderedLines(result, [formatToolStart(tc.function?.name || "tool", argsObj)], msg);
       }
       continue;
     }
@@ -222,7 +266,34 @@ export function renderChatMessages(
     const msgBg = isUser ? "" : A.bgTool;
     const wrapWidth = Math.max(20, chatCols - prefixIndent.length - 2);
 
-    const cleanContent = redactOutputSecrets(msg.content || "");
+    const activeAssistantDraft = tuiState.activeAssistantDraft;
+    const isStreamingAssistant = msg.role === "assistant"
+      && activeAssistantDraft !== null
+      && activeAssistantDraft.id === msg.id
+      && activeAssistantDraft.streaming;
+
+    // A long user prompt renders as a compact token plus a one-line preview.
+    // This is a VIEW decision only: `msg.content` (and the session on disk)
+    // still holds every line for the model, resume and export.
+    if (isUser && !isStreamingAssistant) {
+      const userContent = redactOutputSecrets(msg.content || "");
+      if (shouldCollapseTranscriptMessage(userContent)) {
+        const label = `[${countLines(userContent)} lines pasted]`;
+        const preview = (userContent.split("\n").find((line) => line.trim().length > 0) ?? "").trim();
+        pushRenderedLines(result, [msgBg + prefix + primaryColor + label + A.reset], msg);
+        if (preview) {
+          pushRenderedLines(
+            result,
+            [msgBg + prefixIndent + A.fgSubtext + A.dim + "⤷ " + truncate(preview, wrapWidth - 3) + A.reset],
+            msg,
+          );
+        }
+        pushRenderedLines(result, [""], msg);
+        continue;
+      }
+    }
+
+    const cleanContent = redactOutputSecrets(msg.content || "") + (isStreamingAssistant ? "▊" : "");
     const rawLines = cleanContent.split("\n");
 
     let inCodeBlock = false;
@@ -238,10 +309,10 @@ export function renderChatMessages(
         const linePrefix = lIdx === 0 ? prefix : prefixIndent;
         if (inCodeBlock) {
           codeLang = rawLine.trim().slice(3).toLowerCase();
-          chatLines.push(msgBg + linePrefix + A.fgBorder + "┌─ " + A.fgCyan + (codeLang || "code") + " " + "─".repeat(Math.max(0, wrapWidth - 8 - (codeLang || "code").length)) + A.reset);
+          pushRenderedLines(result, [msgBg + linePrefix + A.fgBorder + "┌─ " + A.fgCyan + (codeLang || "code") + " " + "─".repeat(Math.max(0, wrapWidth - 8 - (codeLang || "code").length)) + A.reset], msg);
           continue;
         } else {
-          chatLines.push(msgBg + linePrefix + A.fgBorder + "└" + "─".repeat(Math.max(0, wrapWidth - 2)) + A.reset);
+          pushRenderedLines(result, [msgBg + linePrefix + A.fgBorder + "└" + "─".repeat(Math.max(0, wrapWidth - 2)) + A.reset], msg);
           continue;
         }
       }
@@ -281,7 +352,7 @@ export function renderChatMessages(
               .replace(/\b(true|false|null|undefined)\b/g, A.fgPeach + "$1" + A.fgText)
               .replace(/(["'`])(.*?)(["'`])/g, A.fgGreen + "$1$2$3" + A.fgText);
           }
-          chatLines.push(msgBg + linePrefix + A.fgBorder + "│ " + A.reset + msgBg + color + content + A.reset);
+          pushRenderedLines(result, [msgBg + linePrefix + A.fgBorder + "│ " + A.reset + msgBg + color + content + A.reset], msg);
           continue;
         }
 
@@ -293,16 +364,42 @@ export function renderChatMessages(
           inThoughtBlock = false;
         }
 
-        chatLines.push(msgBg + linePrefix + color + content + A.reset);
+        pushRenderedLines(result, [msgBg + linePrefix + color + content + A.reset], msg);
       }
     }
-    chatLines.push("");
+    pushRenderedLines(result, [""], msg);
   }
 
+  return result;
+}
+
+export function renderChatFrame(
+  messages: Msg[],
+  chatCols: number,
+  primaryColor: string,
+  verbose = false,
+): RenderedChatFrame {
+  return {
+    chat: renderChatMessagesWithMetadata(messages, chatCols, primaryColor, verbose),
+    activityLines: tuiState.activeToolActivity?.status === "running"
+      ? renderActiveToolActivity(tuiState.activeToolActivity, chatCols)
+      : [],
+  };
+}
+
+export function renderChatMessages(
+  messages: Msg[],
+  chatCols: number,
+  primaryColor: string,
+  verbose = false
+): string[] {
+  const lines = renderChatMessagesWithMetadata(messages, chatCols, primaryColor, verbose).lines;
+  // Legacy transcript contract: an in-flight tool activity is appended to the
+  // rendered chat. The live TUI renders it as a separate frame section via
+  // `renderChatFrame` so it stays outside the viewport's transcript mapping.
   if (tuiState.activeToolActivity && tuiState.activeToolActivity.status === "running") {
-    chatLines.push(...renderActiveToolActivity(tuiState.activeToolActivity, chatCols));
-    chatLines.push("");
+    lines.push(...renderActiveToolActivity(tuiState.activeToolActivity, chatCols));
+    lines.push("");
   }
-
-  return chatLines;
+  return lines;
 }
