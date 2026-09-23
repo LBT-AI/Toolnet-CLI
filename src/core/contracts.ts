@@ -203,6 +203,8 @@ export interface AgentResult {
   completionReasons?: string[];
  /** observed side effects (files, commands, denials). */
   executionEvidence?: import("./harness/evidence").ExecutionEvidence;
+  /** The run stopped for a user/security decision rather than task completion. */
+  approvalRequired?: boolean;
 }
 
 // ── Guard: helpful builders ─────────────────────────────────────────────────

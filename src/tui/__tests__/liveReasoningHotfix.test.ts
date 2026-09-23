@@ -337,13 +337,14 @@ describe("Live Reasoning Hotfix — UX and Stream Lifecycle", () => {
   });
 
   it("11. syncTranscriptPreservingReasoning retains reasoning blocks across turns", () => {
+    const streamedId = "assistant_stream_1";
     const currentMsgs = [
       { role: "user", content: "Run tests" },
       { role: "reasoning", content: "Thinking turn 1", reasoning: { text: "Thinking turn 1", durationMs: 1200 } },
-      { role: "assistant", content: "", tool_calls: [{ id: "c1", function: { name: "test_runner", arguments: "{}" } }] },
+      { role: "assistant", id: streamedId, content: "", tool_calls: [{ id: "c1", function: { name: "test_runner", arguments: "{}" } }] },
       { role: "tool", tool_call_id: "c1", name: "test_runner", content: '{"ok":true}' },
       { role: "reasoning", content: "Thinking turn 2", reasoning: { text: "Thinking turn 2", durationMs: 800 } },
-      { role: "assistant", content: "All tests passed." },
+      { role: "assistant", id: "assistant_stream_2", content: "All tests passed." },
     ];
 
     const engineMsgs = [
@@ -361,11 +362,94 @@ describe("Live Reasoning Hotfix — UX and Stream Lifecycle", () => {
     expect(synced[1].role).toBe("reasoning");
     expect(synced[1].content).toBe("Thinking turn 1");
     expect(synced[2].role).toBe("assistant");
+    expect(synced[2].id).toBe(streamedId);
     expect(synced[2].tool_calls).toBeDefined();
     expect(synced[3].role).toBe("tool");
     expect(synced[4].role).toBe("reasoning");
     expect(synced[4].content).toBe("Thinking turn 2");
     expect(synced[5].role).toBe("assistant");
+    expect(synced[5].id).toBe("assistant_stream_2");
     expect(synced[5].content).toBe("All tests passed.");
+  });
+
+  it("12. final transcript adoption preserves streamed assistant identity and content", () => {
+    const streamedId = "assistant_stream_final";
+    const currentMsgs = [
+      { role: "user", content: "Create the report" },
+      { role: "assistant", id: streamedId, content: "Report created at .artifacts/report.md." },
+    ];
+    const engineMsgs = [
+      { role: "user", content: "Create the report" },
+      { role: "assistant", content: "Report created at .artifacts/report.md." },
+    ];
+
+    const synced = syncTranscriptPreservingReasoning(currentMsgs, engineMsgs);
+
+    expect(synced).toHaveLength(2);
+    expect(synced[0].role).toBe("user");
+    expect(synced[1]).toMatchObject({
+      role: "assistant",
+      id: streamedId,
+      content: "Report created at .artifacts/report.md.",
+    });
+    expect(synced.filter((m) => m.role === "assistant")).toHaveLength(1);
+  });
+
+  it("12. assistant deltas update one draft and render the caret only as decoration", () => {
+    const firstId = tuiState.appendAssistantDelta("Hello");
+    expect(tuiState.messages.filter((m) => m.role === "assistant")).toHaveLength(1);
+    expect(tuiState.messages[0]).toMatchObject({ id: firstId, role: "assistant", content: "Hello" });
+    expect(tuiState.messages[0].content).not.toContain("▊");
+
+    const secondId = tuiState.appendAssistantDelta(" world");
+    const thirdId = tuiState.appendAssistantDelta(" again");
+    expect(secondId).toBe(firstId);
+    expect(thirdId).toBe(firstId);
+    expect(tuiState.messages.filter((m) => m.role === "assistant")).toHaveLength(1);
+    expect(tuiState.messages[0].content).toBe("Hello world again");
+    expect(tuiState.messages[0].content).not.toContain("▊");
+
+    const liveLines = renderChatMessages(tuiState.messages, 80, "\x1b[36m");
+    expect(stripAnsi(liveLines.join("\n"))).toContain("Hello world again▊");
+
+    const resizedLines = renderChatMessages(tuiState.messages, 52, "\x1b[36m");
+    expect(stripAnsi(resizedLines.join("\n"))).toContain("Hello world again▊");
+    expect(tuiState.messages[0].content).toBe("Hello world again");
+
+    const finalized = tuiState.finalizeAssistantDraft("complete");
+    expect(finalized).toMatchObject({ id: firstId, streaming: false });
+    expect(tuiState.activeAssistantDraft).toBeNull();
+    expect(stripAnsi(renderChatMessages(tuiState.messages, 52, "\x1b[36m").join("\n"))).not.toContain("▊");
+    expect(tuiState.messages[0].content).toBe("Hello world again");
+  });
+
+  it("13. tool result advances the turn without duplicating the in-flight assistant snapshot", () => {
+    const textId = tuiState.appendAssistantDelta("Inspecting the report");
+    const call = {
+      id: "call_create_artifact",
+      type: "function" as const,
+      function: { name: "create_artifact", arguments: JSON.stringify({ path: ".artifacts/report.md" }) },
+    };
+
+    const toolMessageId = tuiState.attachToolCall(call, tuiState.currentTurnId);
+    expect(toolMessageId).toBe(textId);
+    expect(tuiState.messages.filter((m) => m.role === "assistant")).toHaveLength(1);
+    expect(tuiState.messages[0]).toMatchObject({ id: textId, content: "Inspecting the report" });
+    expect(tuiState.messages[0].tool_calls).toEqual([call]);
+    expect(tuiState.activeAssistantDraft).toBeNull();
+
+    tuiState.markToolResult(call.id);
+    const synthesisId = tuiState.appendAssistantDelta("Report created at .artifacts/report.md.");
+    expect(synthesisId).not.toBe(textId);
+    const assistants = tuiState.messages.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(2);
+    expect(assistants[0].id).toBe(textId);
+    expect(assistants[0].tool_calls).toEqual([call]);
+    expect(assistants[1]).toMatchObject({
+      id: synthesisId,
+      role: "assistant",
+      content: "Report created at .artifacts/report.md.",
+    });
+    expect(tuiState.messages.filter((m) => m.role === "tool")).toHaveLength(0);
   });
 });

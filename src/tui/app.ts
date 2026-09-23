@@ -2,7 +2,7 @@ import { tuiState } from "./state";
 import { computeLayout, stripAnsi, visibleWidth } from "./layout";
 import { resolveViewport } from "./viewport";
 import { renderHeader } from "./renderers/headerRenderer";
-import { renderChatMessages } from "./renderers/chatRenderer";
+import { renderChatFrame, renderActiveToolActivity } from "./renderers/chatRenderer";
 import { renderSidebar } from "./renderers/sidebarRenderer";
 import { renderWorkingStatus, renderInputArea, renderFooter } from "./renderers/statusRenderer";
 import { renderConfirmationModal, renderToast, renderSecretInputModal, renderDeviceCodeModal } from "./renderers/modalRenderer";
@@ -120,27 +120,30 @@ function buildFrame(): string {
 
   // 2. Chat Lines
   const verbose = process.env.TOOLNET_DEBUG === "1" || process.argv.includes("--verbose");
-  const chatLines = renderChatMessages(tuiState.messages, chatCols, primaryColor, verbose);
+  const renderedChat = renderChatFrame(tuiState.messages, chatCols, primaryColor, verbose);
+  const chatLines = renderedChat.chat.lines;
+  tuiState.chatRows = chatRows;
+  tuiState.chatLineMessageIds = renderedChat.chat.messageIds;
 
   // 2A. Thinking panel — only when the upstream API actually streamed
   //     reasoning content (or a collapsed summary exists); never fabricated.
   if (tuiState.reasoningText || tuiState.reasoningCollapsed) {
-    chatLines.push(
-      ...renderReasoningPanel(chatCols, {
-        text: tuiState.reasoningText,
-        elapsed: tuiState.reasoningElapsed,
-        effort: reasoningEffortLabel(tuiState.reasoningSettings),
-        collapsed: tuiState.reasoningCollapsed,
-        tokens: tuiState.reasoningTokens,
-      })
-    );
+    const reasoningLines = renderReasoningPanel(chatCols, {
+      text: tuiState.reasoningText,
+      elapsed: tuiState.reasoningElapsed,
+      effort: reasoningEffortLabel(tuiState.reasoningSettings),
+      collapsed: tuiState.reasoningCollapsed,
+      tokens: tuiState.reasoningTokens,
+    });
+    chatLines.push(...reasoningLines);
+    tuiState.chatLineMessageIds.push(...reasoningLines.map(() => tuiState.activeReasoningDraft?.id ?? null));
   }
 
   // ── Viewport resolve — the ONLY scroll decision point, once per frame ──
   // Layout was computed above; resolve the follow-tail/anchor window against
   // the measured height and mirror it into legacy scrollOffset for readers.
   const totalLines = chatLines.length;
-  const window = resolveViewport(tuiState.chatViewport, totalLines, chatRows);
+  const window = resolveViewport(tuiState.chatViewport, totalLines, chatRows, tuiState.chatLineMessageIds);
   // Legacy mirror: scrollOffset keeps its old meaning (rows scrolled past bottom).
   tuiState.scrollOffset = Math.max(0, totalLines - chatRows - window.start);
   const visibleLines = chatLines.slice(window.start, window.end);
@@ -188,6 +191,18 @@ function buildFrame(): string {
     queuedCount: messageQueue.size(),
     nextQueuedText: messageQueue.peek()?.text,
   }));
+
+  // Live tool progress is transient chrome. It is painted at the fixed status
+  // row and never replaces a transcript row or changes the viewport ledger.
+  if (tuiState.activeToolActivity?.status === "running") {
+    const activityRows = renderActiveToolActivity(tuiState.activeToolActivity, cols);
+    const activityRow = layout.statusRows > 0
+      ? layout.composerRow - 1
+      : layout.composerRow - 1;
+    for (let i = 0; i < activityRows.length; i++) {
+      out.push(T.goto(Math.max(0, activityRow - i) + 1, 1) + activityRows[i] + "\r\n");
+    }
+  }
 
   // 9. Input Area — drawn exactly once (divider + prompt line)
   out.push(renderInputArea(cols, tuiState.inputBuffer, primaryColor));
@@ -502,7 +517,7 @@ export async function main(): Promise<void> {
     const loaded = loadSession(requestedSessionId);
     if (loaded && Array.isArray(loaded.messages)) {
       tuiState.currentSessionId = loaded.sessionId;
-      tuiState.messages = loaded.messages as any;
+      tuiState.replaceMessages(loaded.messages as any);
       if (loaded.metadata?.model) tuiState.currentModel = loaded.metadata.model;
       if (loaded.metadata?.agentMode) tuiState.agentMode = loaded.metadata.agentMode;
       if (loaded.metadata?.responseLanguage) {
@@ -523,7 +538,7 @@ export async function main(): Promise<void> {
       const loaded = loadSession(lastId);
       if (loaded && Array.isArray(loaded.messages)) {
         tuiState.currentSessionId = loaded.sessionId;
-        tuiState.messages = loaded.messages as any;
+        tuiState.replaceMessages(loaded.messages as any);
         if (loaded.metadata?.model) tuiState.currentModel = loaded.metadata.model;
         if (loaded.metadata?.agentMode) tuiState.agentMode = loaded.metadata.agentMode;
         if (loaded.metadata?.queuedMessages && Array.isArray(loaded.metadata.queuedMessages)) {

@@ -4,12 +4,7 @@
  * The agent loop must NOT treat "the model stopped calling tools" as success.
  * A task that requires a mutation, execution, verification, or test run is only
  * complete when the corresponding side effect actually happened and was
- * verified (CompletionEvidence). If the model produces a text answer while
- * required work is still outstanding, the gate returns "continue" plus a
- * corrective instruction to feed back into the next model turn.
- *
- * This is the primary layer against fake success — the ClaimGuard () is
- * only the last-resort backstop on top of this gate.
+ * verified. Assistant prose is never evidence.
  */
 
 import type {
@@ -27,6 +22,12 @@ export interface GateInput {
   turnsRemaining: number;
   /** Number of tool calls actually executed so far. 0 = pure prose run. */
   toolCallsExecuted: number;
+  /**
+   * Tool calls that ended in a hard failure (non-zero exit, executor error) or
+   * were denied by policy. A run that genuinely TRIED and was blocked may
+   * report the failure honestly instead of looping until the budget runs out.
+   */
+  failedToolCalls?: number;
 }
 
 export interface GateOutput {
@@ -47,32 +48,29 @@ export function emptyEvidence(): CompletionEvidence {
   return { ...EMPTY_EVIDENCE };
 }
 
-/**
- * Pure decision function — guard clauses, single responsibility per check.
- */
-export function evaluateCompletionGate(input: GateInput): GateOutput {
-  // A run that already executed at least one tool is allowed to finish with
-  // an HONEST report — including a failure report. The gate exists to stop
-  // prose-only answers that pretend work happened; it is not a trap that
-  // forces a model to loop forever after a genuine tool failure.
-  if (input.toolCallsExecuted > 0) {
-    return { decision: "complete" };
-  }
+/** True when no tool has produced any verified side effect yet. */
+export function isEvidenceEmpty(evidence: CompletionEvidence): boolean {
+  return (
+    evidence.successfulMutations === 0 &&
+    evidence.successfulExecutions === 0 &&
+    evidence.verificationsPassed === 0 &&
+    evidence.testsPassed === 0
+  );
+}
 
-  if (input.turnsRemaining <= 0) {
+function firstUnmetRequirement(
+  requirements: TaskRequirement,
+  evidence: CompletionEvidence,
+): { reason: string; correctiveInstruction: string } | null {
+  // A successful command (shell, delegation) is a real action on the workspace
+  // too — the model may have created the file through it. What must NOT pass is
+  // prose-only, which is why BOTH counters have to be zero to keep looping.
+  if (
+    requirements.mutationRequired &&
+    evidence.successfulMutations === 0 &&
+    evidence.successfulExecutions === 0
+  ) {
     return {
-      decision: "continue",
-      reason: "Turns remaining exhausted before requirements met",
-      correctiveInstruction:
-        "You are out of turns. Do NOT claim the task succeeded. Report exactly which tools ran and what remains.",
-    };
-  }
-
-  const { requirements, evidence } = input;
-
-  if (requirements.mutationRequired && evidence.successfulMutations === 0) {
-    return {
-      decision: "continue",
       reason: "Mutation required but none succeeded",
       correctiveInstruction:
         "The task requires modifying the workspace, but no write/edit/apply_patch tool has succeeded yet. Call write_file, edit_file, or apply_patch now — or, if you only provided code, say you provided code and do NOT claim a file was created.",
@@ -81,16 +79,14 @@ export function evaluateCompletionGate(input: GateInput): GateOutput {
 
   if (requirements.executionRequired && evidence.successfulExecutions === 0) {
     return {
-      decision: "continue",
       reason: "Execution required but none succeeded",
       correctiveInstruction:
         "The task requires running a command, but no shell command has exited 0 yet. Run the command with the shell tool, read stderr if it fails, fix, and re-run — then report the real exit code.",
     };
   }
 
-  if (requirements.verificationRequired && evidence.verificationsPassed === 0) {
+  if (requirements.verificationRequired && evidence.verificationsPassed === 0 && evidence.testsPassed === 0) {
     return {
-      decision: "continue",
       reason: "Verification required but none passed",
       correctiveInstruction:
         "The task requires verification (e.g. typecheck, lint, or file content check), but none passed. Run the relevant verification command and report its real result.",
@@ -99,14 +95,58 @@ export function evaluateCompletionGate(input: GateInput): GateOutput {
 
   if (requirements.testRequired && evidence.testsPassed === 0) {
     return {
-      decision: "continue",
       reason: "Tests required but none passed",
       correctiveInstruction:
         "The task requires passing tests, but no test run has passed yet. Run the test command, read the failure, fix the relevant code, and re-run until they pass — or state clearly which tests are still failing.",
     };
   }
 
-  return { decision: "complete" };
+  return null;
+}
+
+/**
+ * Pure decision function. Tool calls are progress, not proof of completion.
+ * The loop therefore continues after planning text, partial execution, or a
+ * model that asks to continue until every required evidence category is met.
+ */
+export function evaluateCompletionGate(input: GateInput): GateOutput {
+  const unmet = firstUnmetRequirement(input.requirements, input.evidence);
+  if (!unmet) {
+    return { decision: "complete" };
+  }
+
+  // 1. A tool that FAILED or was DENIED is a genuine dead end: the model must
+  //    be allowed to report it honestly instead of being trapped in the loop.
+  if ((input.failedToolCalls ?? 0) > 0) {
+    return { decision: "complete" };
+  }
+
+  // 2. Out of turns. With verified side effects on record the model has done
+  //    real work and may report honestly; with NONE it is a prose run that
+  //    must not be allowed to claim success.
+  if (input.turnsRemaining <= 0) {
+    if (!isEvidenceEmpty(input.evidence)) return { decision: "complete" };
+    return {
+      decision: "continue",
+      reason: `Turns remaining exhausted before requirements met: ${unmet.reason}`,
+      correctiveInstruction:
+        "You are out of turns. Do NOT claim the task succeeded. Report exactly which tools ran and what remains.",
+    };
+  }
+
+  // 3. Repeated tool attempts that produced NO verifiable outcome are a real
+  //    failure too. A single call does NOT qualify: one stray/planning call must
+  //    never end an unfinished task, which is exactly what this gate prevents.
+  if (input.toolCallsExecuted >= 2 && isEvidenceEmpty(input.evidence)) {
+    return { decision: "complete" };
+  }
+
+  // 4. Partial progress with budget left, or a prose-only answer: continue.
+  return {
+    decision: "continue",
+    reason: unmet.reason,
+    correctiveInstruction: unmet.correctiveInstruction,
+  };
 }
 
 /**

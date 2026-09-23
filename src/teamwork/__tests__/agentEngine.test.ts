@@ -110,7 +110,8 @@ describe.serial("AgentEngine.run — real execution path", () => {
     } catch {}
   });
 
-  function mockProvider(responses: Array<{ content?: string; tool_calls?: any[] }>): void {
+  /** Returns a getter for how many model calls were made (1 = no retry). */
+  function mockProvider(responses: Array<{ content?: string; tool_calls?: any[] }>): () => number {
     let turn = 0;
     globalThis.fetch = (async (_url: string) => {
       const resp = responses[turn] || { content: "Done" };
@@ -142,6 +143,7 @@ describe.serial("AgentEngine.run — real execution path", () => {
         clone: async () => ({ json: async () => JSON.parse(body), text: async () => body }),
       } as any;
     }) as any;
+    return () => turn;
   }
 
   test("engine writes a real file and returns verified mutation evidence", async () => {
@@ -182,25 +184,268 @@ describe.serial("AgentEngine.run — real execution path", () => {
     expect(events.some((e) => e.type === "agent-complete")).toBe(true);
   });
 
-  test("engine refuses a text-only success for a mutation request", async () => {
+  test("continues after planning-only text when the task is not complete", async () => {
     const engine = new AgentEngine();
-
     mockProvider([
-      { content: "I created note.txt for you." },
-      { content: "Done" },
+      { content: "Tôi sẽ tạo cấu trúc project hoàn chỉnh:" },
+      {
+        tool_calls: [{
+          id: "w2",
+          type: "function",
+          function: { name: "write_file", arguments: JSON.stringify({ path: path.join(tmpDir, "plan.txt"), content: "implemented" }) },
+        }],
+      },
+      { content: "Project structure created." },
     ]);
 
     const result = await engine.run({
-      prompt: "Create note.txt",
+      prompt: "Create a project structure, write files, install dependencies, and test it end-to-end",
+      cwd: tmpDir,
+      workspaceRoot: tmpDir,
+      model: "test-model",
+      maxTurns: 4,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.turnsUsed).toBe(3);
+    expect(result.toolCalls).toBe(1);
+    expect(result.evidence.successfulMutations).toBe(1);
+  });
+
+  test("does not ask an authorized user to continue mid-task", async () => {
+    const engine = new AgentEngine();
+    mockProvider([
+      { content: "Bạn muốn tôi tiếp tục không?" },
+      { content: "I will continue with the authorized work." },
+      {
+        tool_calls: [{
+          id: "w3",
+          type: "function",
+          function: { name: "write_file", arguments: JSON.stringify({ path: path.join(tmpDir, "authorized.txt"), content: "done" }) },
+        }],
+      },
+      { content: "Completed the authorized task." },
+    ]);
+
+    const result = await engine.run({
+      prompt: "Tự làm hết. Create and verify authorized.txt without asking for permission between steps",
+      cwd: tmpDir,
+      workspaceRoot: tmpDir,
+      model: "test-model",
+      maxTurns: 5,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).not.toContain("Bạn muốn tôi tiếp tục không?");
+    expect(result.evidence.successfulMutations).toBe(1);
+  });
+
+  test("reports max-turn exhaustion as an explicit failure", async () => {
+    const engine = new AgentEngine();
+    mockProvider([
+      { content: "Still planning" },
+      { content: "Still planning" },
+    ]);
+
+    const result = await engine.run({
+      prompt: "Create and verify a file",
       cwd: tmpDir,
       workspaceRoot: tmpDir,
       model: "test-model",
       maxTurns: 2,
     });
 
-    expect(fs.existsSync(path.join(tmpDir, "note.txt"))).toBe(false);
     expect(result.success).toBe(false);
+    expect(result.error).toContain("Exceeded maximum turn count");
+    expect(result.verdict).toBe("FAILED");
+  });
+
+  test("requires a final assistant synthesis after tool-only completion", async () => {
+    const engine = new AgentEngine();
+    const artifact = path.join(tmpDir, ".artifacts", "report.txt");
+
+    mockProvider([
+      {
+        tool_calls: [{
+          id: "a1",
+          type: "function",
+          function: { name: "create_artifact", arguments: JSON.stringify({ name: "report.txt", content: "audit result" }) },
+        }],
+      },
+      {
+        tool_calls: [{
+          id: "a2",
+          type: "function",
+          function: { name: "read_file", arguments: JSON.stringify({ path: artifact, offset: 0, limit: 500 }) },
+        }],
+      },
+      { content: "" },
+      { content: "Final synthesis: report.txt contains the audit result." },
+    ]);
+
+    const events: AgentEvent[] = [];
+    const result = await engine.run({
+      prompt: "Create report.txt and summarize it",
+      cwd: tmpDir,
+      workspaceRoot: tmpDir,
+      model: "test-model",
+      maxTurns: 4,
+      onEvent: (e) => events.push(e),
+    });
+    expect(fs.readFileSync(artifact, "utf8")).toContain("audit result");
+    expect(result.output).toContain("Final synthesis");
+    const toolResults = events.filter((e) => e.type === "tool-result");
+    expect(toolResults).toHaveLength(2);
+    expect(new Set(toolResults.map((e) => e.callId)).size).toBe(2);
+    expect(events.filter((e) => e.type === "agent-complete")).toHaveLength(1);
+
+    const transcript = result.messages ?? [];
+    const toolCallMessages = transcript.filter(
+      (m) => m.role === "assistant" && Array.isArray(m.tool_calls),
+    );
+    expect(toolCallMessages).toHaveLength(2);
+    expect(transcript.filter((m) => m.role === "tool")).toHaveLength(2);
+
+    const synthesisMessages = transcript.filter(
+      (m) => m.role === "assistant" && String(m.content).includes("Final synthesis") && !m.tool_calls,
+    );
+    expect(synthesisMessages).toHaveLength(1);
+  });
+  test("a tool needing approval never executes and surfaces approvalRequired", async () => {
+    const engine = new AgentEngine();
+    const outside = path.join(tmpDir, "..", `toolnet-outside-${process.pid}-${Date.now()}.txt`);
+    mockProvider([
+      {
+        tool_calls: [{
+          id: "p1",
+          type: "function",
+          function: { name: "write_file", arguments: JSON.stringify({ path: outside, content: "gated" }) },
+        }],
+      },
+      { content: "I need approval to write outside the workspace." },
+    ]);
+
+    const events: AgentEvent[] = [];
+    const result = await engine.run({
+      prompt: "Create a file outside the workspace",
+      cwd: tmpDir,
+      workspaceRoot: tmpDir,
+      model: "test-model",
+      sandboxMode: "ask",
+      maxTurns: 4,
+      onEvent: (e) => events.push(e),
+    });
+
+    // The gate is surfaced to the caller and the tool NEVER runs.
+    expect(result.approvalRequired).toBe(true);
+    expect(fs.existsSync(outside)).toBe(false);
     expect(result.evidence.successfulMutations).toBe(0);
+    expect(events.some((e) => e.type === "error")).toBe(true);
+
+    // The model is told approval is required instead of silently retrying.
+    const toolMsg = (result.messages ?? []).find((m) => m.role === "tool");
+    expect(String(toolMsg?.content)).toContain("Approval Required");
+  });
+
+  test("a permission-denied tool lets the model report the failure honestly", async () => {
+    const engine = new AgentEngine();
+    const readOnlyScope = { defaultDecision: "allow" as const, tools: { write_file: "deny" as const } };
+    mockProvider([
+      {
+        tool_calls: [{
+          id: "d1",
+          type: "function",
+          function: { name: "write_file", arguments: JSON.stringify({ path: path.join(tmpDir, "denied.txt"), content: "x" }) },
+        }],
+      },
+      { content: "I could not write denied.txt: write access is denied." },
+    ]);
+
+    const result = await engine.run({
+      prompt: "Create denied.txt",
+      cwd: tmpDir,
+      workspaceRoot: tmpDir,
+      model: "test-model",
+      maxTurns: 4,
+      toolPermissionSet: readOnlyScope,
+    });
+
+    // A hard denial is a real failure — the model finishes with an honest
+    // report instead of being forced to loop until the turn budget runs out.
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("denied");
+    expect(fs.existsSync(path.join(tmpDir, "denied.txt"))).toBe(false);
+    expect(result.evidence.successfulMutations).toBe(0);
+  });
+
+  test("a denied approval fails the run explicitly without re-asking the model", async () => {
+    const engine = new AgentEngine();
+    const outside = path.join(tmpDir, "..", `toolnet-denied-${process.pid}-${Date.now()}.txt`);
+    const calls = mockProvider([
+      {
+        tool_calls: [{
+          id: "p2",
+          type: "function",
+          function: { name: "write_file", arguments: JSON.stringify({ path: outside, content: "gated" }) },
+        }],
+      },
+      { content: "should never be reached" },
+    ]);
+
+    const asked: string[] = [];
+    const result = await engine.run({
+      prompt: "Create a file outside the workspace",
+      cwd: tmpDir,
+      workspaceRoot: tmpDir,
+      model: "test-model",
+      sandboxMode: "ask",
+      maxTurns: 4,
+      requestApproval: async (input) => {
+        asked.push(input.name);
+        return false;
+      },
+    });
+
+    expect(asked).toEqual(["write_file"]);
+    expect(result.success).toBe(false);
+    expect(result.approvalRequired).toBe(true);
+    expect(result.error).toContain("denied");
+    expect(result.verdict).toBe("FAILED");
+    // A denial is terminal for this turn: the model is never asked to continue.
+    expect(calls()).toBe(1);
+    expect(fs.existsSync(outside)).toBe(false);
+  });
+
+  test("an approved tool runs once and the turn continues", async () => {
+    const engine = new AgentEngine();
+    const outside = path.join(tmpDir, "..", `toolnet-approved-${process.pid}-${Date.now()}.txt`);
+    mockProvider([
+      {
+        tool_calls: [{
+          id: "p3",
+          type: "function",
+          function: { name: "write_file", arguments: JSON.stringify({ path: outside, content: "approved" }) },
+        }],
+      },
+      { content: "Wrote the approved file." },
+    ]);
+
+    try {
+      const result = await engine.run({
+        prompt: "Create a file outside the workspace",
+        cwd: tmpDir,
+        workspaceRoot: tmpDir,
+        model: "test-model",
+        sandboxMode: "ask",
+        maxTurns: 4,
+        requestApproval: async () => true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(fs.existsSync(outside)).toBe(true);
+    } finally {
+      try { fs.rmSync(outside, { force: true }); } catch {}
+    }
   });
 
   test("a pre-aborted signal short-circuits with a cancelled result", async () => {

@@ -94,6 +94,18 @@ describe("Session Persistence Tests", () => {
     expect(getLastSessionId()).toBe("session_b");
   });
 
+  test("saveSession preserves stable message ids for resumed viewport anchors", () => {
+    const sessionId = "session_with_stable_message_ids";
+    saveSession(sessionId, [
+      { role: "user", content: "Create a report", id: "msg_user_1" },
+      { role: "assistant", content: "Report created.", id: "msg_assistant_1" },
+    ]);
+
+    const loaded = loadSession(sessionId);
+    expect(loaded?.messages[0]).toMatchObject({ role: "user", id: "msg_user_1" });
+    expect(loaded?.messages[1]).toMatchObject({ role: "assistant", id: "msg_assistant_1" });
+  });
+
   test("getLastSessionId falls back to newest JSON file if last_session.txt is missing", () => {
     saveSession("session_old", [{ role: "user", content: "Old" }]);
     saveSession("session_new", [{ role: "user", content: "New" }]);

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { AnthropicProvider, normalizeAnthropicBaseUrl } from "../anthropic";
 import { GeminiProvider, normalizeGeminiBaseUrl } from "../gemini";
+import { ToolNetProvider } from "../toolnet";
 import { createProviderInstance } from "../registry";
 
 describe("Native Anthropic Provider", () => {
@@ -142,6 +143,66 @@ describe("Native Anthropic Provider", () => {
       expect(chunks.join("")).toBe("Xin chào Việt Nam");
     } finally {
       server.stop(true);
+    }
+  });
+});
+
+describe("Native ToolNet Provider", () => {
+  it("preserves multiple tool calls when streaming response has no readable body", async () => {
+    const originalFetch = globalThis.fetch;
+    const payload = {
+      id: "chatcmpl-test",
+      object: "chat.completion",
+      created: Date.now(),
+      model: "test-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            { id: "call-1", type: "function", function: { name: "read_file", arguments: '{"path":"a.txt"}' } },
+            { id: "call-2", type: "function", function: { name: "edit_file", arguments: '{"path":"a.txt","old_string":"a","new_string":"b"}' } },
+          ],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+    };
+
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      url: "https://example.test/v1/chat/completions",
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => payload,
+      text: async () => JSON.stringify(payload),
+      clone: async () => ({ json: async () => payload, text: async () => JSON.stringify(payload) }),
+    } as any)) as unknown as typeof fetch;
+
+    try {
+      const provider = new ToolNetProvider({
+        id: "toolnet",
+        name: "ToolNet",
+        baseUrl: "https://example.test",
+        apiKey: "test-key",
+      });
+      const chunks = [];
+      for await (const chunk of provider.stream({
+        model: "test-model",
+        messages: [{ role: "user", content: "Edit a.txt" }],
+      })) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(1);
+      const deltas = chunks[0].choices[0].delta.tool_calls;
+      expect(deltas).toHaveLength(2);
+      expect(deltas?.map((call) => call.id)).toEqual(["call-1", "call-2"]);
+      expect(deltas?.map((call) => call.function?.name)).toEqual(["read_file", "edit_file"]);
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

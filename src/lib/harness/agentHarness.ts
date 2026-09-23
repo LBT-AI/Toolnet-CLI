@@ -143,7 +143,7 @@ export class AgentHarness {
   private evidenceCollector: ExecutionEvidenceCollector | null = null;
  /** set when a requested profile id could not be resolved. */
   private profileError: string | null = null;
-  /**
+ /**
  * — explicit terminal run state.
    *
    * Deliberately NOT derived from the error string: a loop abort message
@@ -151,9 +151,10 @@ export class AgentHarness {
    * as a user cancellation. The verdict must reflect what actually ended the
    * run.
    */
-  private lastRunState: { cancelled: boolean; timedOut: boolean } = {
+  private lastRunState: { cancelled: boolean; timedOut: boolean; approvalRequired: boolean } = {
     cancelled: false,
     timedOut: false,
+    approvalRequired: false,
   };
  /** requirements parsed for the active run, for the verdict. */
   private lastRequirements: TaskRequirement = {
@@ -233,10 +234,9 @@ export class AgentHarness {
       this.profileError = error instanceof Error ? error.message : String(error);
     }
   }
-
- /** — reset the explicit terminal state for a new run. */
+  /** Reset the explicit terminal state for a new run. */
   private resetRunState(): void {
-    this.lastRunState = { cancelled: false, timedOut: false };
+    this.lastRunState = { cancelled: false, timedOut: false, approvalRequired: false };
   }
 
  // ── Workspace awareness () ─────────────────────────────────────────────
@@ -279,12 +279,11 @@ export class AgentHarness {
   }
 
   /**
- * — compute the run verdict from evidence, then attach the
-   * harness identity so every consumer (UI, eval record, report) can say which
-   * policy contract produced the result.
+   * Compute the run verdict from evidence, then attach the harness identity so
+   * every consumer can say which policy contract produced the result.
    */
   private finalizeResult(result: HarnessResult): HarnessResult {
-    const { cancelled, timedOut } = this.lastRunState;
+    const { cancelled, timedOut, approvalRequired } = this.lastRunState;
     const evidence = this.getExecutionEvidence();
     const verified = this.lastCompletionEvidence;
 
@@ -311,9 +310,9 @@ export class AgentHarness {
       verdict,
       completionReasons: reasons,
       executionEvidence: evidence,
+      approvalRequired,
     };
   }
-
   // ── Event Bus ─────────────────────────────────────────────────────────────
 
   on(listener: HarnessEventListener): () => void {
@@ -796,7 +795,16 @@ export class AgentHarness {
       }
     }
 
-    let output = gatewayRes.stdout || JSON.stringify({ success: true });
+    const rawOutput = gatewayRes.stdout;
+    let output: string;
+    try {
+      const parsedOutput = JSON.parse(rawOutput);
+      output = parsedOutput && typeof parsedOutput === "object"
+        ? rawOutput
+        : JSON.stringify({ stdout: rawOutput, stderr: "", exitCode: 0 });
+    } catch {
+      output = JSON.stringify({ stdout: rawOutput, stderr: "", exitCode: 0 });
+    }
 
  // : mutations get LSP diagnostics as supplementary feedback so the
     // model can repair before running a full test. This never spawns a server
@@ -975,6 +983,8 @@ export class AgentHarness {
     mode: ExecutionMode = "HEADLESS"
   ): Promise<HarnessResult> {
     const startTime = Date.now();
+    const sessionId = options.sessionId || this.config.sessionId || "session";
+    const timeoutMs = options.timeoutMs || this.config.timeoutMs || 120000;
     const turnId = newTurnId();
     const traceId = newTraceId();
     const corr: CorrelationContext = { sessionId: options.sessionId || this.config.sessionId || "session", turnId, traceId };
@@ -988,11 +998,8 @@ export class AgentHarness {
       this.config.maxTurns,
       10,
     );
-    const timeoutMs = options.timeoutMs || this.config.timeoutMs || 120000;
-    const sessionId = options.sessionId || this.config.sessionId || "session";
     this.resetRunState();
     this.lastCompletionEvidence = emptyEvidence();
-
     // A run started with an already-aborted signal is a cancellation, not a
     // model failure — and it must not call the provider at all.
     if (options.signal?.aborted) {
@@ -1082,6 +1089,11 @@ export class AgentHarness {
     let toolCallsCount = 0;
     let turnsUsed = 0;
     let accumulatedTokens = 0;
+    let awaitingToolSynthesis = false;
+    // Tool calls that FAILED or were DENIED. A denied write can never satisfy
+    // its requirement, so the gate must let the model report the failure
+    // honestly rather than loop until the turn budget runs out.
+    let failedToolCalls = 0;
 
  // Completion Gate: derive task requirements from the user
     // prompt (or caller-provided requirements) and track verified evidence.
@@ -1324,7 +1336,7 @@ export class AgentHarness {
         );
       }
 
-      if (!modelRes.hadMessage) {
+      if (!modelRes.hadMessage && !awaitingToolSynthesis) {
         this.agentState.transition("error", "empty-response");
         return {
           success: false,
@@ -1358,6 +1370,16 @@ export class AgentHarness {
       });
 
       const toolCalls = agentRes.toolCalls;
+      if (awaitingToolSynthesis && toolCalls.length === 0 && assistantContent.trim().length === 0) {
+        this.agentState.transition("thinking", "awaiting-tool-synthesis");
+        this.emitEvent("agent:thinking", mode, {
+          turnsUsed,
+          toolCallsCount,
+          reason: "awaiting-tool-synthesis",
+        });
+        continue;
+      }
+
       if (!toolCalls || toolCalls.length === 0) {
         if (bypassEngine.isEnabled() && bypassEngine.getConfig().autoEscalate && turnsUsed < maxTurns) {
           const refusal = bypassEngine.checkRefusal(assistantContent);
@@ -1381,20 +1403,25 @@ export class AgentHarness {
 
         const finalOutput = assistantContent;
 
- // ── Completion Gate (9) ────────────────────────────────────
-        // A text-only answer is NOT final when the task required a mutation,
-        // execution, verification, or test run that never succeeded. Feed the
-        // corrective instruction back and continue the loop instead.
+        // ── Completion Gate (9) ────────────────────────────────────
+        // A text-only answer is NOT final when the task required a mutation.
+        // Completion is based on verified task evidence, never narration or the
+        // absence of tool calls in the current turn.
+        //
+        // After verified tool work the loop waits for the assistant's synthesis.
+        // An EMPTY turn is not a synthesis (handled above: it re-prompts), but
+        // once the model produces real prose that prose IS the synthesis — so the
+        // gate decides on evidence instead of continuing forever.
         const gate = evaluateCompletionGate({
           requirements,
           evidence,
           proposedAnswer: finalOutput,
           turnsRemaining: maxTurns - turnsUsed,
           toolCallsExecuted: toolCallsCount,
+          failedToolCalls,
         });
-
         if (gate.decision === "continue") {
- // — a repeated non-answer that the gate rejects is not progress.
+          // — a repeated non-answer that the gate rejects is not progress.
           const stalledAtGate = checkProgress(finalOutput);
           if (stalledAtGate) {
             this.agentState.transition("error", "no-progress");
@@ -1414,6 +1441,7 @@ export class AgentHarness {
               durationMs: Date.now() - startTime,
               mode,
               sessionId,
+              evidence: { ...evidence },
               error: stalledAtGate.error,
             };
           }
@@ -1422,10 +1450,9 @@ export class AgentHarness {
             role: "user",
             content: gate.correctiveInstruction || "The task is not complete yet. Use tools to finish it.",
           });
-          this.emitEvent("agent:thinking", mode, { turnsUsed, toolCallsCount, gateReason: gate.reason });
+          this.emitEvent("agent:thinking", mode, { turnsUsed, toolCallsCount, gateReason: gate.reason, correctiveTurn: true });
           continue;
         }
-
         this.agentState.transition("responding");
         this.emitEvent("agent:complete", mode, { output: finalOutput, turnsUsed, toolCallsCount });
 
@@ -1486,8 +1513,13 @@ export class AgentHarness {
       };
 
       let loopAborted = false;
+      // Set when the user explicitly DENIES a tool. The batch finishes (so every
+      // tool_call still gets a transcript answer), then the run stops instead of
+      // asking the model/user again.
+      let approvalStop: string | null = null;
       this.agentState.transition("executing-tool");
       const outcome = await executeToolBatch(parsedCalls, {
+        signal: combinedSignal,
         cwd: this.config.currentCwd || process.cwd(),
         needsApproval,
         maxRepeat: 2,
@@ -1497,6 +1529,7 @@ export class AgentHarness {
           if (options.onCustomTool) {
             const custom = await options.onCustomTool(name, args, id);
             if (custom) {
+              if (!custom.allowed) failedToolCalls += 1;
               this.emitEvent("tool:queued", mode, { toolName: name, toolArgs: args, id });
               this.emitEvent(custom.allowed ? "tool:complete" : "tool:error", mode, {
                 toolName: name, toolArgs: args, result: custom.result, id,
@@ -1520,6 +1553,7 @@ export class AgentHarness {
  // — the repeat bound comes from the profile, never a literal.
           if (exceedsRepeatedToolCalls(this.profile.continuationPolicy, this.consecutiveToolRepeat)) {
             loopAborted = true;
+            failedToolCalls += 1;
             return {
               result: JSON.stringify({
                 stdout: "",
@@ -1531,11 +1565,14 @@ export class AgentHarness {
             };
           }
 
-          this.emitEvent("tool:queued", mode, { toolName: name, toolArgs: args, id });
-          this.emitEvent("tool:start", mode, { toolName: name, toolArgs: args, id });
-
           const toolStartTimestamp = Date.now();
           const ctx = {
+            // Carry the same workspace resolution the executor uses, so a tool's
+            // postcondition `verify` checks the file the tool actually touched
+            // instead of falling back to the process cwd.
+            cwd: this.config.currentCwd || process.cwd(),
+            workspaceRoot: this.config.workspaceRoot,
+            sandboxMode: this.config.sandboxMode || getSandboxMode(),
             agentRole: options.agentRole,
             agentDepth: options.agentDepth ?? (this.activeMode === "SUBAGENT" ? 1 : 0),
             signal: combinedSignal,
@@ -1553,59 +1590,185 @@ export class AgentHarness {
             },
           };
 
-          let res = await this.dispatchTool(name, args, ctx);
+          this.emitEvent("tool:queued", mode, { toolName: name, toolArgs: args, id });
+          this.emitEvent("tool:start", mode, { toolName: name, toolArgs: args, id });
+          const res = await this.dispatchTool(name, args, ctx);
 
- // ── Interactive approval (): when the gateway needs a
-          // decision and the front-end supplied a hook, ask exactly once and
-          // re-dispatch with userApproved. A denial is a typed result the
-          // model must respect — the tool never runs.
-          if (!res.allowed && res.needsApproval && options.requestApproval) {
+          // Ask exactly once when the front-end can resolve the approval gate.
+          // A denial never executes the tool and must fail the run explicitly.
+          const approveAndExecute = async (): Promise<Awaited<ReturnType<typeof this.dispatchTool>>> => {
+            this.emitEvent("tool:start", mode, { toolName: name, toolArgs: args, id });
+            const approvedResult = await this.dispatchTool(name, args, { ...ctx, userApproved: true });
+            const approvedDefinition = toolRegistry.get(name);
+            const approvedVerification = approvedDefinition?.verify
+              ? await approvedDefinition.verify(args, approvedResult.result, ctx)
+              : undefined;
+            if (approvedVerification) {
+              this.emitEvent("verification-start", mode, { toolName: name, toolArgs: args, id });
+              this.emitEvent("verification-result", mode, { toolName: name, toolArgs: args, id, ...approvedVerification });
+            }
+
+            const approvedParsed = parseResultJson(approvedResult.result);
+            const approvedExitCode = approvedParsed?.exitCode ?? (approvedParsed?.success === false ? 1 : 0);
+            const approvedVerified = approvedVerification ? approvedVerification.ok : approvedExitCode === 0;
+            if (approvedExitCode !== 0) {
+              this.emitEvent("tool:error", mode, {
+                toolName: name,
+                toolArgs: args,
+                result: approvedResult.result,
+                reason: approvedResult.reason ?? `Tool exited with code ${approvedExitCode}`,
+                id,
+                callId: id,
+              });
+              return approvedResult;
+            }
+
+            recordEvidence(evidence, "execution", true);
+            if (isMutationTool(name)) recordEvidence(evidence, "mutation", approvedVerified);
+            if (looksLikeTestCommand(name, args)) recordEvidence(evidence, "test", approvedVerified);
+            if (looksLikeVerificationCommand(name, args)) recordEvidence(evidence, "verification", approvedVerified);
+            this.emitEvent("tool:complete", mode, {
+              toolName: name,
+              toolArgs: args,
+              result: approvedResult.result,
+              id,
+              callId: id,
+              // Carry the postcondition verdict so the evidence collector sees
+              // the same verification this loop recorded.
+              ...(approvedVerification ? { verification: approvedVerification } : {}),
+            });
+            return approvedResult;
+          };
+
+          if (!res.allowed && res.needsApproval) {
+            if (!options.requestApproval) {
+              // No front-end can resolve the gate. Surface it and return the
+              // typed result so the model learns approval is required (the
+              // caller sees `approvalRequired` on the result and can resume).
+              this.lastRunState.approvalRequired = true;
+              this.emitEvent("agent:error", mode, {
+                error: "Permission required before continuing; execution paused for approval.",
+                code: "APPROVAL_REQUIRED",
+              });
+              return res;
+            }
+
             const approved = await options.requestApproval({ name, args, reason: res.reason });
             if (!approved) {
-              res = {
-                result: JSON.stringify({ error: "User denied permission." }),
-                allowed: false,
-                reason: "denied",
+              this.lastRunState.approvalRequired = true;
+              approvalStop = "Permission denied by user; execution stopped.";
+              this.emitEvent("agent:error", mode, {
+                error: approvalStop,
+                code: "APPROVAL_DENIED",
+              });
+              return {
+                ...res,
+                result: JSON.stringify({
+                  stdout: "",
+                  stderr: "Permission denied by user.",
+                  exitCode: 1,
+                  approvalRequired: true,
+                  approvalDenied: true,
+                }),
               };
-            } else {
-              this.emitEvent("tool:start", mode, { toolName: name, toolArgs: args, id });
-              res = await this.dispatchTool(name, args, { ...ctx, userApproved: true });
             }
+
+            return approveAndExecute();
           }
 
- // ── Completion evidence () — only VERIFIED outcomes count.
-          // A write/edit/patch tool that returned ok is a mutation; a shell
-          // command with exitCode 0 is an execution (and a test run when the
-          // command looks like a test invocation).
-          if (res.allowed) {
-            const parsed = parseResultJson(res.result);
-            const exitCode = parsed?.exitCode ?? (parsed?.success === false ? 1 : 0);
-            if (exitCode === 0) {
-              if (isMutationTool(name)) recordEvidence(evidence, "mutation", true);
-              if (isShellTool(name)) {
-                recordEvidence(evidence, "execution", true);
-                if (looksLikeTestCommand(name, args)) recordEvidence(evidence, "test", true);
-                if (looksLikeVerificationCommand(name, args)) recordEvidence(evidence, "verification", true);
-              }
-            }
-            this.emitEvent("tool:complete", mode, { toolName: name, toolArgs: args, result: res.result, id });
-          } else {
+          if (!res.allowed) {
+            failedToolCalls += 1;
             this.emitEvent("tool:error", mode, {
-              toolName: name, toolArgs: args, result: res.result, reason: res.reason, id,
+              toolName: name,
+              toolArgs: args,
+              result: res.result,
+              reason: res.reason,
+              id,
+              callId: id,
             });
+            return res;
           }
+
+          const parsed = parseResultJson(res.result);
+          const exitCode = parsed?.exitCode ?? (parsed?.success === false ? 1 : 0);
+          if (exitCode !== 0) {
+            failedToolCalls += 1;
+            this.emitEvent("tool:error", mode, {
+              toolName: name,
+              toolArgs: args,
+              result: res.result,
+              reason: `Tool exited with code ${exitCode}`,
+              id,
+              callId: id,
+            });
+            return res;
+          }
+
+          const definition = toolRegistry.get(name);
+          const verification = definition?.verify
+            ? await definition.verify(args, res.result, ctx)
+            : undefined;
+          if (verification) {
+            this.emitEvent("verification-start", mode, { toolName: name, toolArgs: args, id });
+            this.emitEvent("verification-result", mode, { toolName: name, toolArgs: args, id, ...verification });
+          }
+          const verified = verification ? verification.ok : true;
+          recordEvidence(evidence, "execution", true);
+          if (isMutationTool(name)) recordEvidence(evidence, "mutation", verified);
+          if (looksLikeTestCommand(name, args)) recordEvidence(evidence, "test", verified);
+          if (looksLikeVerificationCommand(name, args)) recordEvidence(evidence, "verification", verified);
+          this.emitEvent("tool:complete", mode, {
+            toolName: name,
+            toolArgs: args,
+            result: res.result,
+            id,
+            callId: id,
+            // Carry the postcondition verdict so the evidence collector sees
+            // the same verification this loop recorded.
+            ...(verification ? { verification } : {}),
+          });
+
           return res;
         },
+        // Every tool_call the model made must be answered in the transcript —
+        // an unanswered tool_call makes the next provider request invalid, and
+        // the model would be working without ever seeing a tool result.
         onMessage: (m) => {
           messages.push({ role: "tool", tool_call_id: m.id, name: m.name, content: m.content });
-          toolCallsCount++;
         },
       });
 
+      toolCallsCount += outcome.executedCount;
       this.metrics.toolCallsDeduplicated += outcome.deduplicatedCount;
       this.metrics.toolCallsBatched += outcome.parallelCalls;
 
+      // Back to `thinking` for the next model turn (or `responding` when the
+      // loop is about to finish) — `executing-tool` is not a terminal state.
       this.agentState.transition("thinking", "tool-batch-complete");
+
+      // Approval is a hard stop: the run ends with `approvalRequired` set so a
+      // front-end can resume it after the user decides, and the model is never
+      // asked to route around a permission gate.
+      if (approvalStop) {
+        this.agentState.transition("error", "approval-required");
+        try {
+          observabilityHub.warn("harness", "turn.approval_required", { correlation: corr, outcome: "error", errorCode: "APPROVAL_REQUIRED" });
+          if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", "APPROVAL_REQUIRED");
+        } catch {}
+        return {
+          success: false,
+          output: "",
+          messages,
+          toolCallsCount,
+          turnsUsed,
+          tokensUsed: accumulatedTokens,
+          durationMs: Date.now() - startTime,
+          mode,
+          sessionId,
+          evidence: { ...evidence },
+          error: approvalStop,
+        };
+      }
 
       if (loopAborted) {
         this.agentState.transition("error", "loop-detected");
@@ -1625,11 +1788,13 @@ export class AgentHarness {
           durationMs: Date.now() - startTime,
           mode,
           sessionId,
+          evidence: { ...evidence },
           error: "Infinite loop detected: exceeded maximum repetition of identical tool calls.",
         };
       }
 
- // — bound the loop on observable progress, not on optimism.
+      // The progress bound is evaluated after evidence is recorded, so a corrective turn with
+      // real tool progress is not aborted as a no-progress turn.
       const stalled = checkProgress(assistantContent);
       if (stalled) {
         this.agentState.transition("error", "no-progress");
@@ -1658,6 +1823,7 @@ export class AgentHarness {
       }
 
       this.emitEvent("agent:thinking", mode, { turnsUsed, toolCallsCount });
+      awaitingToolSynthesis = toolCallsCount > 0 && Boolean(evidence.successfulMutations || evidence.testsPassed || evidence.verificationsPassed);
     }
 
     this.agentState.transition("error", "max-turns");
@@ -1676,6 +1842,9 @@ export class AgentHarness {
       durationMs: Date.now() - startTime,
       mode,
       sessionId,
+      // Carry the evidence the run accumulated: a failed run still reports what
+      // it actually verified, never an empty placeholder.
+      evidence: { ...evidence },
       error: maxTurnsError(maxTurns),
     };
   }

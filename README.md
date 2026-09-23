@@ -132,9 +132,11 @@ toolnet -p "Check for TypeScript errors in src/" --json
 | :--- | :--- | :--- |
 | <kbd>Enter</kbd> | **Send Message** | Submits your prompt to the active agent |
 | <kbd>Tab</kbd> | **Toggle Mode** | Switches between **Build** mode (code execution) and **Plan** mode (read-only planning) |
-| <kbd>Ctrl+K</kbd> | **Switch Model** | Opens the interactive model & provider picker |
+| <kbd>Ctrl+N</kbd> | **Switch Model** | Opens the interactive model & provider picker |
+| <kbd>Ctrl+P</kbd> | **Recall Prompt** | Recalls the previous prompt from input history |
 | <kbd>Ctrl+C</kbd> | **Cancel / Exit** | Aborts the active generation or exits the TUI |
 | <kbd>Ctrl+L</kbd> | **Clear Screen** | Clears the terminal screen buffer |
+| <kbd>Up</kbd> / <kbd>Down</kbd> | **Scroll Chat** | Navigates history when the prompt is on its first/last line |
 | <kbd>PageUp</kbd> / <kbd>PageDown</kbd> | **Scroll Chat** | Navigates through long conversation history |
 
 ---

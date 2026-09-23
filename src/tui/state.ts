@@ -48,6 +48,14 @@ export interface ActiveToolActivity {
   jobId?: string;
 }
 
+export interface AssistantDraft {
+  /** Stable transcript id for the one in-flight assistant message in this turn. */
+  id: string;
+  runId: string;
+  turnId: number;
+  streaming: boolean;
+}
+
 export const SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
 
 export class TuiState {
@@ -92,6 +100,167 @@ export class TuiState {
    * live with animated dot, timer, and bounded tail lines.
    */
   activeToolActivity: ActiveToolActivity | null = null;
+  /** One canonical assistant draft for the current model response. */
+  activeAssistantDraft: AssistantDraft | null = null;
+  private currentAssistantMessageId: string | null = null;
+  private currentAssistantTurnId: number | null = null;
+  private messageSeq = 0;
+  private pendingToolCalls = new Map<string, number>();
+  private completedToolCallTurnId: number | null = null;
+
+  private resetAssistantTurnState(): void {
+    this.activeAssistantDraft = null;
+    this.currentAssistantMessageId = null;
+    this.currentAssistantTurnId = null;
+    this.pendingToolCalls.clear();
+    this.completedToolCallTurnId = null;
+  }
+
+  private nextMessageId(prefix = "msg"): string {
+    this.messageSeq += 1;
+    return `${prefix}_${Date.now()}_${this.messageSeq}_${Math.random().toString(36).slice(2, 6)}`;
+  }
+
+  private withMessageId(message: Msg): Msg {
+    if (typeof message.id === "string" && message.id) return message;
+    return { ...message, id: this.nextMessageId(message.role) };
+  }
+
+  appendMessage(message: Msg): Msg {
+    const normalized = this.withMessageId(message);
+    this.messages.push(normalized);
+    return normalized;
+  }
+
+  replaceMessages(messages: readonly Msg[]): Msg[] {
+    const nextMessages = messages.map((message) => this.withMessageId(message));
+    const hasSharedAnchor = this.chatViewport.anchorMessageId
+      ? nextMessages.some((message) => message.id === this.chatViewport.anchorMessageId)
+      : false;
+
+    this.messages = nextMessages;
+    this.chatLineMessageIds = [];
+    this.scrollOffset = 0;
+
+    if (hasSharedAnchor) {
+      this.chatViewport.followTail = false;
+      this.chatViewport.lastContentHeight = 0;
+      return this.messages;
+    }
+
+    this.chatViewport.topRow = 0;
+    this.chatViewport.followTail = true;
+    this.chatViewport.anchorMessageId = null;
+    this.chatViewport.anchorRowOffset = 0;
+    this.chatViewport.lastContentHeight = 0;
+    return this.messages;
+  }
+
+  clearMessages(): void {
+    this.messages = [];
+    this.chatLineMessageIds = [];
+    this.scrollOffset = 0;
+    this.chatViewport.topRow = 0;
+    this.chatViewport.followTail = true;
+    this.chatViewport.anchorMessageId = null;
+    this.chatViewport.anchorRowOffset = 0;
+  }
+
+  private registerToolCall(callId: string, turnId: number): void {
+    this.pendingToolCalls.set(callId, turnId);
+  }
+
+  private completeToolCall(callId: string): void {
+    const turnId = this.pendingToolCalls.get(callId);
+    this.pendingToolCalls.delete(callId);
+    if (turnId !== undefined && this.pendingToolCalls.size === 0) {
+      this.completedToolCallTurnId = turnId;
+    }
+  }
+
+  private advanceTurnAfterTools(): void {
+    if (this.completedToolCallTurnId === this.currentTurnId) {
+      this.currentTurnId += 1;
+      this.completedToolCallTurnId = null;
+      this.resetAssistantTurnState();
+    }
+  }
+
+  openAssistantDraft(turnId = this.currentTurnId): AssistantDraft {
+    this.advanceTurnAfterTools();
+    if (this.activeAssistantDraft?.runId === this.currentRunId && this.activeAssistantDraft.turnId === turnId) {
+      return this.activeAssistantDraft;
+    }
+    this.activeAssistantDraft = {
+      id: this.nextMessageId("assistant"),
+      runId: this.currentRunId,
+      turnId,
+      streaming: true,
+    };
+    this.currentAssistantMessageId = this.activeAssistantDraft.id;
+    this.currentAssistantTurnId = turnId;
+    return this.activeAssistantDraft;
+  }
+
+  appendAssistantDelta(delta: string, turnId = this.currentTurnId): string {
+    this.advanceTurnAfterTools();
+    if (this.currentAssistantTurnId !== turnId || !this.currentAssistantMessageId) {
+      this.resetAssistantTurnState();
+    }
+    const draft = this.openAssistantDraft(turnId);
+    const existing = this.messages.find((m) => m.id === draft.id && m.role === "assistant");
+    if (existing) {
+      existing.content += delta;
+    } else {
+      this.appendMessage({ role: "assistant", id: draft.id, content: delta });
+    }
+    this.requestStreamRender();
+    return draft.id;
+  }
+
+  finalizeAssistantDraft(_reason: string): AssistantDraft | null {
+    const draft = this.activeAssistantDraft;
+    if (!draft) return null;
+    this.activeAssistantDraft = null;
+    this.currentAssistantMessageId = null;
+    this.currentAssistantTurnId = null;
+    this.requestRender();
+    return { ...draft, streaming: false };
+  }
+
+  attachToolCall(
+    call: { id: string; type: string; function: { name: string; arguments: string } },
+    turnId = this.currentTurnId
+  ): string {
+    const draftId = this.activeAssistantDraft?.id ?? this.currentAssistantMessageId;
+    const draftTurnId = this.currentAssistantTurnId ?? turnId;
+    this.finalizeAssistantDraft("tool-call");
+    this.registerToolCall(call.id, turnId);
+    const existing = draftId
+      ? this.messages.find((m) => m.id === draftId && m.role === "assistant")
+      : undefined;
+    if (existing && draftTurnId === turnId) {
+      existing.tool_calls = [...(existing.tool_calls ?? []), call];
+      this.currentAssistantMessageId = existing.id ?? null;
+      this.currentAssistantTurnId = turnId;
+      return existing.id!;
+    }
+
+    const id = this.nextMessageId("assistant");
+    this.appendMessage({
+      role: "assistant",
+      id,
+      content: "",
+      tool_calls: [call],
+    });
+    this.currentAssistantMessageId = id;
+    this.currentAssistantTurnId = turnId;
+    return id;
+  }
+
+  markToolResult(callId: string): void {
+    this.completeToolCall(callId);
+  }
 
   openActiveToolActivity(callId: string, name: string, args: any): ActiveToolActivity {
     const actionInfo = classifyToolAction(name, args);
@@ -161,23 +330,30 @@ export class TuiState {
    * `chatViewport.topRow` after every resolve for legacy readers.
    */
   chatViewport: ChatViewportState = createChatViewport();
+  /** Measured chat height from the most recent frame; used by key handling. */
+  chatRows = 0;
+  /** Renderer-owned mapping from each chat row to its transcript message ID. */
+  chatLineMessageIds: Array<string | null> = [];
 
   /**
-   * Stream render coalescing: stream deltas arrive far faster than the terminal
-   * can repaint full frames (~30-60 tokens/s vs a full rewrap of every message
-   * per frame). Buffer the request and repaint at most every STREAM_FRAME_MS,
-   * so N tokens per window cost ONE layout+render instead of N.
+   * Chrome render coalescing: spinner, status, tool progress, and other
+   * transient updates arrive faster than the terminal can repaint full frames.
+   * Buffer the request so N chrome updates in one window cost one layout+render.
    */
-  private streamRenderScheduled = false;
-  private static STREAM_FRAME_MS = 33;
+  private chromeRenderScheduled = false;
+  private static CHROME_FRAME_MS = 33;
+
+  requestChromeRender(): void {
+    if (this.chromeRenderScheduled) return;
+    this.chromeRenderScheduled = true;
+    setTimeout(() => {
+      this.chromeRenderScheduled = false;
+      this.requestRender();
+    }, TuiState.CHROME_FRAME_MS);
+  }
 
   requestStreamRender(): void {
-    if (this.streamRenderScheduled) return;
-    this.streamRenderScheduled = true;
-    setTimeout(() => {
-      this.streamRenderScheduled = false;
-      this.requestRender();
-    }, TuiState.STREAM_FRAME_MS);
+    this.requestChromeRender();
   }
   statusText = "";
   isStreaming = false;
@@ -350,18 +526,13 @@ export class TuiState {
     }
   }
 
-  // ── Live reasoning lifecycle ──────────────────────────────────────────────
-
-  /**
-   * Open a new agent run and return its correlation id. Reasoning deltas from
-   * any previous run become stale by definition and are rejected on arrival.
-   */
   startNewRun(sessionId: string): string {
     if (sessionId) this.currentSessionId = sessionId;
     this.currentRunId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     this.currentTurnId = 0;
     this.activeReasoningDraft = null;
     this.activeToolActivity = null;
+    this.resetAssistantTurnState();
     this.reasoningText = "";
     this.reasoningTokens = 0;
     this.reasoningElapsed = "";
@@ -445,7 +616,7 @@ export class TuiState {
     void reason;
 
     if (draft.text.trim()) {
-      this.messages.push({ role: "reasoning", content: draft.text, reasoning: finalized });
+      this.appendMessage({ role: "reasoning", content: draft.text, reasoning: finalized });
     }
     // The finalized block now lives in the transcript; the legacy live panel
     // must not double-render it.
@@ -828,7 +999,7 @@ export class TuiState {
     if (!loaded) return false;
 
     this.currentSessionId = loaded.sessionId;
-    this.messages = (loaded.messages as any) || [];
+    this.replaceMessages((loaded.messages as any) || []);
     if (loaded.metadata?.model) this.currentModel = loaded.metadata.model;
     if (loaded.metadata?.provider) this.providerName = loaded.metadata.provider;
     if (loaded.metadata?.agentMode) this.agentMode = loaded.metadata.agentMode;
@@ -873,12 +1044,12 @@ export class TuiState {
       if (remaining.length > 0) {
         const next = remaining[0];
         this.currentSessionId = next.sessionId;
-        this.messages = next.messages as any;
+        this.replaceMessages(next.messages as any);
         if (next.metadata?.model) this.currentModel = next.metadata.model;
       } else {
         const newS = createNewSession();
         this.currentSessionId = newS.sessionId;
-        this.messages = [];
+        this.clearMessages();
         messageQueue.clear();
       }
     }

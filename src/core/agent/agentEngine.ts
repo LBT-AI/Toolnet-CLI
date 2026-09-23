@@ -406,6 +406,7 @@ export class AgentEngine {
       harnessVersion: result.harnessVersion,
       completionReasons: result.completionReasons,
       executionEvidence: result.executionEvidence,
+      approvalRequired: result.approvalRequired,
     };
   }
 

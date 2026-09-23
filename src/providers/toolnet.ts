@@ -245,7 +245,18 @@ export class ToolNetProvider implements Provider {
           model: json.model,
           choices: json.choices?.map((c: any) => ({
             index: c.index ?? 0,
-            delta: { content: c.message?.content || "" },
+            delta: {
+              content: c.message?.content || "",
+              tool_calls: (c.message?.tool_calls || []).map((call: any, callIndex: number) => ({
+                index: callIndex,
+                id: call.id,
+                type: "function",
+                function: {
+                  name: call.function?.name,
+                  arguments: call.function?.arguments || "",
+                },
+              })),
+            },
             finish_reason: c.finish_reason ?? "stop",
           })) || [],
         };

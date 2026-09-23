@@ -162,9 +162,9 @@ Do not say a file was created until this tool succeeds.`,
       const res = toolWrite(input.path, input.content, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
-    async verify(input: { path: string }) {
+    async verify(input: { path: string }, _output, ctx) {
       const { verifyFileWritten } = await import("../toolVerification");
-      return verifyFileWritten(input.path);
+      return verifyFileWritten(input.path, execCtx(ctx));
     },
   }),
   tool({
@@ -190,14 +190,15 @@ Provide the exact old_string as it appears in the file.`,
       const res = edit(input.path, oldStr, newStr, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
-    async verify(input: { path: string }) {
+    async verify(input: { path: string }, _output, ctx) {
       const { verifyFileEdited, snapshotFileHash } = await import("../toolVerification");
       // Best-effort: if snapshot unavailable, just check existence.
-      const before = snapshotFileHash(input.path);
+      const pathCtx = execCtx(ctx);
+      const before = snapshotFileHash(input.path, pathCtx);
       // The file has already been edited at this point — diff must be non-zero
       // if before was defined. If before is undefined, existence suffices.
       // We hash again to confirm it actually changed when before existed.
-      const res = verifyFileEdited(input.path, before);
+      const res = verifyFileEdited(input.path, before, pathCtx);
       // snapshotFileHash was taken AFTER the edit above (no pre-edit hash captured
       // in this path). So `before` may equal after — suppress false negative by
       // falling back to existence-only when the registry's verify runs post-hoc.
@@ -227,10 +228,11 @@ Use when the same change must be applied everywhere in a file.`,
       const res = toolReplaceAll(input.path, oldStr, newStr, execCtx(ctx));
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
-    async verify(input: { path: string }) {
+    async verify(input: { path: string }, _output, ctx) {
       const { verifyFileEdited, snapshotFileHash } = await import("../toolVerification");
-      const before = snapshotFileHash(input.path);
-      const res = verifyFileEdited(input.path, before);
+      const pathCtx = execCtx(ctx);
+      const before = snapshotFileHash(input.path, pathCtx);
+      const res = verifyFileEdited(input.path, before, pathCtx);
       if (!res.ok && res.error?.includes("unchanged")) return { ok: true };
       return res;
     },
@@ -261,13 +263,14 @@ The patch must use standard unified diff format (---/+++ headers).`,
       const res = await toolApplyPatch(patchText);
       return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
-    async verify(input: { patch?: string; diff?: string }) {
+    async verify(input: { patch?: string; diff?: string }, _output, ctx) {
       const patchText = input.patch || input.diff || "";
       const { extractPatchTargets } = await import("../agentTools");
       const { verifyFileWritten } = await import("../toolVerification");
+      const pathCtx = execCtx(ctx);
       const targets = extractPatchTargets(patchText);
       if (targets.length === 0) return { ok: true };
-      const missing = targets.filter((t) => !verifyFileWritten(t).ok);
+      const missing = targets.filter((t) => !verifyFileWritten(t, pathCtx).ok);
       if (missing.length === targets.length) {
         return { ok: false, error: `patch reported success but none of its target files exist: ${targets.join(", ")}` };
       }
@@ -646,14 +649,14 @@ Alias for shell. Use for tests, builds, typechecks, linting and project inspecti
     parameters: { type: "object", properties: { name: { type: "string" }, content: { type: "string" } }, required: ["name", "content"] },
     risk: "write",
     category: "Artifacts",
-    async execute(input: { name: string; content: string }) {
+    async execute(input: { name: string; content: string }, ctx) {
       const { toolWrite } = await import("../codingAgent");
-      const res = toolWrite(`.artifacts/${input.name}`, input.content);
+      const res = toolWrite(`.artifacts/${input.name}`, input.content, execCtx(ctx));
       return JSON.stringify({ stdout: res.success ? `Artifact created: ${input.name}` : "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
     },
-    async verify(input: { name: string }) {
+    async verify(input: { name: string }, _output, ctx) {
       const { verifyArtifactWritten } = await import("../toolVerification");
-      return verifyArtifactWritten(input.name);
+      return verifyArtifactWritten(input.name, execCtx(ctx));
     },
   }),
   tool({

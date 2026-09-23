@@ -135,6 +135,7 @@ function formatMessages(messages: any[]): SessionMessage[] {
       role: msg.role || "user",
       content: msg.content ?? "",
     };
+    if (typeof msg.id === "string" && msg.id) item.id = msg.id;
     if (msg.tool_calls !== undefined) item.tool_calls = msg.tool_calls;
     if (msg.tool_call_id !== undefined) item.tool_call_id = msg.tool_call_id;
     if (msg.name !== undefined) item.name = msg.name;

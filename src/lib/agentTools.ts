@@ -254,9 +254,9 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
         return JSON.stringify({ stdout: "", stderr: "Missing artifact name", exitCode: 1 });
       }
       const targetPath = `.artifacts/${artifactName}`;
-      const res = toolWrite(targetPath, content);
+      const res = toolWrite(targetPath, content, pathCtx);
       if (res.success) {
-        const post = verifyArtifactWritten(artifactName);
+        const post = verifyArtifactWritten(artifactName, pathCtx);
         if (!post.ok) {
           return JSON.stringify({ stdout: "", stderr: post.error, exitCode: 1 });
         }

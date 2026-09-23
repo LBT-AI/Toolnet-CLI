@@ -159,6 +159,14 @@ function denialFromEvent(event: ObservableEvent): PermissionDenialRecord | null 
   return { toolName: String(payload.toolName ?? "tool"), reason };
 }
 
+function payloadVerification(event: ObservableEvent): boolean | undefined {
+  const payload = event.payload ?? {};
+  if (payload.verification && typeof payload.verification === "object") {
+    return Boolean((payload.verification as { ok?: unknown }).ok);
+  }
+  return undefined;
+}
+
 /**
  * Observes harness events. Idempotent per event, and tolerant: an unknown event
  * type is ignored rather than throwing mid-run.
@@ -186,7 +194,7 @@ export class ExecutionEvidenceCollector {
         // error arrives here (as a non-zero exit code or `ok: false`) rather
         // than on `tool:error`.
         this.recordToolOutcome(event);
-        this.recordFileChange(event, true);
+        this.recordFileChange(event, payloadVerification(event) !== false);
         return;
       }
       case "tool:error": {
@@ -237,7 +245,7 @@ export class ExecutionEvidenceCollector {
       this.seenOutcomeIds.add(id);
     }
     
-    const isFailure = resultIndicatesFailure(payload.result);
+    const isFailure = resultIndicatesFailure(payload.result) || payloadVerification(event) === false;
     if (isFailure) {
       this.evidence.failedToolCalls += 1;
     }
@@ -252,7 +260,7 @@ export class ExecutionEvidenceCollector {
     }
     
  // Also track verification results
-    if (isMutationTool(name) && !isFailure) {
+    if (isMutationTool(name) && payloadVerification(event) === true) {
       this.evidence.verifiedMutations += 1;
     }
   }

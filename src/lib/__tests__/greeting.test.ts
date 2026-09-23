@@ -54,10 +54,16 @@ describe("greeting fast-path in the TUI send path", () => {
     try {
       await sendMessage("hello");
       expect(run).not.toHaveBeenCalled();
-      expect(tuiState.messages).toEqual([
-        { role: "user", content: "hello" },
-        { role: "assistant", content: `Hello. I'm ToolNet. What would you like help with in ${getCwdInfo().currentCwd}?` },
-      ]);
+      expect(tuiState.messages).toHaveLength(2);
+      expect(tuiState.messages[0]).toMatchObject({
+        role: "user",
+        content: "hello",
+      });
+      expect(tuiState.messages[1]).toMatchObject({
+        role: "assistant",
+        content: `Hello. I'm ToolNet. What would you like help with in ${getCwdInfo().currentCwd}?`,
+      });
+      expect(tuiState.messages.every((message) => message.id)).toBe(true);
     } finally {
       run.mockRestore();
     }

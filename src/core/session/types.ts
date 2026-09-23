@@ -70,6 +70,8 @@ export type WorkspaceMatch = "same" | "moved" | "missing" | "mismatch";
 export interface SessionMessage {
   role: string;
   content: string;
+  /** Stable message identity used by streaming and viewport anchors. */
+  id?: string;
   tool_calls?: any[];
   tool_call_id?: string;
   name?: string;

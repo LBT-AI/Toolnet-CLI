@@ -99,29 +99,122 @@ function buildToolsForMode(mode: "Build" | "Plan"): any[] | undefined {
   return planTools;
 }
 
-export function syncTranscriptPreservingReasoning(currentMsgs: any[], engineMsgs: any[]): any[] {
-  const nonReasoningEngine = (engineMsgs ?? []).filter((m) => m.role !== "system");
-  if (nonReasoningEngine.length === 0) return currentMsgs;
-  if (!currentMsgs.some((m) => m.role === "reasoning")) {
-    return nonReasoningEngine;
-  }
+function toolCallIds(message: any): string[] {
+  return Array.isArray(message?.tool_calls)
+    ? message.tool_calls
+      .map((call: any) => call?.id)
+      .filter((id: unknown): id is string => typeof id === "string" && id.length > 0)
+    : [];
+}
 
+function transcriptMessagesCompatible(currentMsg: any, engineMsg: any): boolean {
+  if (!currentMsg || !engineMsg || currentMsg.role !== engineMsg.role) return false;
+  if (currentMsg.role === "tool" && currentMsg.tool_call_id && engineMsg.tool_call_id && currentMsg.tool_call_id !== engineMsg.tool_call_id) {
+    return false;
+  }
+  if (currentMsg.role === "assistant") {
+    const currentIds = toolCallIds(currentMsg);
+    const engineIds = toolCallIds(engineMsg);
+    if (currentIds.length > 0 && engineIds.length > 0) {
+      return currentIds.some((id) => engineIds.includes(id));
+    }
+  }
+  return true;
+}
+
+function mergeToolCalls(currentMsg: any, engineMsg: any): any[] | undefined {
+  const currentCalls = Array.isArray(currentMsg?.tool_calls) ? currentMsg.tool_calls : [];
+  const engineCalls = Array.isArray(engineMsg?.tool_calls) ? engineMsg.tool_calls : [];
+  if (currentCalls.length === 0 && engineCalls.length === 0) return undefined;
+
+  const callsByKey = new Map<string, any>();
+  const keyFor = (call: any): string => {
+    if (typeof call?.id === "string" && call.id) return `id:${call.id}`;
+    return `call:${JSON.stringify(call?.function ?? call)}`;
+  };
+
+  for (const call of currentCalls) {
+    const key = keyFor(call);
+    if (!callsByKey.has(key)) callsByKey.set(key, call);
+  }
+  for (const call of engineCalls) {
+    const key = keyFor(call);
+    const existing = callsByKey.get(key);
+    const argumentsValue = call?.function?.arguments;
+    if (!existing || (typeof argumentsValue === "string" && argumentsValue.trim() && (!existing.function?.arguments || !String(existing.function.arguments).trim()))) {
+      callsByKey.set(key, call);
+    }
+  }
+  return [...callsByKey.values()];
+}
+
+function cleanAssistantContent(value: unknown): string {
+  return typeof value === "string" ? value.replace(/▊/g, "") : "";
+}
+
+function mergeAssistantContent(currentMsg: any, engineMsg: any): string {
+  const current = cleanAssistantContent(currentMsg?.content);
+  const engine = cleanAssistantContent(engineMsg?.content);
+  if (!current) return engine;
+  if (!engine) return current;
+  if (current === engine) return current;
+  if (engine.endsWith(current)) return engine;
+  if (current.endsWith(engine)) return current;
+  return current;
+}
+
+function mergeTranscriptMessage(currentMsg: any, engineMsg: any): any {
+  const merged = { ...engineMsg };
+  if (typeof currentMsg?.id === "string" && currentMsg.id) merged.id = currentMsg.id;
+  if (currentMsg?.role === "assistant") {
+    merged.content = mergeAssistantContent(currentMsg, engineMsg);
+  } else if (typeof currentMsg?.content === "string" && (!merged.content || !String(merged.content).trim())) {
+    merged.content = currentMsg.content;
+  }
+  const toolCalls = mergeToolCalls(currentMsg, engineMsg);
+  if (toolCalls !== undefined) merged.tool_calls = toolCalls;
+  if (typeof currentMsg?.tool_call_id === "string") merged.tool_call_id = currentMsg.tool_call_id;
+  if (typeof currentMsg?.name === "string") merged.name = currentMsg.name;
+  return merged;
+}
+
+function mergeTranscriptMessages(currentMsgs: any[], engineMsgs: any[]): any[] {
   const merged: any[] = [];
   let eIdx = 0;
 
-  for (const m of currentMsgs) {
-    if (m.role === "reasoning") {
-      merged.push(m);
-    } else if (eIdx < nonReasoningEngine.length) {
-      merged.push(nonReasoningEngine[eIdx++]);
+  for (const currentMsg of currentMsgs ?? []) {
+    if (currentMsg.role === "reasoning") {
+      merged.push(currentMsg);
+      continue;
+    }
+
+    let matchIdx = -1;
+    for (let idx = eIdx; idx < engineMsgs.length; idx++) {
+      if (transcriptMessagesCompatible(currentMsg, engineMsgs[idx])) {
+        matchIdx = idx;
+        break;
+      }
+    }
+
+    if (matchIdx >= eIdx) {
+      for (; eIdx < matchIdx; eIdx++) merged.push(engineMsgs[eIdx]);
+      merged.push(mergeTranscriptMessage(currentMsg, engineMsgs[matchIdx]));
+      eIdx = matchIdx + 1;
+    } else if (eIdx < engineMsgs.length && engineMsgs[eIdx].role === currentMsg.role) {
+      merged.push(mergeTranscriptMessage(currentMsg, engineMsgs[eIdx++]));
+    } else {
+      merged.push(currentMsg);
     }
   }
 
-  while (eIdx < nonReasoningEngine.length) {
-    merged.push(nonReasoningEngine[eIdx++]);
-  }
-
+  while (eIdx < engineMsgs.length) merged.push(engineMsgs[eIdx++]);
   return merged;
+}
+
+export function syncTranscriptPreservingReasoning(currentMsgs: any[], engineMsgs: any[]): any[] {
+  const nonReasoningEngine = (engineMsgs ?? []).filter((m) => m.role !== "system");
+  if (nonReasoningEngine.length === 0) return currentMsgs ?? [];
+  return mergeTranscriptMessages(currentMsgs ?? [], nonReasoningEngine);
 }
 
 export async function sendMessage(text: string): Promise<void> {
@@ -135,8 +228,8 @@ export async function sendMessage(text: string): Promise<void> {
   // Greeting-only input gets a fixed local reply — no model call.
   const greeting = matchGreetingFastPath(text, getCwdInfo().currentCwd);
   if (greeting) {
-    tuiState.messages.push({ role: "user", content: text });
-    tuiState.messages.push({ role: "assistant", content: greeting });
+    tuiState.appendMessage({ role: "user", content: text });
+    tuiState.appendMessage({ role: "assistant", content: greeting });
     tuiState.saveCurrentSession();
     pinToTail(tuiState.chatViewport);
     tuiState.requestRender();
@@ -148,7 +241,7 @@ export async function sendMessage(text: string): Promise<void> {
   // Initialize fresh run with isolated runId and reset reasoning draft
   const runId = tuiState.startNewRun(tuiState.currentSessionId);
 
-  tuiState.messages.push({ role: "user", content: text });
+  tuiState.appendMessage({ role: "user", content: text });
 
   // Explicit language request ("trả lời bằng tiếng Việt", "用中文", ...)
   // locks the response language for the session; otherwise it stays "auto"
@@ -178,7 +271,7 @@ export async function sendMessage(text: string): Promise<void> {
     const provider = getActiveProvider();
     if (!provider) {
       stopSpinner();
-      tuiState.messages.push({ role: "assistant", content: "✖ Error: No provider configured. Use /provider add to set one up." });
+      tuiState.appendMessage({ role: "assistant", content: "✖ Error: No provider configured. Use /provider add to set one up." });
       tuiState.setStatus("✖ No provider configured");
       tuiState.requestRender();
       return;
@@ -188,7 +281,7 @@ export async function sendMessage(text: string): Promise<void> {
 
     const autoPrep = contextEngine.prepareMessagesForApi(tuiState.messages as any, { model: tuiState.currentModel, sessionId: tuiState.currentSessionId });
     if (autoPrep.compacted) {
-      tuiState.messages = autoPrep.messages;
+      tuiState.replaceMessages(autoPrep.messages);
       tuiState.saveCurrentSession();
     }
 
@@ -218,7 +311,6 @@ export async function sendMessage(text: string): Promise<void> {
 
     tuiState.setStatus("Streaming response…");
 
-    let fullText = "";
     const toolNames = new Map<string, string>();
 
     const result = await agentEngine.run({
@@ -234,14 +326,7 @@ export async function sendMessage(text: string): Promise<void> {
         // Content arrived -> finalize any active reasoning block for this turn
         tuiState.finalizeActiveReasoning("text-delta");
         if (tuiState.agentPhase === "thinking") tuiState.agentPhase = "streaming";
-        fullText += delta;
-        const lastMsg = tuiState.messages[tuiState.messages.length - 1];
-        if (lastMsg && lastMsg.role === "assistant" && !lastMsg.tool_calls) {
-          lastMsg.content = fullText + "▊";
-        } else {
-          tuiState.messages.push({ role: "assistant", content: fullText + "▊" });
-        }
-        tuiState.requestStreamRender();
+        tuiState.appendAssistantDelta(delta, tuiState.currentTurnId);
       },
       onReasoningDelta: (delta) => {
         tuiState.appendReasoningDelta(delta, {
@@ -283,23 +368,18 @@ export async function sendMessage(text: string): Promise<void> {
             toolNames.set(event.callId, event.name);
             statusManager.updateTool(event.name, event.input as any);
             tuiState.openActiveToolActivity(event.callId, event.name, event.input);
-            // Append tool call directly into transcript
-            tuiState.messages.push({
-              role: "assistant",
-              content: "",
-              tool_calls: [
-                {
-                  id: event.callId,
-                  type: "function",
-                  function: {
-                    name: event.name,
-                    arguments: typeof event.input === "string" ? event.input : JSON.stringify(event.input ?? {}),
-                  },
+            tuiState.attachToolCall(
+              {
+                id: event.callId,
+                type: "function",
+                function: {
+                  name: event.name,
+                  arguments: typeof event.input === "string" ? event.input : JSON.stringify(event.input ?? {}),
                 },
-              ],
-            });
-            tuiState.currentTurnId++;
-            tuiState.requestRender();
+              },
+              tuiState.currentTurnId
+            );
+            tuiState.requestChromeRender();
             break;
           case "tool-progress":
             tuiState.updateActiveToolProgress(event.callId, {
@@ -311,6 +391,7 @@ export async function sendMessage(text: string): Promise<void> {
             const wasCancelled = tuiState.messages.some(
               (m) => m.role === "tool" && m.tool_call_id === event.callId && (m as any).cancelled
             );
+            tuiState.markToolResult(event.callId);
             if (wasCancelled) {
               tuiState.closeActiveToolActivity(event.callId);
               break;
@@ -320,7 +401,7 @@ export async function sendMessage(text: string): Promise<void> {
               ? Date.now() - tuiState.activeToolActivity.startedAt
               : undefined;
             tuiState.closeActiveToolActivity(event.callId);
-            tuiState.messages.push({
+            tuiState.appendMessage({
               role: "tool",
               tool_call_id: event.callId,
               name: toolNames.get(event.callId) || "tool",
@@ -334,6 +415,7 @@ export async function sendMessage(text: string): Promise<void> {
             const wasCancelled = tuiState.messages.some(
               (m) => m.role === "tool" && m.tool_call_id === event.callId && (m as any).cancelled
             );
+            tuiState.markToolResult(event.callId);
             if (wasCancelled) {
               tuiState.closeActiveToolActivity(event.callId);
               break;
@@ -342,7 +424,7 @@ export async function sendMessage(text: string): Promise<void> {
               ? Date.now() - tuiState.activeToolActivity.startedAt
               : undefined;
             tuiState.closeActiveToolActivity(event.callId);
-            tuiState.messages.push({
+            tuiState.appendMessage({
               role: "tool",
               tool_call_id: event.callId,
               name: toolNames.get(event.callId) || "tool",
@@ -356,7 +438,7 @@ export async function sendMessage(text: string): Promise<void> {
             if (tuiState.activeToolActivity) {
               const cancelled = tuiState.cancelActiveToolActivity();
               if (cancelled) {
-                tuiState.messages.push({
+                tuiState.appendMessage({
                   role: "tool",
                   tool_call_id: cancelled.callId,
                   name: cancelled.name,
@@ -367,18 +449,14 @@ export async function sendMessage(text: string): Promise<void> {
                 tuiState.activeToolActivity = null;
               }
             }
+            tuiState.finalizeActiveReasoning("cancelled");
+            tuiState.finalizeAssistantDraft("cancelled");
+            tuiState.agentPhase = "cancelled";
             break;
           case "agent-complete":
             tuiState.finalizeActiveReasoning("agent-complete");
+            tuiState.finalizeAssistantDraft("agent-complete");
             tuiState.agentPhase = "done";
-            break;
-          case "cancelled":
-            tuiState.finalizeActiveReasoning("cancelled");
-            tuiState.agentPhase = "cancelled";
-            break;
-          case "error":
-            tuiState.finalizeActiveReasoning("error");
-            tuiState.agentPhase = "error";
             break;
           default:
             break;
@@ -408,16 +486,16 @@ export async function sendMessage(text: string): Promise<void> {
     // preserving any reasoning blocks already in the transcript.
     const transcript = (result.messages ?? []).filter((m) => m.role !== "system");
     if (transcript.length > 0) {
-      tuiState.messages = syncTranscriptPreservingReasoning(tuiState.messages, transcript);
+      tuiState.replaceMessages(syncTranscriptPreservingReasoning(tuiState.messages, transcript));
     } else if (!result.success) {
-      tuiState.messages.push({ role: "assistant", content: result.error ? `✖ Error: ${result.error}` : "(no response)" });
+      tuiState.appendMessage({ role: "assistant", content: result.error ? `✖ Error: ${result.error}` : "(no response)" });
     } else {
-      const outputText = result.output || fullText || "(empty response)";
+      const outputText = result.output || "(empty response)";
       const lastMsg = tuiState.messages[tuiState.messages.length - 1];
       if (lastMsg && lastMsg.role === "assistant" && !lastMsg.tool_calls) {
         lastMsg.content = outputText;
       } else {
-        tuiState.messages.push({ role: "assistant", content: outputText });
+        tuiState.appendMessage({ role: "assistant", content: outputText });
       }
     }
 
@@ -443,10 +521,10 @@ export async function sendMessage(text: string): Promise<void> {
     if (err?.name === "AbortError") {
       tuiState.agentPhase = "cancelled";
       statusManager.cancel();
-      tuiState.messages.push({ role: "assistant", content: "(cancelled)" });
+      tuiState.appendMessage({ role: "assistant", content: "(cancelled)" });
     } else if (err?.message?.includes("401") || err?.status === 401) {
       statusManager.failed("Authentication failed (401).");
-      tuiState.messages.push({ role: "system", content: "⚠️ API Key expired or invalid (401)." });
+      tuiState.appendMessage({ role: "system", content: "⚠️ API Key expired or invalid (401)." });
       tuiState.saveCurrentSession();
       tuiState.requestRender();
       
@@ -463,7 +541,7 @@ export async function sendMessage(text: string): Promise<void> {
         if (valid) {
           await credentialsStore.saveApiKey(key);
           tuiState.showToast("API Key saved.", 2000);
-          tuiState.messages.push({ role: "system", content: "✅ API Key updated. You can resubmit your prompt." });
+          tuiState.appendMessage({ role: "system", content: "✅ API Key updated. You can resubmit your prompt." });
           break;
         } else {
           tuiState.showToast("API Key không hợp lệ", 3000);
@@ -473,7 +551,7 @@ export async function sendMessage(text: string): Promise<void> {
     } else {
       tuiState.agentPhase = "error";
       statusManager.failed(err?.message || String(err));
-      tuiState.messages.push({ role: "assistant", content: "✖ Error: " + (err?.message || String(err)) });
+      tuiState.appendMessage({ role: "assistant", content: "✖ Error: " + (err?.message || String(err)) });
       tuiState.showToast("⚠️ " + (err?.message || String(err)), 3500);
     }
     tuiState.saveCurrentSession();
@@ -585,7 +663,7 @@ export async function startOAuthDeviceFlow(provider: string): Promise<void> {
 export function buildTuiCommandContext(): any {
   return {
     addMessage: (role: "user" | "assistant" | "system", content: string) => {
-      tuiState.messages.push({ role, content });
+      tuiState.appendMessage({ role, content });
     },
     setModel: (m: string) => {
       tuiState.currentModel = m;
@@ -641,13 +719,13 @@ export function buildTuiCommandContext(): any {
     getCurrentSessionId: () => tuiState.currentSessionId,
     setCurrentSessionId: (id: string) => { tuiState.currentSessionId = id; },
     getMessages: () => tuiState.messages,
-    setMessages: (msgs: any[]) => { tuiState.messages = msgs; tuiState.saveCurrentSession(); },
-    clearMessages: () => { tuiState.messages = []; tuiState.saveCurrentSession(); },
+    setMessages: (msgs: any[]) => { tuiState.replaceMessages(msgs); tuiState.saveCurrentSession(); },
+    clearMessages: () => { tuiState.clearMessages(); tuiState.saveCurrentSession(); },
     switchSession: (sessionId: string) => {
       const loaded = loadSession(sessionId);
       if (!loaded) return false;
       tuiState.currentSessionId = loaded.sessionId;
-      tuiState.messages = loaded.messages as any;
+      tuiState.replaceMessages(loaded.messages as any);
       if (loaded.metadata?.model) tuiState.currentModel = loaded.metadata.model;
       if (loaded.metadata?.agentMode) tuiState.agentMode = loaded.metadata.agentMode;
       if (loaded.metadata?.queuedMessages && Array.isArray(loaded.metadata.queuedMessages)) {
@@ -717,9 +795,9 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
           tuiState.currentModel = modelArg;
           tuiState.setStatus("Model: " + modelArg);
           tuiState.showToast("Model switched to " + modelArg);
-          tuiState.messages.push({ role: "assistant", content: `Model set to: ${modelArg}` });
+          tuiState.appendMessage({ role: "assistant", content: `Model set to: ${modelArg}` });
         } else if (modelArg === "--help") {
-          tuiState.messages.push({
+          tuiState.appendMessage({
             role: "assistant",
             content: "/model — Model Selection\n\n  /model               Open model picker\n  /model <model-id>    Select model\n  /model --help        Show this help\n\nCurrent: " + (tuiState.currentModel || "none"),
           });
@@ -736,7 +814,7 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
         break;
 
       case "/clear":
-        tuiState.messages = [];
+        tuiState.clearMessages();
         tuiState.saveCurrentSession();
         tuiState.showToast("Chat history cleared");
         tuiState.setStatus("Chat cleared");
@@ -754,7 +832,7 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
         tuiState.agentMode = "Plan";
         tuiState.showToast("Switched to Planner Mode");
         tuiState.setStatus("Mode: Planner");
-        tuiState.messages.push({ role: "system", content: "→ Switched to Plan Mode. Generating plan..." });
+        tuiState.appendMessage({ role: "system", content: "→ Switched to Plan Mode. Generating plan..." });
         tuiState.requestRender();
         setTimeout(() => sendMessage("Please create a detailed checklist for the task in .toolnet/plan.md and wait for my /approve command before executing anything."), 50);
         return;
@@ -764,7 +842,7 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
         tuiState.agentMode = "Build";
         tuiState.showToast("Plan Approved - Switched to Builder Mode");
         tuiState.setStatus("Mode: Builder");
-        tuiState.messages.push({ role: "system", content: "→ Plan approved. Switched to execution mode." });
+        tuiState.appendMessage({ role: "system", content: "→ Plan approved. Switched to execution mode." });
         tuiState.requestRender();
         setTimeout(() => sendMessage("I approve the plan. You may now shift into execution mode and execute the checklist."), 50);
         return;
@@ -884,7 +962,7 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
       default: {
         const handled = await dispatchCommand(cmd, ctx);
         if (!handled) {
-          tuiState.messages.push({ role: "system", content: "Unknown command: " + name + "  (type /help)" });
+          tuiState.appendMessage({ role: "system", content: "Unknown command: " + name + "  (type /help)" });
         }
         break;
       }
@@ -893,7 +971,7 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
     const errMsg = err instanceof Error ? err.message : String(err);
     tuiState.setStatus(`⚠️ Command failed: ${errMsg}`);
     tuiState.showToast(`⚠️ Command error: ${errMsg}`, 3000);
-    tuiState.messages.push({ role: "system", content: `✖ Command error: ${errMsg}` });
+    tuiState.appendMessage({ role: "system", content: `✖ Command error: ${errMsg}` });
   }
 
   tuiState.requestRender();

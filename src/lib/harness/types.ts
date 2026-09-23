@@ -30,6 +30,8 @@ export type HarnessEventType =
   | "tool:approval_required"
   | "tool:start"
   | "tool:progress"
+  | "verification-start"
+  | "verification-result"
   | "tool:complete"
   | "tool:error"
   | "agent:compact"
@@ -153,6 +155,8 @@ export interface HarnessResult {
   completionReasons?: string[];
  /** — observed side effects (files, commands, denials). */
   executionEvidence?: import("../../core/harness/evidence").ExecutionEvidence;
+  /** The run stopped for a user/security decision rather than task completion. */
+  approvalRequired?: boolean;
 }
 
 export interface HarnessMetrics {

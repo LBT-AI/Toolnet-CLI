@@ -163,10 +163,10 @@ export class StatusManager {
       if (tuiState.activeToolActivity && tuiState.activeToolActivity.status === "running") {
         tuiState.activeToolActivity.elapsedMs = Date.now() - tuiState.activeToolActivity.startedAt;
       }
-      tuiState.requestStreamRender();
+      tuiState.requestChromeRender();
     }, this.intervalMs);
 
-    tuiState.requestRender();
+    tuiState.requestChromeRender();
   }
 
   /**
@@ -178,7 +178,7 @@ export class StatusManager {
       this.start(status);
       return;
     }
-    tuiState.requestRender();
+    tuiState.requestChromeRender();
   }
 
   /**
@@ -199,14 +199,14 @@ export class StatusManager {
     const elapsed = ((Date.now() - (tuiState.startTime || Date.now())) / 1000).toFixed(1);
     tuiState.statusText = customMsg || `✔ Done in ${elapsed}s`;
     tuiState.elapsedDisplay = "";
-    tuiState.requestRender();
+    tuiState.requestChromeRender();
 
     // Auto-transition to idle/ready after delay
     this.clearReadyTimer();
     this.readyTimer = setTimeout(() => {
       if (!tuiState.isStreaming && (tuiState.statusText.startsWith("✔") || tuiState.statusText.startsWith("✓"))) {
         tuiState.statusText = "";
-        tuiState.requestRender();
+        tuiState.requestChromeRender();
       }
     }, 3000);
   }
@@ -221,7 +221,7 @@ export class StatusManager {
     tuiState.isStreaming = false;
     tuiState.statusText = errorMsg ? `✖ Error: ${errorMsg}` : "✖ Failed";
     tuiState.elapsedDisplay = "";
-    tuiState.requestRender();
+    tuiState.requestChromeRender();
   }
 
   /**
@@ -234,7 +234,7 @@ export class StatusManager {
     tuiState.isStreaming = false;
     tuiState.statusText = "Cancelled";
     tuiState.elapsedDisplay = "";
-    tuiState.requestRender();
+    tuiState.requestChromeRender();
   }
 
   /**

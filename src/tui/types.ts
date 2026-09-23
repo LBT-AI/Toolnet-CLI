@@ -3,6 +3,8 @@ export type Role = "user" | "assistant" | "system" | "tool" | "reasoning";
 export interface Msg {
   role: Role;
   content: string;
+  /** Stable transcript id used by streaming and scroll anchoring. */
+  id?: string;
   tool_calls?: any[];
   tool_call_id?: string;
   name?: string;

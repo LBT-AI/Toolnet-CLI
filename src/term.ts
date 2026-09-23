@@ -45,7 +45,7 @@ const RAW_A = {
   fgYellow:  CSI + "38;2;251;191;36m",
   fgAmber:   CSI + "38;2;251;191;36m",
   fgRed:     CSI + "38;2;248;113;113m",
-  fgBlue:    CSI + "38;2;96;165;250m",
+  fgBlue:    CSI + "38;2;0;255;255m",
   fgViolet:  CSI + "38;2;167;139;250m",
   fgMauve:   CSI + "38;2;167;139;250m",
   fgPeach:   CSI + "38;2;251;146;60m",
