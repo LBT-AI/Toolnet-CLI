@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { setWorkspaceRoot, getCwdInfo } from "../../lib/codingAgent";
+import { setWorkspaceRoot, resetWorkspaceState } from "../../lib/codingAgent";
 import {
   verifyFileWritten,
   verifyFileEdited,
@@ -19,24 +19,39 @@ import { extractPatchTargets } from "../../lib/agentTools";
  */
 
 let tmpDir = "";
-let savedCwd = "";
+
+/**
+ * Anchor captured at module load. The previous version restored from
+ * `getCwdInfo().currentCwd`, a PROCESS-GLOBAL that an earlier test file may
+ * have parked on a directory it has since deleted. Restoring to a dead path
+ * fails silently, leaving the process standing inside `tmpDir` — which the
+ * cleanup then deletes, breaking every later test file in this bun worker with
+ * `uv_cwd` ENOENT. Never trust a global for this; always re-anchor on a
+ * directory we just proved exists.
+ */
+const PRISTINE_CWD = process.cwd();
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-verify-"));
-  savedCwd = getCwdInfo().currentCwd;
+  resetWorkspaceState();
   // resolvePath() is workspace-cwd based — point it at the tmp workspace.
   setWorkspaceRoot(tmpDir);
 });
 
 afterEach(() => {
-  // Restore the workspace state FIRST — setWorkspaceRoot is module-global and
-  // shared bun workers run other test files after this one. Also restore the
-  // process cwd before deleting the tmpdir (deleting a live cwd breaks later
-  // relative-path resolution).
+  // Step OUT of the tmp workspace before deleting it. Deleting a live cwd
+  // breaks later files; if we cannot leave, we must not delete.
+  const anchor = fs.existsSync(PRISTINE_CWD) ? PRISTINE_CWD : os.tmpdir();
+  let left = false;
   try {
-    process.chdir(savedCwd);
+    process.chdir(anchor);
+    left = true;
   } catch {}
-  setWorkspaceRoot(savedCwd);
+  // Re-anchor module-global workspace state on that same live directory so a
+  // sibling file does not inherit a dead workspaceRoot.
+  resetWorkspaceState();
+  setWorkspaceRoot(anchor);
+  if (!left) return;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

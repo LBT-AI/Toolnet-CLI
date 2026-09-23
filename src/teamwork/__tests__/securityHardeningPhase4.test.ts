@@ -32,11 +32,14 @@ describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
   });
 
   afterEach(() => {
+    // Leave the workspace BEFORE deleting it — the `cd` above made tmpDir the
+    // live process cwd, and deleting a live cwd poisons every later test file
+    // in this bun worker (`uv_cwd` ENOENT).
+    resetWorkspaceState();
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
       fs.rmSync(outsideDir, { recursive: true, force: true });
     } catch {}
-    resetWorkspaceState();
   });
 
   // ── 1. OS SANDBOX RUNTIME ─────────────────────────────────────────────────

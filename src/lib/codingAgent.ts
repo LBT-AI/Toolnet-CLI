@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pushSnapshot, commitSnapshot } from "./history";
 import { evaluatePermission, isPathInsideWorkspace, getSandboxMode } from "./permissions";
@@ -38,11 +39,17 @@ const INITIAL_CWD = process.cwd();
  * setWorkspaceRoots, setCwd, initWorkspace, or toolBash with a cd).
  */
 export function resetWorkspaceState(): void {
-  currentCwd = INITIAL_CWD;
-  workspaceRoot = INITIAL_CWD;
-  workspaceRoots = [INITIAL_CWD];
+  // A test may have deleted the pristine directory in the meantime. Anchoring
+  // on a dead path would leave both the module globals and the process cwd
+  // pointing at something that no longer exists, which breaks every later test
+  // file in the same bun worker with `uv_cwd` ENOENT. Fall back to a directory
+  // that is guaranteed to exist.
+  const anchor = fs.existsSync(INITIAL_CWD) ? INITIAL_CWD : os.tmpdir();
+  currentCwd = anchor;
+  workspaceRoot = anchor;
+  workspaceRoots = [anchor];
   try {
-    process.chdir(INITIAL_CWD);
+    process.chdir(anchor);
   } catch {}
 }
 
