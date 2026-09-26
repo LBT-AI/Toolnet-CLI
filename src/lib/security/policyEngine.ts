@@ -59,6 +59,7 @@ export class PolicyEngine {
   reload(customRoot?: string) {
     const root = customRoot || process.cwd();
     this.workspacePolicy = this.loadPolicyFile(root);
+    this.dynamicCapabilities = {};
     this.loaded = true;
 
     if (this.workspacePolicy?.rateLimit) {

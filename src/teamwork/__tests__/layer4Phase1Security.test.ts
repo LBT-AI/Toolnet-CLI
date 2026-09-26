@@ -38,6 +38,7 @@ afterAll(() => {
 
 import { securityEngine } from "../../lib/security/securityEngine";
 import { sessionTrust, getSessionTrust } from "../../lib/security/sessionTrust";
+import { policyEngine } from "../../lib/security/policyEngine";
 import { ToolGateway } from "../../lib/security/toolGateway";
 import { scrubChildEnv, isSecretEnvVar } from "../../lib/security/childEnv";
 import { setSandboxMode, getSandboxMode } from "../../lib/permissions";
@@ -48,10 +49,12 @@ const origMode = getSandboxMode();
 beforeEach(() => {
   setSandboxMode("workspace");
   sessionTrust.clear();
+  policyEngine.reload();
 });
 
 afterEach(() => {
   sessionTrust.clear();
+  policyEngine.reload();
 });
 
 afterAll(() => {

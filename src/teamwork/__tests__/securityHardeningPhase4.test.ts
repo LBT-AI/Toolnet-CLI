@@ -17,7 +17,7 @@ import {
 } from "../../lib/security";
 import { getSandboxMode, setSandboxMode } from "../../lib/permissions";
 import { toolBash, toolRead, toolWrite, setWorkspaceRoot, resetWorkspaceState } from "../../lib/codingAgent";
-import { securityEngine, ToolGateway } from "../../lib/security";
+import { securityEngine, ToolGateway, policyEngine, sessionTrust } from "../../lib/security";
 import { auditLogger } from "../../lib/security/auditLogger";
 
 describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
@@ -29,12 +29,20 @@ describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
     fs.mkdirSync(outsideDir, { recursive: true });
     setSandboxMode("workspace");
     setWorkspaceRoot(tmpDir);
+    sessionTrust.clear();
+    policyEngine.reload();
   });
 
   afterEach(() => {
     // Leave the workspace BEFORE deleting it — the `cd` above made tmpDir the
     // live process cwd, and deleting a live cwd poisons every later test file
     // in this bun worker (`uv_cwd` ENOENT).
+    sessionTrust.clear();
+    policyEngine.reload();
+    try {
+      const { bypassEngine } = require("../../lib/bypass");
+      bypassEngine.setForceExecution(false, "workspace");
+    } catch {}
     resetWorkspaceState();
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -611,33 +619,42 @@ test("basic", () => { expect(1 + 1).toBe(2); });`);
     });
 
     test("CRITICAL_DENY cannot be overridden by whitelist/trust/bypass", () => {
- // Tested in : CRITICAL_DENY blocked in all modes
-      const { policyEngine, sessionTrust } = require("../../lib/security");
-      
-      // Even with wildcard whitelist
-      (policyEngine as any).workspacePolicy = { allowedCommands: [".*"] };
-      
-      const result = securityEngine.evaluate("shell", { command: "rm -rf /" }, "workspace", tmpDir, tmpDir);
-      expect(result.allowed).toBe(false);
-      expect(result.decision).toBe("DENY");
-      
-      // Even with session trust
-      sessionTrust.recordDecision("shell", "rm -rf /", "SESSION");
-      const trusted = securityEngine.evaluate("shell", { command: "rm -rf /" }, "ask", tmpDir, tmpDir);
-      expect(trusted.allowed).toBe(false);
+      // Tested in : CRITICAL_DENY blocked in all modes
+      const origPolicy = (policyEngine as any).workspacePolicy;
+      try {
+        // Even with wildcard whitelist
+        (policyEngine as any).workspacePolicy = { allowedCommands: [".*"] };
+        (policyEngine as any).loaded = true;
+        
+        const result = securityEngine.evaluate("shell", { command: "rm -rf /" }, "workspace", tmpDir, tmpDir);
+        expect(result.allowed).toBe(false);
+        expect(result.decision).toBe("DENY");
+        
+        // Even with session trust
+        sessionTrust.recordDecision("shell", "rm -rf /", "SESSION");
+        const trusted = securityEngine.evaluate("shell", { command: "rm -rf /" }, "ask", tmpDir, tmpDir);
+        expect(trusted.allowed).toBe(false);
+      } finally {
+        (policyEngine as any).workspacePolicy = origPolicy;
+        sessionTrust.clear();
+        policyEngine.reload();
+      }
     });
 
     test("forceExecution cannot exist outside full-access", () => {
       const { bypassEngine } = require("../../lib/bypass");
-      
-      const wsResult = bypassEngine.setForceExecution(true, "workspace");
-      expect(wsResult).toBe(false);
-      
-      const askResult = bypassEngine.setForceExecution(true, "ask");
-      expect(askResult).toBe(false);
-      
-      const fullResult = bypassEngine.setForceExecution(true, "full-access");
-      expect(fullResult).toBe(true);
+      try {
+        const wsResult = bypassEngine.setForceExecution(true, "workspace");
+        expect(wsResult).toBe(false);
+        
+        const askResult = bypassEngine.setForceExecution(true, "ask");
+        expect(askResult).toBe(false);
+        
+        const fullResult = bypassEngine.setForceExecution(true, "full-access");
+        expect(fullResult).toBe(true);
+      } finally {
+        bypassEngine.setForceExecution(false, "workspace");
+      }
     });
 
     test("subagent policy <= parent policy", () => {
