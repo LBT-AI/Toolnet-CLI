@@ -6,6 +6,7 @@ import {
   padVisible,
   truncateVisible,
   tailByCells,
+  caretCellWidth,
 } from "../lib/text";
 
 // Canonical cell-math lives in `src/lib/text` so non-TUI code never imports
@@ -212,18 +213,24 @@ export function computeLayoutGeometry(
   let caretColInLine = 0;
   let caretPrefixWidth = cursorPos; // legacy path: codepoint≈cell approximation
   if (lines.length > 0) {
-    // Map the codepoint cursor offset onto its buffer line.
+    // `cursorPos` is a UTF-16 offset into `inputBuffer` (it comes straight from
+    // the composer document), so map it with UTF-16 lengths. Using code-point
+    // lengths here mismatches on astral characters and lands the caret a column
+    // or a line off. Measuring the prefix with visibleWidth keeps combining
+    // marks (NFD Vietnamese) at zero cells.
     let pos = 0;
     for (let i = 0; i < lines.length; i++) {
-      const lineLen = Array.from(lines[i]).length;
+      const lineLen = lines[i].length;
       if (pos + lineLen >= cursorPos || i === lines.length - 1) {
         caretLine = i;
-        caretColInLine = cursorPos - pos;
+        caretColInLine = Math.max(0, Math.min(cursorPos - pos, lineLen));
         break;
       }
       pos += lineLen + 1; // +1 for the newline character
     }
-    caretPrefixWidth = visibleWidth(Array.from(lines[caretLine] ?? "").slice(0, caretColInLine).join(""));
+    // Cell-aware prefix: rounds a mid-cluster offset up to the cluster end so
+    // CJK/emoji count their true width and no surrogate is split.
+    caretPrefixWidth = caretCellWidth(lines[caretLine] ?? "", caretColInLine);
   }
   const visibleCaretIdx = Math.max(0, Math.min(caretLine - startIdx, visibleLines - 1));
   const cursorRow = composerRow + 1 + visibleCaretIdx;

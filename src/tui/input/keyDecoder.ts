@@ -89,10 +89,20 @@ export class TerminalKeyDecoder {
     // mobile SSH routinely delivers fragments slower than the ESC window.
     if (this.pending && bytes.length > 0) {
       const b0 = bytes[0];
-      const unambiguous =
-        this.pending.bytes.length > 1 || b0 === 0x5b /* [ */ || b0 === 0x4f /* O */;
-      if (!unambiguous && now >= this.pending.deadline) {
-        this.flushPending(out);
+      // A lone ESC inherited from a PREVIOUS chunk, immediately followed by
+      // text, is not an Alt-key: a real Alt+letter is delivered as one 2-byte
+      // write, never split across stdin events. Mobile IMEs prefix committed
+      // text with a spurious ESC instead. Drop the ESC and fall through so the
+      // byte is decoded as text — flushing it as a standalone Esc would cancel
+      // the stream, and `ESC x` would swallow the character as latin1.
+      if (this.pending.bytes.length === 1 && isStrayEscFollower(b0)) {
+        this.pending = null;
+      } else {
+        const unambiguous =
+          this.pending.bytes.length > 1 || b0 === 0x5b /* [ */ || b0 === 0x4f /* O */;
+        if (!unambiguous && now >= this.pending.deadline) {
+          this.flushPending(out);
+        }
       }
     }
 
@@ -104,7 +114,15 @@ export class TerminalKeyDecoder {
       }
 
       if (this.pending) {
-        this.pending.bytes.push(bytes[i]);
+        const next = bytes[i];
+        // Same stray-ESC guard as above. A lone ESC followed by text drops the
+        // ESC and reprocesses this byte as text (`i` deliberately not advanced).
+        // CSI/SS3 openers are excluded so fragmented arrows still assemble.
+        if (this.pending.bytes.length === 1 && isStrayEscFollower(next)) {
+          this.pending = null;
+          continue;
+        }
+        this.pending.bytes.push(next);
         i += 1;
         if (this.tryCompleteSequence(out)) continue;
         // Still incomplete: either keep accumulating, or abort on garbage.
@@ -275,6 +293,17 @@ function incompleteUtf8TailLength(bytes: number[], start: number, end: number): 
   return 0;
 }
 
+/**
+ * Is `byte` text that can never legitimately follow a lone ESC as a key combo?
+ * Every printable byte qualifies (Alt+letter always arrives in one write), plus
+ * UTF-8 lead/continuation bytes. `[` and `O` are excluded: they open CSI/SS3
+ * sequences, and mobile SSH can legitimately deliver `ESC` then `"[B"`.
+ */
+function isStrayEscFollower(byte: number): boolean {
+  if (byte === 0x5b /* [ */ || byte === 0x4f /* O */) return false;
+  return byte >= 0x20; // printable ASCII or any UTF-8 byte (all >= 0x80)
+}
+
 const PASTE_START_BYTES = Array.from(Buffer.from("\u001b[200~", "latin1"));
 const PASTE_END_BYTES = Array.from(Buffer.from("\u001b[201~", "latin1"));
 
@@ -302,6 +331,9 @@ function isCompleteSequence(bytes: number[]): boolean {
   if (b1 === 0x4f) {
     return bytes.length === 3;
   }
+  // ESC + one non-ASCII byte is never an Alt-key: a UTF-8 lead/continuation
+  // byte here means the ESC was a stray prefix around text.
+  if (b1 >= 0x80) return false;
   // ESC + one byte: Alt-modified key (ESC a, ESC \r …)
   return true;
 }

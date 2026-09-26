@@ -18,7 +18,13 @@
  * All indices are UTF-16 code-unit offsets into the DISPLAY string, matching
  * the rest of the composer/layout pipeline (which maps `cursorPos` over
  * `inputBuffer`).
+ *
+ * Editing moves by GRAPHEME CLUSTER, not code unit: Vietnamese text can mix
+ * precomposed code points with base+combining sequences, and half a cluster is
+ * not a character the terminal can draw.
  */
+
+import { nextGraphemeEnd, previousGraphemeStart } from "../../lib/text";
 
 /** A collapsed paste is one atomic block with stable identity. */
 export interface PastedBlock {
@@ -246,8 +252,9 @@ export class ComposerDocument {
       this.normalize();
       return true;
     }
-    this.deleteRange(this.cursor - 1, this.cursor);
-    this.cursor -= 1;
+    const start = this.graphemeStartBefore(this.cursor);
+    this.deleteRange(start, this.cursor);
+    this.cursor = start;
     this.normalize();
     return true;
   }
@@ -263,7 +270,7 @@ export class ComposerDocument {
       this.normalize();
       return true;
     }
-    this.deleteRange(this.cursor, this.cursor + 1);
+    this.deleteRange(this.cursor, this.graphemeEndAfter(this.cursor));
     this.normalize();
     return true;
   }
@@ -323,7 +330,7 @@ export class ComposerDocument {
   moveLeft(): boolean {
     if (this.cursor <= 0) return false;
     const interior = this.blockInterior(this.cursor - 1);
-    this.cursor = interior ? interior.start : this.cursor - 1;
+    this.cursor = interior ? interior.start : this.graphemeStartBefore(this.cursor);
     this.normalize();
     return true;
   }
@@ -333,7 +340,7 @@ export class ComposerDocument {
     const total = this.getLength();
     if (this.cursor >= total) return false;
     const block = this.blockStartingAt(this.cursor);
-    this.cursor = block ? block.end : this.cursor + 1;
+    this.cursor = block ? block.end : this.graphemeEndAfter(this.cursor);
     this.normalize();
     return true;
   }
@@ -487,6 +494,31 @@ export class ComposerDocument {
       if (this.segments[span.index].kind === "paste" && span.start === pos) return span;
     }
     return null;
+  }
+
+  /**
+   * Display offset where the grapheme cluster before `pos` starts. Text runs
+   * are cluster-aware; a paste block boundary is its own atomic edge.
+   */
+  private graphemeStartBefore(pos: number): number {
+    if (pos <= 0) return 0;
+    const hit = this.spanContaining(pos - 1, this.spans());
+    if (!hit) return Math.max(0, pos - 1);
+    const segment = this.segments[hit.index];
+    if (segment.kind !== "text") return hit.start;
+    // `previousGraphemeStart` already returns the start of the cluster ENDING
+    // at the offset, so pass the boundary itself (not boundary-1).
+    return hit.start + previousGraphemeStart(segment.text, pos - hit.start);
+  }
+
+  /** Display offset just past the grapheme cluster starting at/after `pos`. */
+  private graphemeEndAfter(pos: number): number {
+    const total = this.getLength();
+    const hit = this.spanContaining(pos, this.spans());
+    if (!hit) return Math.min(total, pos + 1);
+    const segment = this.segments[hit.index];
+    if (segment.kind !== "text") return hit.end;
+    return hit.start + nextGraphemeEnd(segment.text, pos - hit.start);
   }
 
   /** The paste block whose display span strictly contains `pos`, if any. */

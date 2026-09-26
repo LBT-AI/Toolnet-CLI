@@ -90,6 +90,88 @@ export function tailByCells(value: string, maxWidth: number): string {
   return out.join("");
 }
 
+/**
+ * Grapheme-cluster boundary helpers for cursor and editing operations.
+ *
+ * Vietnamese text can arrive as precomposed code points ("ạ" = U+1EA1) or as
+ * a base character plus combining marks ("a" + U+0323). Treating the buffer as
+ * one UTF-16 unit per keypress would split those clusters, so backspace or a
+ * cursor move would leave behind an orphaned combining mark. These helpers move
+ * by user-perceived character, matching what the terminal actually draws.
+ */
+const graphemeSegmenter = (() => {
+  const Segmenter = (Intl as unknown as { Segmenter?: new (
+    locale?: string,
+    options?: { granularity?: string }
+  ) => { segment(input: string): Iterable<{ index: number; segment: string }> } }).Segmenter;
+  return Segmenter ? new Segmenter(undefined, { granularity: "grapheme" }) : null;
+})();
+
+/** Regex covering the code points that extend the preceding cluster. */
+const COMBINING_MARK = /\p{M}|\u200d|[\u{FE00}-\u{FE0F}]|[\u{1F3FB}-\u{1F3FF}]/u;
+
+function isSurrogatePairStart(value: string, index: number): boolean {
+  const code = value.charCodeAt(index);
+  return code >= 0xd800 && code <= 0xdbff && index + 1 < value.length;
+}
+
+/** UTF-16 offset where the grapheme cluster before `index` starts. */
+export function previousGraphemeStart(text: string, index: number): number {
+  if (index <= 0) return 0;
+  if (index > text.length) index = text.length;
+  if (graphemeSegmenter) {
+    let start = 0;
+    for (const part of graphemeSegmenter.segment(text)) {
+      if (part.index >= index) break;
+      start = part.index;
+    }
+    return start;
+  }
+  // Fallback: walk back over one base code point plus any combining marks.
+  let pos = index - 1;
+  if (pos > 0 && text.charCodeAt(pos) >= 0xdc00 && text.charCodeAt(pos) <= 0xdfff) pos--;
+  while (pos > 0 && COMBINING_MARK.test(text[pos])) pos--;
+  return pos;
+}
+
+/** UTF-16 offset where the grapheme cluster at/after `index` ends. */
+export function nextGraphemeEnd(text: string, index: number): number {
+  if (index >= text.length) return text.length;
+  if (index < 0) index = 0;
+  if (graphemeSegmenter) {
+    for (const part of graphemeSegmenter.segment(text)) {
+      if (part.index + part.segment.length > index) return part.index + part.segment.length;
+    }
+    return text.length;
+  }
+  let pos = index + 1;
+  if (isSurrogatePairStart(text, index)) pos = index + 2;
+  while (pos < text.length && COMBINING_MARK.test(text[pos])) pos++;
+  return pos;
+}
+
+/**
+ * Terminal cells occupied by the text up to (but not into) UTF-16 `offset`.
+ *
+ * A cursor offset that lands inside a grapheme cluster — a legacy code-point
+ * index, or a stale value — rounds up to the cluster's end, so the caret can
+ * never sit between a base character and its combining mark, nor inside a
+ * surrogate pair (which `String.slice` would split into mojibake).
+ */
+export function caretCellWidth(text: string, offset: number): number {
+  if (offset <= 0) return 0;
+  if (offset >= text.length) return visibleWidth(text);
+  let cells = 0;
+  let index = 0;
+  while (index < text.length) {
+    const end = nextGraphemeEnd(text, index);
+    cells += visibleWidth(text.slice(index, end));
+    index = end;
+    if (index >= offset) return cells;
+  }
+  return cells;
+}
+
 /** List-entry shape shared by CLI catalog listings and TUI list panels. */
 export interface ListItem {
   id: string;
