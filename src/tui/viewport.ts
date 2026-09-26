@@ -69,22 +69,45 @@ function findLast(lines: LineMessageIds | undefined, messageId: string): number 
   return last;
 }
 
+/**
+ * Nearest row that maps to a real transcript message, searching outward from
+ * `row` (nearest first, then one row above, then one row below, and so on).
+ * Returns -1 when nothing on screen maps to a message.
+ */
+function nearestMessageRow(lineMessageIds: LineMessageIds | undefined, row: number): number {
+  if (!lineMessageIds || lineMessageIds.length === 0) return -1;
+  const clamped = Math.max(0, Math.min(row, lineMessageIds.length - 1));
+  if (lineMessageIds[clamped]) return clamped;
+  for (let distance = 1; distance < lineMessageIds.length; distance++) {
+    const above = clamped - distance;
+    if (above >= 0 && lineMessageIds[above]) return above;
+    const below = clamped + distance;
+    if (below < lineMessageIds.length && lineMessageIds[below]) return below;
+  }
+  return -1;
+}
+
 function captureAnchor(
   viewport: ChatViewportState,
   row: number,
   lineMessageIds: LineMessageIds | undefined,
 ): void {
-  const messageId = lineMessageIds?.[row] ?? null;
-  if (!messageId) {
+  // Rows that carry no message id (reasoning-panel rows, bare separators) must
+  // NOT degrade the anchor to a raw row: a raw row is meaningless once the
+  // transcript reflows, so the viewport would jump on the next streamed token
+  // or resize. Anchor to the nearest real message instead, measured from the
+  // row the user actually landed on, so reflow keeps that row in place.
+  const anchorRow = nearestMessageRow(lineMessageIds, row);
+  if (anchorRow < 0) {
     viewport.anchorMessageId = null;
     viewport.anchorRowOffset = 0;
     viewport.topRow = row;
     return;
   }
 
-  const first = findFirst(lineMessageIds, messageId);
+  const messageId = lineMessageIds![anchorRow]!;
   viewport.anchorMessageId = messageId;
-  viewport.anchorRowOffset = Math.max(0, row - first);
+  viewport.anchorRowOffset = Math.max(0, row - findFirst(lineMessageIds, messageId));
   viewport.topRow = row;
 }
 

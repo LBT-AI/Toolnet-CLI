@@ -88,7 +88,11 @@ onProviderSwitch((id, config) => {
 let rendering = false;
 let pendingRerender = false;
 
-function buildFrame(): string {
+/**
+ * Compose ONE complete frame. Exported so the exact byte stream the terminal
+ * receives can be asserted in regression tests (see viewportRender.integration).
+ */
+export function buildFrame(): string {
   const activeSuggests = getSuggestions(tuiState.inputBuffer);
   const statusActive =
     tuiState.showHelp ||
@@ -192,18 +196,6 @@ function buildFrame(): string {
     nextQueuedText: messageQueue.peek()?.text,
   }));
 
-  // Live tool progress is transient chrome. It is painted at the fixed status
-  // row and never replaces a transcript row or changes the viewport ledger.
-  if (tuiState.activeToolActivity?.status === "running") {
-    const activityRows = renderActiveToolActivity(tuiState.activeToolActivity, cols);
-    const activityRow = layout.statusRows > 0
-      ? layout.composerRow - 1
-      : layout.composerRow - 1;
-    for (let i = 0; i < activityRows.length; i++) {
-      out.push(T.goto(Math.max(0, activityRow - i) + 1, 1) + activityRows[i] + "\r\n");
-    }
-  }
-
   // 9. Input Area — drawn exactly once (divider + prompt line)
   out.push(renderInputArea(cols, tuiState.inputBuffer, primaryColor));
 
@@ -220,6 +212,25 @@ function buildFrame(): string {
   // Erase anything below the freshly-painted frame (prevents stale duplicate
   // status/input/footer bars after resize or when a smaller frame is drawn).
   out.push(T.clearDown);
+
+  // ── Live tool activity — transient chrome, drawn as an ABSOLUTE overlay ──
+  // It MUST NOT be interleaved in the linear paint stream: it paints at fixed
+  // rows and a trailing CRLF there advanced the linear cursor by a number of
+  // rows that depended on how many progress lines were shown. That pushed the
+  // composer/footer/status to a different row every time the progress tail grew
+  // or shrank, so the whole bottom chrome visibly shook while a tool ran (and
+  // while scrolling during a tool run). Drawn after clearDown — so the base
+  // frame is never clobbered — and with no CRLF, so the measured ledger
+  // (header/chat/popup/status/composer/footer) stays exact.
+  if (tuiState.activeToolActivity?.status === "running") {
+    const activityLines = renderActiveToolActivity(tuiState.activeToolActivity, cols);
+    const firstActivityRow = layout.composerRow - 1;
+    for (let i = 0; i < activityLines.length; i++) {
+      // clearLine so the overlay fully owns each row (never leaves transcript
+      // text bleeding past the right edge of a short progress line).
+      out.push(T.goto(Math.max(0, firstActivityRow - i) + 1, 1) + T.clearLine + activityLines[i]);
+    }
+  }
 
   // ── Cursor positioning ─────────────────────────────────────────────────────
   // Composer/footer/caret geometry has ONE owner: computeLayout. The frame

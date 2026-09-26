@@ -531,7 +531,10 @@ export async function sendMessage(text: string): Promise<void> {
     tuiState.saveCurrentSession();
     tuiState.requestRender();
 
-    pinToTail(tuiState.chatViewport);
+    // Do NOT pin to the tail here. Finishing a turn is a BACKGROUND event: if
+    // the user scrolled up to read history, snapping the viewport to the bottom
+    // yanks them away from the row they were reading. Follow-tail is re-armed
+    // only when the user scrolls to the bottom edge or submits a new prompt.
     tuiState.agentPhase = "done";
     const reasoningDoneMsg =
       tuiState.reasoningTokens > 0
