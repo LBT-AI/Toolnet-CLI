@@ -441,6 +441,21 @@ export function deleteSessionFile(sessionId: string): boolean {
   return true;
 }
 
+/**
+ * Durable display title for a loaded session: the record `title`, falling back
+ * to the legacy `metadata.name` a pre-title rename wrote. Returns undefined for
+ * an untitled session so callers never render an empty separator or the word
+ * "undefined". Display-only — never persist the result back as a title.
+ */
+export function sessionDisplayTitle(
+  session: { title?: string; metadata?: Record<string, unknown> } | null | undefined,
+): string | undefined {
+  if (!session) return undefined;
+  if (typeof session.title === "string" && session.title) return session.title;
+  const legacyName = session.metadata?.name;
+  return typeof legacyName === "string" && legacyName ? legacyName : undefined;
+}
+
 export function renameSessionFile(sessionId: string, newName: string): boolean {
   const loaded = loadSession(sessionId);
   if (!loaded) return false;

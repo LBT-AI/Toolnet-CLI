@@ -69,6 +69,21 @@ describe("status line — MODEL · WORKSPACE · TITLE", () => {
     expect(trimmed).not.toContain("undefined");
   });
 
+  test("a background title lands in the footer without restarting the session", () => {
+    tuiState.sessionTitle = undefined;
+    try {
+      const before = stripAnsi(renderFooter(120, BASE as any));
+      expect(before).not.toContain("Build Mercedes-AMG WordPress page");
+
+      // Exactly what the background auto-title's `onTitle` callback mutates.
+      tuiState.sessionTitle = "Build Mercedes-AMG WordPress page";
+      const after = stripAnsi(renderFooter(120, BASE as any));
+      expect(after).toContain("Build Mercedes-AMG WordPress page");
+    } finally {
+      tuiState.sessionTitle = undefined;
+    }
+  });
+
   test("stays a single line that fits 52x20 mobile", () => {
     for (const sessionTitle of [undefined, "Build Mercedes-AMG WordPress page"]) {
       const line = stripAnsi(renderFooter(52, { ...BASE, sessionTitle }));

@@ -14,7 +14,7 @@ import { toolRegistry } from "../../lib/harness/toolRegistry";
 import { agentEngine } from "../../core/agent/agentEngine";
 import { requestApprovalModal, requestConfirmation } from "../permissions/permissionModal";
 import { dispatchCommand } from "../../commands";
-import { loadSession, formatExitMessage } from "../../lib/sessionPersistence";
+import { loadSession, formatExitMessage, sessionDisplayTitle } from "../../lib/sessionPersistence";
 import { A } from "../../term";
 import { updateCrashToolResult, markCleanExit } from "../../lib/crashRecovery";
 import { restoreTerminal } from "../../lib/terminalLifecycle";
@@ -759,6 +759,9 @@ export function buildTuiCommandContext(): any {
       if (!loaded) return false;
       tuiState.currentSessionId = loaded.sessionId;
       tuiState.replaceMessages(loaded.messages as any);
+      // Switching sessions must swap the footer label too, and clear it when the
+      // target is untitled (never leak the previous session's title).
+      tuiState.sessionTitle = sessionDisplayTitle(loaded);
       if (loaded.metadata?.model) tuiState.currentModel = loaded.metadata.model;
       if (loaded.metadata?.agentMode) tuiState.agentMode = loaded.metadata.agentMode;
       if (loaded.metadata?.queuedMessages && Array.isArray(loaded.metadata.queuedMessages)) {

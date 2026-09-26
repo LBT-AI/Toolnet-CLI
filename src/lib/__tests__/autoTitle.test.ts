@@ -249,4 +249,33 @@ describe("requestAutoTitle — one background attempt per session", () => {
     });
     expect(notified).toEqual([["sess_8", "Audit session persistence"]]);
   });
+
+  test("the main agent is never blocked while the title model call is in flight", async () => {
+    const store = makeStore();
+    let resolveModel: (value: string) => void = () => {};
+    const inFlight = new Promise<string>((resolve) => {
+      resolveModel = resolve;
+    });
+
+    // Fire-and-forget: the returned promise is deliberately NOT awaited by the
+    // caller. Titling must not gate the turn that triggered it.
+    const titlePromise = requestAutoTitle({
+      sessionId: "sess_bg",
+      prompt: "build the mercedes-amg wordpress page",
+      store,
+      generate: () => inFlight,
+    });
+
+    // The turn proceeds immediately: nothing is written yet because the model
+    // call is still pending.
+    let turnFinished = false;
+    turnFinished = true;
+    expect(turnFinished).toBe(true);
+    expect(store.writes).toEqual([]);
+
+    resolveModel("Build Mercedes-AMG WordPress page");
+    await titlePromise;
+    expect(store.writes).toHaveLength(1);
+    expect(store.writes[0]!.title).toBe("Build Mercedes-AMG WordPress page");
+  });
 });

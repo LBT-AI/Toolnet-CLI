@@ -26,7 +26,7 @@ import { setResponseLanguage } from "../lib/language";
 import { reasoningEffortLabel } from "../lib/reasoning";
 import { initWorkspace } from "../lib/codingAgent";
 import { loadConfig } from "../lib/config";
-import { parseSessionArgs, loadSession, getLastSessionId, formatExitMessage } from "../lib/sessionPersistence";
+import { parseSessionArgs, loadSession, getLastSessionId, formatExitMessage, sessionDisplayTitle } from "../lib/sessionPersistence";
 import { providerPicker } from "./providerPicker";
 import { checkPendingRecovery, clearPendingRecovery, markCleanExit } from "../lib/crashRecovery";
 import { disposeExtensions, initializeExtensions } from "../core/extensions";
@@ -493,6 +493,9 @@ export async function main(): Promise<void> {
   if (pendingRecovery && pendingRecovery.lastUserGoal) {
     tuiState.setStatus(`Recovered session from previous unexpected exit (${pendingRecovery.sessionId})`);
     tuiState.currentSessionId = pendingRecovery.sessionId;
+    // Carry the durable title across a crash recovery so the footer shows the
+    // same session label after restart (title is metadata, not run state).
+    tuiState.sessionTitle = sessionDisplayTitle(loadSession(pendingRecovery.sessionId));
     if (pendingRecovery.model && pendingRecovery.model !== "openai/gpt-4o" && pendingRecovery.model !== "none" && pendingRecovery.model !== "default") {
       tuiState.currentModel = pendingRecovery.model;
     }
@@ -539,9 +542,12 @@ export async function main(): Promise<void> {
       if (loaded.metadata?.queuedMessages && Array.isArray(loaded.metadata.queuedMessages)) {
         messageQueue.restore(loaded.metadata.queuedMessages);
       }
+      // Restore the durable title so `toolnet -s <id>` shows the same label.
+      tuiState.sessionTitle = sessionDisplayTitle(loaded);
       tuiState.setStatus(`Loaded session: ${tuiState.currentSessionId}`);
     } else {
       tuiState.currentSessionId = requestedSessionId;
+      tuiState.sessionTitle = undefined;
       tuiState.setStatus(`New session: ${tuiState.currentSessionId}`);
     }
   } else if (resume) {
@@ -556,6 +562,8 @@ export async function main(): Promise<void> {
         if (loaded.metadata?.queuedMessages && Array.isArray(loaded.metadata.queuedMessages)) {
           messageQueue.restore(loaded.metadata.queuedMessages);
         }
+        // Restore the durable title so `toolnet resume` shows the same label.
+        tuiState.sessionTitle = sessionDisplayTitle(loaded);
         tuiState.setStatus(`Resumed session: ${tuiState.currentSessionId}`);
       }
     }
