@@ -327,9 +327,9 @@ describe("AgentHarness — steer promotion at the safe provider-turn boundary", 
         });
       }
       if (call === 2) {
-        pendingInputs.admit(sessionId, "MARK_B", { delivery: "steer" });
-        pendingInputs.admit(sessionId, "MARK_C", { delivery: "steer" });
-        pendingInputs.admit(sessionId, "MARK_D", { delivery: "steer" });
+        pendingInputs.admit(sessionId, "STEER_FIFO_MARK_B", { delivery: "steer" });
+        pendingInputs.admit(sessionId, "STEER_FIFO_MARK_C", { delivery: "steer" });
+        pendingInputs.admit(sessionId, "STEER_FIFO_MARK_D", { delivery: "steer" });
         return openAiReply({ role: "assistant", content: "done" });
       }
       promotedBody = bodyMessages(init);
@@ -339,9 +339,9 @@ describe("AgentHarness — steer promotion at the safe provider-turn boundary", 
     const result = await harness.runHeadless("Check workspace root");
     expect(result.success).toBe(true);
 
-    const iB = promotedBody.indexOf("MARK_B");
-    const iC = promotedBody.indexOf("MARK_C");
-    const iD = promotedBody.indexOf("MARK_D");
+    const iB = promotedBody.indexOf("STEER_FIFO_MARK_B");
+    const iC = promotedBody.indexOf("STEER_FIFO_MARK_C");
+    const iD = promotedBody.indexOf("STEER_FIFO_MARK_D");
     expect(iB).toBeGreaterThanOrEqual(0);
     expect(iB).toBeLessThan(iC);
     expect(iC).toBeLessThan(iD);

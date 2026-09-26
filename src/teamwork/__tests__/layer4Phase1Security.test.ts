@@ -37,7 +37,7 @@ afterAll(() => {
 });
 
 import { securityEngine } from "../../lib/security/securityEngine";
-import { sessionTrust } from "../../lib/security/sessionTrust";
+import { sessionTrust, getSessionTrust } from "../../lib/security/sessionTrust";
 import { ToolGateway } from "../../lib/security/toolGateway";
 import { scrubChildEnv, isSecretEnvVar } from "../../lib/security/childEnv";
 import { setSandboxMode, getSandboxMode } from "../../lib/permissions";
@@ -129,12 +129,13 @@ describe("PHASE1 ToolGateway decision matrix", () => {
   });
 
   test("userApproved=true cannot resurrect a session-denied ASK action", async () => {
+    const testSessionId = `phase1-resurrect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const cmd = "echo phase1-denied-cmd";
     // Simulate a prior "N" for this exact action
-    sessionTrust.recordDecision("shell", cmd, "DENIED");
+    getSessionTrust(testSessionId).recordDecision(testSessionId, "shell", cmd, "DENIED");
     const res = await ToolGateway.execute(
       { name: "shell", args: { command: cmd } },
-      { cwd, workspaceRoot: wsRoot, sandboxMode: "ask", userApproved: true }
+      { cwd, workspaceRoot: wsRoot, sandboxMode: "ask", userApproved: true, sessionId: testSessionId }
     );
     expect(res.allowed).toBe(false);
     expect(res.reason).toMatch(/denied for this session/i);

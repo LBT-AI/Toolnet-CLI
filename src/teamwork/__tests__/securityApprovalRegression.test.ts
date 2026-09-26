@@ -59,6 +59,8 @@ describe("Security Approval Modal Regression Suite", () => {
     } catch {}
     delete process.env.TOOLNETCLI_CONFIG_DIR;
     delete process.env.DATA_DIR;
+    tuiState.currentSessionId = "";
+    (globalThis as any).__toolnetCurrentSessionId = undefined;
     for (const k of Object.keys(process.env)) {
       if (!(k in origEnv)) delete process.env[k];
     }

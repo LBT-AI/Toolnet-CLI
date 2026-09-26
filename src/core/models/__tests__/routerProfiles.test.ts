@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { ModelCatalog } from "../catalog";
 import { ProviderRegistry } from "../registry";
@@ -24,8 +27,12 @@ describe("profile-driven routing", () => {
   let catalog: ModelCatalog;
   let registry: ProviderRegistry;
   let router: ModelRouter;
+  let tempDir: string;
+  const ORIGINAL_DIR = process.env.TOOLNETCLI_CONFIG_DIR;
 
   beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-profiles-"));
+    process.env.TOOLNETCLI_CONFIG_DIR = tempDir;
     catalog = new ModelCatalog();
     registry = new ProviderRegistry(catalog);
     router = new ModelRouter({ registry, catalog, activeProviderId: () => null });
@@ -34,6 +41,11 @@ describe("profile-driven routing", () => {
 
   afterEach(() => {
     resetRoutingConfig();
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {}
+    if (ORIGINAL_DIR === undefined) delete process.env.TOOLNETCLI_CONFIG_DIR;
+    else process.env.TOOLNETCLI_CONFIG_DIR = ORIGINAL_DIR;
   });
 
  it("keeps default routing on the priority ordering", () => {
