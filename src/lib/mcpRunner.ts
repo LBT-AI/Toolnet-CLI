@@ -41,6 +41,14 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { scrubChildEnv } from "./security/childEnv";
 import { getToolnetHome, ensureToolnetDir } from "./toolnetHome";
 import { redactSecrets } from "./security/secretGuard";
+import {
+  getBuiltinMcpServers,
+  isBuiltinSkillsMcp,
+  TOOLNET_SKILLS_MCP_ID,
+  TOOLNET_SKILLS_MCP_NAME,
+  TOOLNET_SKILLS_MCP_URL,
+  TOOLNET_SKILLS_DEFAULT_TIMEOUT_MS,
+} from "../core/mcp/builtin";
 
 // ── Tunables (env-overridable, sane defaults) ──────────────────────────────
 
@@ -100,7 +108,8 @@ export type McpConfigSourceKind =
   | "GLOBAL_TRUSTED"   // canonical home mcp.json (~/.toolnetcli/mcp.json)
   | "USER_CONFIG"      // workspace ./mcp.json written by the user via /mcp add
   | "WORKSPACE_UNTRUSTED" // project .toolnet/mcp.json or .gemini/mcp.json
-  | "LEGACY";          // unknown/unrecognized location
+  | "LEGACY"           // unknown/unrecognized location
+  | "BUILTIN";         // canonical built-in default MCP
 
 export interface LocalMcpServer {
   name: string;
@@ -229,7 +238,7 @@ function saveTrustMap(map: Record<string, McpTrustRecord>): void {
 
 export const mcpTrustManager = {
   /** Explicit enable (user decision via /mcp enable or approval UI). */
-  enableServer(serverId: string, config: McpServerConfig, sourceFile: string): void {
+  enableServer(serverId: string, config: McpServerConfig, sourceFile: string, name?: string): void {
     const map = loadTrustMap();
     map[serverId] = {
       state: "enabled",
@@ -237,22 +246,50 @@ export const mcpTrustManager = {
       enabledAt: Date.now(),
       sourceFile,
     };
+    if (name && map[name]) {
+      delete map[name];
+    }
     saveTrustMap(map);
   },
 
   disableServer(serverId: string): void {
     const map = loadTrustMap();
-    const rec = map[serverId];
-    if (rec) {
-      rec.state = "disabled";
-      saveTrustMap(map);
+    if (map[serverId]) {
+      map[serverId].state = "disabled";
+    } else {
+      map[serverId] = {
+        state: "disabled",
+        fingerprint: "",
+        enabledAt: Date.now(),
+        sourceFile: "",
+      };
     }
+    saveTrustMap(map);
   },
 
   removeServer(serverId: string): void {
     const map = loadTrustMap();
     delete map[serverId];
     saveTrustMap(map);
+  },
+
+  isServerDisabled(serverId: string, name?: string): boolean {
+    const map = loadTrustMap();
+    if (map[serverId]?.state === "enabled") return false;
+    if (name && map[name]?.state === "enabled") return false;
+    if (map[serverId]?.state === "disabled") return true;
+    if (name && map[name]?.state === "disabled") return true;
+    const lowerId = serverId.toLowerCase();
+    const lowerName = name?.toLowerCase();
+    for (const [key, val] of Object.entries(map)) {
+      if (val?.state === "disabled") {
+        const k = key.toLowerCase();
+        if (k === lowerId || (lowerName && k === lowerName)) {
+          return true;
+        }
+      }
+    }
+    return false;
   },
 
   /**
@@ -265,13 +302,16 @@ export const mcpTrustManager = {
     sourceKind: McpConfigSourceKind,
     disabled?: boolean
   ): McpServerTrustState {
-    if (disabled) return "disabled";
-
-    // Global (canonical home) config is operator-managed → trusted.
-    if (sourceKind === "GLOBAL_TRUSTED") return "enabled";
+    if (disabled || config.enabled === false) return "disabled";
 
     const map = loadTrustMap();
     const rec = map[serverId];
+    if (rec?.state === "disabled") return "disabled";
+    if (this.isServerDisabled(serverId, (config as any).name)) return "disabled";
+
+    // Global (canonical home) and built-in configs are trusted by default unless disabled.
+    if (sourceKind === "GLOBAL_TRUSTED" || sourceKind === "BUILTIN") return "enabled";
+
     if (!rec || rec.state !== "enabled") return "untrusted";
 
     // Fingerprint mismatch (command/args/cwd changed) → old trust invalid.
@@ -346,7 +386,14 @@ export function loadLocalMcpConfig(baseDir: string = process.cwd()): Record<stri
  * deterministic server ids. Workspace `.toolnet/mcp.json` remains supported
  * (project-local config) but is classified WORKSPACE_UNTRUSTED.
  */
-export function getLocalMcpServers(baseDir: string = process.cwd()): LocalMcpServer[] {
+export function getLocalMcpServers(
+  baseDir: string = process.cwd(),
+  options: { includeBuiltin?: boolean } = {}
+): LocalMcpServer[] {
+  if (options.includeBuiltin) {
+    return getEffectiveMcpServers(baseDir);
+  }
+
   const discovered: DiscoveredServer[] = [];
 
   // Canonical global config first (trusted), then workspace candidates.
@@ -384,6 +431,68 @@ export function getLocalMcpServers(baseDir: string = process.cwd()): LocalMcpSer
   }
 
   return Array.from(serversMap.values());
+}
+
+/**
+ * Returns the effective list of MCP servers:
+ * effective = built-in defaults + user-defined (global) + project-defined (workspace).
+ *
+ * Implements canonical duplicate detection and configuration inheritance:
+ * - If a user/project config specifies the built-in MCP (by URL, ID, or name),
+ *   the user's configuration overrides/adopts the built-in definition without duplicating.
+ * - If the user explicitly disabled the built-in server (in mcp-trust.json or via config enabled: false),
+ *   it remains disabled across restarts.
+ */
+export function getEffectiveMcpServers(baseDir: string = process.cwd()): LocalMcpServer[] {
+  const discovered = getLocalMcpServers(baseDir);
+  const result: LocalMcpServer[] = [];
+  const builtinMatched = new Set<string>();
+
+  // Process discovered servers from disk first to allow user override
+  for (const server of discovered) {
+    if (isBuiltinSkillsMcp(server)) {
+      builtinMatched.add(TOOLNET_SKILLS_MCP_ID);
+      const isUserDisabled = mcpTrustManager.isServerDisabled(TOOLNET_SKILLS_MCP_ID, server.name);
+      const explicitEnabled = server.config.enabled !== false && !server.config.disabled && !isUserDisabled;
+
+      result.push({
+        name: server.name || TOOLNET_SKILLS_MCP_NAME,
+        serverId: TOOLNET_SKILLS_MCP_ID,
+        sourceFile: server.sourceFile,
+        sourceKind: server.sourceKind,
+        config: {
+          type: "remote",
+          url: TOOLNET_SKILLS_MCP_URL,
+          enabled: explicitEnabled,
+          disabled: !explicitEnabled,
+          timeout: server.config.timeout ?? TOOLNET_SKILLS_DEFAULT_TIMEOUT_MS,
+          headers: server.config.headers ?? {},
+          ...server.config,
+        },
+      });
+    } else {
+      result.push(server);
+    }
+  }
+
+  // Add any built-in servers that were not declared in user config
+  for (const builtin of getBuiltinMcpServers()) {
+    if (builtinMatched.has(builtin.serverId)) continue;
+
+    const isUserDisabled = mcpTrustManager.isServerDisabled(builtin.serverId, builtin.name);
+    const effectiveEnabled = !isUserDisabled && builtin.config.enabled !== false && !builtin.config.disabled;
+
+    result.push({
+      ...builtin,
+      config: {
+        ...builtin.config,
+        enabled: effectiveEnabled,
+        disabled: !effectiveEnabled,
+      },
+    });
+  }
+
+  return result;
 }
 
 // ── Child spawn (scrubbed env) ─────────────────────────────────────────────

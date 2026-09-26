@@ -29,6 +29,7 @@ import {
   executeMcpTool,
   getActiveMcpClients,
   getLocalMcpServers,
+  getEffectiveMcpServers,
   isRemoteMcpConfig,
   mcpTrustManager,
   MCP_CALL_TIMEOUT_MS,
@@ -153,6 +154,8 @@ export interface McpManagerOptions {
   authStore?: McpAuthStore;
  /** Structured lifecycle events (). */
   onEvent?: McpServerEventListener;
+  /** Include canonical built-in default MCP servers (e.g. ToolNet Skills). */
+  includeBuiltin?: boolean;
 }
 
 export interface McpAuthStartResult {
@@ -202,7 +205,7 @@ export class McpManager {
 
   /** Tools of one server, as the model sees them. */
   listTools(serverId: string): McpToolInfo[] {
-    const managed = this.servers.get(serverId);
+    const managed = this.servers.get(serverId) ?? this.find(serverId);
     if (!managed) return [];
     return managed.tools.map((tool) => this.toToolInfo(managed, tool));
   }
@@ -239,7 +242,10 @@ export class McpManager {
    * Servers that are untrusted/disabled are reported as skipped — never
    * silently treated as connected.
    */
-  async sync(baseDir: string = this.workspaceRoot): Promise<McpSyncReport> {
+  async sync(
+    baseDir: string = this.workspaceRoot,
+    syncOptions?: { includeBuiltin?: boolean }
+  ): Promise<McpSyncReport> {
     this.workspaceRoot = baseDir;
     const report: McpSyncReport = {
       connected: [],
@@ -249,7 +255,10 @@ export class McpManager {
       rejectedToolNames: [],
     };
 
-    const discovered = getLocalMcpServers(baseDir);
+    const shouldIncludeBuiltin = syncOptions?.includeBuiltin ?? (this.options.includeBuiltin ?? false);
+    const discovered = shouldIncludeBuiltin
+      ? getEffectiveMcpServers(baseDir)
+      : getLocalMcpServers(baseDir);
     const liveIds = new Set<string>();
 
     for (const server of discovered) {
@@ -1102,7 +1111,13 @@ export class McpManager {
     if (!nameOrId) return undefined;
     const direct = this.servers.get(nameOrId);
     if (direct) return direct;
-    return [...this.servers.values()].find((s) => s.server.name === nameOrId);
+    const lower = nameOrId.toLowerCase();
+    return [...this.servers.values()].find(
+      (s) =>
+        s.server.name === nameOrId ||
+        s.server.serverId.toLowerCase() === lower ||
+        s.server.name.toLowerCase() === lower
+    );
   }
 
   private toServerInfo(managed: ManagedServer): McpServerInfo {
@@ -1188,6 +1203,7 @@ export function getStoredTokens(serverName: string): McpAuthTokens | undefined {
  * their own instance so registry state stays isolated.
  */
 export const mcpManager = new McpManager({
+  includeBuiltin: true,
   onLog: (level, message, meta) => {
     if (level === "info") return;
     console.error(`[mcp] ${message}`, meta ?? "");

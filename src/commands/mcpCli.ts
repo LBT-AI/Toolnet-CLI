@@ -92,9 +92,10 @@ export async function runMcpCli(args: string[], deps: McpCliDeps = {}): Promise<
       }
       for (const server of servers) {
         const kind = server.kind === "remote" ? "remote" : "stdio";
+        const builtin = server.sourceKind === "BUILTIN" ? " [builtin]" : "";
         const transport = server.transport ? ` transport=${server.transport}` : "";
         const auth = server.kind === "remote" ? ` auth=${server.authenticated ? "yes" : "no"}` : "";
-        io.out(`${server.name}  [${kind}]${transport}  status=${server.status}  tools=${server.toolCount}${auth}`);
+        io.out(`${server.name}${builtin}  [${kind}]${transport}  status=${server.status}  tools=${server.toolCount}${auth}`);
       }
       return 0;
     }

@@ -4,8 +4,11 @@ import {
   addLocalMcpServer,
   removeLocalMcpServer,
   getLocalMcpServers,
+  getEffectiveMcpServers,
   mcpTrustManager,
 } from "../lib/mcpRunner";
+import { isBuiltinSkillsMcp } from "../core/mcp";
+import { mcpManager } from "../core/mcp/manager";
 import { runMcpCli } from "./mcpCli";
 
 /**
@@ -27,54 +30,72 @@ async function delegateToCli(subArgs: string[], ctx: CommandContext) {
 
 async function showMcpStatus(ctx: CommandContext) {
   const { gateway, addMessage } = ctx;
-  if (!gateway) {
-    addMessage("assistant", "MCP status requires a ToolNet gateway connection. Use /provider to configure.");
-    return;
+  let plugins: any[] = [];
+  let localPlugins: any[] = [];
+  let customPlugins: any[] = [];
+  let installed = false;
+  let baseUrl: string | undefined;
+
+  if (gateway) {
+    addMessage("assistant", "Fetching MCP status...");
+    const res = await gateway.getCoworkSettings();
+    if (res.success && res.data) {
+      const cowork = (res.data as any).cowork || {};
+      plugins = cowork.plugins || [];
+      localPlugins = cowork.localPlugins || [];
+      customPlugins = cowork.customPlugins || [];
+      installed = (res.data as any).installed;
+      baseUrl = cowork.baseUrl;
+    }
   }
-  addMessage("assistant", "Fetching MCP status...");
-  const res = await gateway.getCoworkSettings();
-  if (!res.success) {
-    addMessage("assistant", `\u001b[31mFailed: ${res.error}\u001b[0m`);
-    return;
-  }
-  const data = res.data || {};
-  const cowork = (data as any).cowork || {};
-  const plugins = cowork.plugins || [];
-  const localPlugins = cowork.localPlugins || [];
-  const customPlugins = cowork.customPlugins || [];
 
   const localMcpConfig = loadLocalMcpConfig();
   const localMcpNames = Object.keys(localMcpConfig);
   const combinedLocal = Array.from(new Set([...localPlugins, ...localMcpNames]));
 
- // : per-server trust state in the status listing.
+  // Discovered and built-in servers with trust and connection status
   const trustLines: string[] = [];
-  for (const server of getLocalMcpServers()) {
+  for (const server of getEffectiveMcpServers()) {
     const trust = mcpTrustManager.getTrustState(
       server.serverId, server.config, server.sourceKind, server.config.disabled
     );
-    const icon = trust === "enabled" ? "\u001b[32m●\u001b[0m" : trust === "disabled" ? "\u001b[90m○\u001b[0m" : "\u001b[33m?\u001b[0m";
-    trustLines.push(`    ${icon} ${server.name} [${trust}] (${server.sourceKind})`);
+    const managedStatus = mcpManager.status(server.serverId);
+    const toolCount = mcpManager.listTools(server.serverId).length;
+    const isBuiltin = server.sourceKind === "BUILTIN" || isBuiltinSkillsMcp(server);
+    const icon = trust === "disabled"
+      ? "\u001b[90m○\u001b[0m"
+      : managedStatus === "connected"
+        ? "\u001b[32m●\u001b[0m"
+        : "\u001b[33m●\u001b[0m";
+
+    const builtinBadge = isBuiltin ? " [builtin]" : "";
+    const statusLabel = trust === "disabled" ? "disabled" : managedStatus;
+    const toolsDetail = managedStatus === "connected" ? ` · ${toolCount} tools` : "";
+    const urlDetail = server.config.url ? `\n      url: ${server.config.url}` : "";
+
+    trustLines.push(`    ${icon} ${server.name}${builtinBadge} [${statusLabel}]${toolsDetail}${urlDetail}`);
   }
 
   const lines: string[] = [];
   lines.push("MCP — Status");
   lines.push("───".repeat(10));
 
-  const installed = (data as any).installed;
-  lines.push(`  Claude Desktop: ${installed ? "\u001b[32minstalled\u001b[0m" : "\u001b[33mnot detected\u001b[0m"}`);
-
-  if (cowork.baseUrl) {
-    lines.push(`  Base URL: ${cowork.baseUrl}`);
+  if (gateway) {
+    lines.push(`  Claude Desktop: ${installed ? "\u001b[32minstalled\u001b[0m" : "\u001b[33mnot detected\u001b[0m"}`);
+    if (baseUrl) {
+      lines.push(`  Base URL: ${baseUrl}`);
+    }
   }
 
-  lines.push("");
-  lines.push(`  Plugins (${plugins.length}):`);
-  for (const p of plugins) {
-    const icon = (p as any).url?.includes("/api/mcp/") ? "\u001b[36m\u25B6\u001b[0m" : "\u001b[34m\u2601\u001b[0m";
-    lines.push(`    ${icon} ${(p as any).name || "?"}`);
-    if ((p as any).toolNames?.length) {
-      lines.push(`           tools: ${(p as any).toolNames.join(", ")}`);
+  if (plugins.length > 0) {
+    lines.push("");
+    lines.push(`  Plugins (${plugins.length}):`);
+    for (const p of plugins) {
+      const icon = (p as any).url?.includes("/api/mcp/") ? "\u001b[36m\u25B6\u001b[0m" : "\u001b[34m\u2601\u001b[0m";
+      lines.push(`    ${icon} ${(p as any).name || "?"}`);
+      if ((p as any).toolNames?.length) {
+        lines.push(`           tools: ${(p as any).toolNames.join(", ")}`);
+      }
     }
   }
 
@@ -85,7 +106,7 @@ async function showMcpStatus(ctx: CommandContext) {
 
   if (trustLines.length > 0) {
     lines.push("");
-    lines.push("  Discovered MCP servers:");
+    lines.push("  Configured & Built-in MCP servers:");
     lines.push(...trustLines);
   }
 
@@ -99,16 +120,16 @@ async function showMcpStatus(ctx: CommandContext) {
 
   lines.push("");
   lines.push("Commands:");
-  lines.push("  /mcp registry           Browse MCP registry");
-  lines.push("  /mcp tools <url>        Probe MCP server tools");
-  lines.push("  /mcp add <name> <cmd>   Add a local MCP server");
-  lines.push("  /mcp remove <name>      Remove a local MCP server");
-  lines.push("  /mcp enable <name>      Trust + enable a discovered server");
-  lines.push("  /mcp disable <name>     Revoke trust for a server");
   lines.push("  /mcp list               List configured servers and status");
   lines.push("  /mcp show [name]        Diagnostics (transport, tools, auth)");
   lines.push("  /mcp connect <name>     Connect a server and register its tools");
   lines.push("  /mcp disconnect <name>  Disconnect and withdraw its tools");
+  lines.push("  /mcp enable <name>      Trust + enable a server");
+  lines.push("  /mcp disable <name>     Revoke trust / disable a server");
+  lines.push("  /mcp add <name> <cmd>   Add a local MCP server");
+  lines.push("  /mcp remove <name>      Remove or disable an MCP server");
+  lines.push("  /mcp registry           Browse MCP registry");
+  lines.push("  /mcp tools <url>        Probe MCP server tools");
   lines.push("  /mcp auth <name>        OAuth flow for a remote server");
   lines.push("  /mcp logout <name>      Remove stored credentials");
 
@@ -200,14 +221,33 @@ async function removeMcp(args: string[], ctx: CommandContext) {
     return;
   }
   const name = args[0];
+  const server = getEffectiveMcpServers().find(
+    (s) =>
+      s.name === name ||
+      s.serverId === name ||
+      s.name.toLowerCase() === name.toLowerCase() ||
+      s.serverId.toLowerCase() === name.toLowerCase()
+  );
+  if (server?.sourceKind === "BUILTIN" || (server && isBuiltinSkillsMcp(server))) {
+    mcpTrustManager.disableServer(server.serverId);
+    if (server.name !== server.serverId) {
+      mcpTrustManager.disableServer(server.name);
+    }
+    await mcpManager.disconnect(server.serverId).catch(() => {});
+    addMessage(
+      "assistant",
+      `\x1b[33m!\x1b[0m Built-in MCP server '${server.name}' cannot be removed from core definitions. It has been disabled instead.\nUse '/mcp enable ${name}' to re-enable it.`
+    );
+    return;
+  }
   removeLocalMcpServer(name);
+  mcpTrustManager.disableServer(name);
+  await mcpManager.disconnect(name).catch(() => {});
   addMessage("assistant", `\x1b[32m✓\x1b[0m Removed local MCP server '${name}'`);
 }
 
 /**
- * : explicit trust decision — the ONLY way a workspace-discovered
- * server becomes spawnable. Trust is bound to the command fingerprint;
- * changing the command later re-requires approval.
+ * Explicit trust decision — enables a server and connects it.
  */
 async function enableMcp(args: string[], ctx: CommandContext) {
   const { addMessage } = ctx;
@@ -216,17 +256,26 @@ async function enableMcp(args: string[], ctx: CommandContext) {
     return;
   }
   const name = args[0];
-  const server = getLocalMcpServers().find(s => s.name === name);
+  const server = getEffectiveMcpServers().find(
+    (s) =>
+      s.name === name ||
+      s.serverId === name ||
+      s.name.toLowerCase() === name.toLowerCase() ||
+      s.serverId.toLowerCase() === name.toLowerCase()
+  );
   if (!server) {
     addMessage("assistant", `\x1b[31m✗\x1b[0m No discovered MCP server named '${name}'.`);
     return;
   }
-  mcpTrustManager.enableServer(server.serverId, server.config, server.sourceFile);
+  mcpTrustManager.enableServer(server.serverId, server.config, server.sourceFile, server.name);
+  await mcpManager.sync().catch(() => {});
+  const status = await mcpManager.connect(server.serverId).catch(() => "failed");
   addMessage(
     "assistant",
-    `\x1b[32m✓\x1b[0m Enabled '${server.name}' (${server.sourceKind}).\n` +
-    `  command: ${server.config.command} ${(server.config.args || []).join(" ")}\n` +
-    `  Trust is bound to this command fingerprint — changes will require re-approval.`
+    `\x1b[32m✓\x1b[0m Enabled '${server.name}' (${server.sourceKind}).` +
+      (server.config.command ? `\n  command: ${server.config.command} ${(server.config.args || []).join(" ")}` : "") +
+      (server.config.url ? `\n  url: ${server.config.url}` : "") +
+      `\n  status: ${status}`
   );
 }
 
@@ -237,12 +286,23 @@ async function disableMcp(args: string[], ctx: CommandContext) {
     return;
   }
   const name = args[0];
-  const server = getLocalMcpServers().find(s => s.name === name);
+  const server = getEffectiveMcpServers().find(
+    (s) =>
+      s.name === name ||
+      s.serverId === name ||
+      s.name.toLowerCase() === name.toLowerCase() ||
+      s.serverId.toLowerCase() === name.toLowerCase()
+  );
   if (server) {
     mcpTrustManager.disableServer(server.serverId);
+    if (server.name !== server.serverId) {
+      mcpTrustManager.disableServer(server.name);
+    }
+    await mcpManager.disconnect(server.serverId).catch(() => {});
   } else {
     // Server may already be removed; still revoke any lingering trust by id.
     mcpTrustManager.disableServer(name);
+    await mcpManager.disconnect(name).catch(() => {});
   }
   addMessage("assistant", `\x1b[32m✓\x1b[0m Disabled '${name}' (trust revoked).`);
 }

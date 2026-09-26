@@ -23,6 +23,7 @@ import { getCliKey } from "./keys";
 import { checkPendingRecovery } from "./crashRecovery";
 import { getHealthSnapshot } from "./observability/healthSnapshot";
 import { getLogsDir, LOG_MAX_BYTES, LOG_MAX_FILES } from "./observability/logger";
+import { getEffectiveMcpServers } from "./mcpRunner";
 
 export interface DiagnosticResult {
   name: string;
@@ -197,11 +198,13 @@ function checkNodePresence(): DiagnosticResult {
 
 function checkMcpConfig(): DiagnosticResult {
   try {
-    const mcpPath = path.join(process.cwd(), ".github", "mcp.json");
-    if (fs.existsSync(mcpPath)) {
-      const raw = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-      const count = Object.keys(raw.mcpServers || raw.servers || {}).length;
-      return { name: "MCP servers", status: "ok", value: `${count} configured` };
+    const servers = getEffectiveMcpServers();
+    const count = servers.length;
+    if (count > 0) {
+      const summary = servers
+        .map((s) => (s.sourceKind === "BUILTIN" ? `${s.name} (builtin)` : s.name))
+        .join(", ");
+      return { name: "MCP servers", status: "ok", value: `${count} available (${summary})` };
     }
     return { name: "MCP servers", status: "ok", value: "none configured" };
   } catch {

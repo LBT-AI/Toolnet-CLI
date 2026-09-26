@@ -50,7 +50,22 @@ export function flushToolCache(): void {
  * model. Deriving here makes the registry comment literally true and guarantees
  * the model sees exactly the canonical names the registry declares.
  */
-export const agentTools = toolRegistry.schemas();
+export const agentTools: any[] = new Proxy([] as any[], {
+  get(target, prop, receiver) {
+    const schemas = toolRegistry.schemas();
+    const val = Reflect.get(schemas, prop);
+    return typeof val === "function" ? val.bind(schemas) : val;
+  },
+  has(target, prop) {
+    return Reflect.has(toolRegistry.schemas(), prop);
+  },
+  ownKeys(target) {
+    return Reflect.ownKeys(toolRegistry.schemas());
+  },
+  getOwnPropertyDescriptor(target, prop) {
+    return Reflect.getOwnPropertyDescriptor(toolRegistry.schemas(), prop);
+  },
+});
 
 export function getMcpAgentTools(): Array<any> {
   return getMcpRunnerAgentTools();
