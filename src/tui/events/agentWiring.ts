@@ -12,6 +12,7 @@ import { supportsReasoning } from "../../lib/reasoning";
 import { securityEngine } from "../../lib/security/securityEngine";
 import { toolRegistry } from "../../lib/harness/toolRegistry";
 import { agentEngine } from "../../core/agent/agentEngine";
+import type { AgentEvent } from "../../core/contracts";
 import { requestApprovalModal, requestConfirmation } from "../permissions/permissionModal";
 import { dispatchCommand } from "../../commands";
 import { loadSession, formatExitMessage, sessionDisplayTitle } from "../../lib/sessionPersistence";
@@ -222,6 +223,162 @@ export function syncTranscriptPreservingReasoning(currentMsgs: any[], engineMsgs
   return mergeTranscriptMessages(currentMsgs ?? [], nonReasoningEngine);
 }
 
+/**
+ * Build the TUI's agent-event callbacks for one run.
+ *
+ * Reasoning has exactly ONE live path: `onEvent` → reasoning-start / delta /
+ * end. The engine's legacy `onReasoningDelta` callback is deliberately NOT
+ * wired here: passing both fed every reasoning chunk into appendReasoningDelta
+ * twice, duplicating the visible thought stream ("AABBCC"). Text still uses
+ * `onTextDelta` — the normalized event stream has no text-delta consumer here.
+ *
+ * Exported so the single-append contract is covered by a regression test that
+ * drives the SAME handler the TUI uses.
+ */
+export function buildTuiAgentCallbacks(runId: string): {
+  onTextDelta: (delta: string) => void;
+  onEvent: (event: AgentEvent) => void;
+} {
+  // Maps a tool callId to its name, shared by the tool-call/result/error cases.
+  const toolNames = new Map<string, string>();
+
+  return {
+    onTextDelta: (delta) => {
+      // Content arrived -> finalize any active reasoning block for this turn
+      tuiState.finalizeActiveReasoning("text-delta");
+      if (tuiState.agentPhase === "thinking") tuiState.agentPhase = "streaming";
+      tuiState.appendAssistantDelta(delta, tuiState.currentTurnId);
+    },
+    onEvent: (event) => {
+      switch (event.type) {
+        case "reasoning-start":
+          tuiState.appendReasoningDelta("", {
+            sessionId: tuiState.currentSessionId,
+            runId,
+            turnId: event.turn ?? tuiState.currentTurnId,
+          });
+          if (tuiState.agentPhase !== "thinking") tuiState.agentPhase = "thinking";
+          statusManager.update("Thinking");
+          break;
+        case "reasoning-delta":
+          tuiState.appendReasoningDelta(event.text, {
+            sessionId: tuiState.currentSessionId,
+            runId,
+            turnId: event.turn ?? tuiState.currentTurnId,
+          });
+          if (tuiState.agentPhase !== "thinking") tuiState.agentPhase = "thinking";
+          statusManager.update("Thinking");
+          break;
+        case "reasoning-end":
+          if (tuiState.activeReasoningDraft) {
+            tuiState.activeReasoningDraft.endedAt = event.timestamp ?? Date.now();
+          }
+          break;
+        case "tool-call":
+          // Tool call begins -> finalize current reasoning block immediately!
+          tuiState.finalizeActiveReasoning("tool-call");
+          tuiState.agentPhase = "working";
+          toolNames.set(event.callId, event.name);
+          statusManager.updateTool(event.name, event.input as any);
+          tuiState.openActiveToolActivity(event.callId, event.name, event.input);
+          tuiState.attachToolCall(
+            {
+              id: event.callId,
+              type: "function",
+              function: {
+                name: event.name,
+                arguments: typeof event.input === "string" ? event.input : JSON.stringify(event.input ?? {}),
+              },
+            },
+            tuiState.currentTurnId
+          );
+          tuiState.requestChromeRender();
+          break;
+        case "tool-progress":
+          tuiState.updateActiveToolProgress(event.callId, {
+            elapsedMs: event.elapsedMs,
+            tail: event.tail,
+          });
+          break;
+        case "tool-result": {
+          const wasCancelled = tuiState.messages.some(
+            (m) => m.role === "tool" && m.tool_call_id === event.callId && (m as any).cancelled
+          );
+          tuiState.markToolResult(event.callId);
+          if (wasCancelled) {
+            tuiState.closeActiveToolActivity(event.callId);
+            break;
+          }
+          updateCrashToolResult(event.callId, event.result.exitCode ?? (event.result.ok ? 0 : 1), "Executed tool");
+          // Duration comes from THIS call's activity — with parallel tools the
+          // primary accessor may point at a different callId.
+          const activity = tuiState.findToolActivity(event.callId);
+          const durationMs = activity ? Date.now() - activity.startedAt : undefined;
+          tuiState.closeActiveToolActivity(event.callId);
+          tuiState.appendMessage({
+            role: "tool",
+            tool_call_id: event.callId,
+            name: toolNames.get(event.callId) || "tool",
+            content: JSON.stringify(event.result),
+            durationMs,
+          } as any);
+          tuiState.requestRender();
+          break;
+        }
+        case "tool-error": {
+          const wasCancelled = tuiState.messages.some(
+            (m) => m.role === "tool" && m.tool_call_id === event.callId && (m as any).cancelled
+          );
+          tuiState.markToolResult(event.callId);
+          if (wasCancelled) {
+            tuiState.closeActiveToolActivity(event.callId);
+            break;
+          }
+          const activity = tuiState.findToolActivity(event.callId);
+          const durationMs = activity ? Date.now() - activity.startedAt : undefined;
+          tuiState.closeActiveToolActivity(event.callId);
+          tuiState.appendMessage({
+            role: "tool",
+            tool_call_id: event.callId,
+            name: toolNames.get(event.callId) || "tool",
+            content: JSON.stringify({ error: event.error, exitCode: 1 }),
+            durationMs,
+          } as any);
+          tuiState.requestRender();
+          break;
+        }
+        case "cancelled": {
+          // Cancel EVERY running tool, not just the last-started one, and leave
+          // one cancelled transcript row per tool so call/result pairs survive.
+          const cancelledActivities = tuiState.cancelAllToolActivities();
+          for (const cancelled of cancelledActivities) {
+            tuiState.appendMessage({
+              role: "tool",
+              tool_call_id: cancelled.callId,
+              name: cancelled.name,
+              content: JSON.stringify({ error: "Cancelled", exitCode: 130 }),
+              durationMs: cancelled.elapsedMs,
+              cancelled: true,
+            } as any);
+          }
+          tuiState.clearToolActivities();
+          tuiState.finalizeActiveReasoning("cancelled");
+          tuiState.finalizeAssistantDraft("cancelled");
+          tuiState.agentPhase = "cancelled";
+          break;
+        }
+        case "agent-complete":
+          tuiState.finalizeActiveReasoning("agent-complete");
+          tuiState.finalizeAssistantDraft("agent-complete");
+          tuiState.agentPhase = "done";
+          break;
+        default:
+          break;
+      }
+    },
+  };
+}
+
 export async function sendMessage(text: string): Promise<void> {
   if (!text.trim()) return;
 
@@ -339,8 +496,6 @@ export async function sendMessage(text: string): Promise<void> {
 
     tuiState.setStatus("Streaming response…");
 
-    const toolNames = new Map<string, string>();
-
     const result = await agentEngine.run({
       prompt: text,
       messages: apiMessages,
@@ -350,146 +505,9 @@ export async function sendMessage(text: string): Promise<void> {
       signal: tuiState.abortController.signal,
       toolsOverride,
       reasoningSettings: tuiState.reasoningSettings,
-      onTextDelta: (delta) => {
-        // Content arrived -> finalize any active reasoning block for this turn
-        tuiState.finalizeActiveReasoning("text-delta");
-        if (tuiState.agentPhase === "thinking") tuiState.agentPhase = "streaming";
-        tuiState.appendAssistantDelta(delta, tuiState.currentTurnId);
-      },
-      onReasoningDelta: (delta) => {
-        tuiState.appendReasoningDelta(delta, {
-          sessionId: tuiState.currentSessionId,
-          runId,
-          turnId: tuiState.currentTurnId,
-        });
-        statusManager.update("Thinking");
-      },
-      onEvent: (event) => {
-        switch (event.type) {
-          case "reasoning-start":
-            tuiState.appendReasoningDelta("", {
-              sessionId: tuiState.currentSessionId,
-              runId,
-              turnId: event.turn ?? tuiState.currentTurnId,
-            });
-            if (tuiState.agentPhase !== "thinking") tuiState.agentPhase = "thinking";
-            statusManager.update("Thinking");
-            break;
-          case "reasoning-delta":
-            tuiState.appendReasoningDelta(event.text, {
-              sessionId: tuiState.currentSessionId,
-              runId,
-              turnId: event.turn ?? tuiState.currentTurnId,
-            });
-            if (tuiState.agentPhase !== "thinking") tuiState.agentPhase = "thinking";
-            statusManager.update("Thinking");
-            break;
-          case "reasoning-end":
-            if (tuiState.activeReasoningDraft) {
-              tuiState.activeReasoningDraft.endedAt = event.timestamp ?? Date.now();
-            }
-            break;
-          case "tool-call":
-            // Tool call begins -> finalize current reasoning block immediately!
-            tuiState.finalizeActiveReasoning("tool-call");
-            tuiState.agentPhase = "working";
-            toolNames.set(event.callId, event.name);
-            statusManager.updateTool(event.name, event.input as any);
-            tuiState.openActiveToolActivity(event.callId, event.name, event.input);
-            tuiState.attachToolCall(
-              {
-                id: event.callId,
-                type: "function",
-                function: {
-                  name: event.name,
-                  arguments: typeof event.input === "string" ? event.input : JSON.stringify(event.input ?? {}),
-                },
-              },
-              tuiState.currentTurnId
-            );
-            tuiState.requestChromeRender();
-            break;
-          case "tool-progress":
-            tuiState.updateActiveToolProgress(event.callId, {
-              elapsedMs: event.elapsedMs,
-              tail: event.tail,
-            });
-            break;
-          case "tool-result": {
-            const wasCancelled = tuiState.messages.some(
-              (m) => m.role === "tool" && m.tool_call_id === event.callId && (m as any).cancelled
-            );
-            tuiState.markToolResult(event.callId);
-            if (wasCancelled) {
-              tuiState.closeActiveToolActivity(event.callId);
-              break;
-            }
-            updateCrashToolResult(event.callId, event.result.exitCode ?? (event.result.ok ? 0 : 1), "Executed tool");
-            const durationMs = tuiState.activeToolActivity?.callId === event.callId
-              ? Date.now() - tuiState.activeToolActivity.startedAt
-              : undefined;
-            tuiState.closeActiveToolActivity(event.callId);
-            tuiState.appendMessage({
-              role: "tool",
-              tool_call_id: event.callId,
-              name: toolNames.get(event.callId) || "tool",
-              content: JSON.stringify(event.result),
-              durationMs,
-            } as any);
-            tuiState.requestRender();
-            break;
-          }
-          case "tool-error": {
-            const wasCancelled = tuiState.messages.some(
-              (m) => m.role === "tool" && m.tool_call_id === event.callId && (m as any).cancelled
-            );
-            tuiState.markToolResult(event.callId);
-            if (wasCancelled) {
-              tuiState.closeActiveToolActivity(event.callId);
-              break;
-            }
-            const durationMs = tuiState.activeToolActivity?.callId === event.callId
-              ? Date.now() - tuiState.activeToolActivity.startedAt
-              : undefined;
-            tuiState.closeActiveToolActivity(event.callId);
-            tuiState.appendMessage({
-              role: "tool",
-              tool_call_id: event.callId,
-              name: toolNames.get(event.callId) || "tool",
-              content: JSON.stringify({ error: event.error, exitCode: 1 }),
-              durationMs,
-            } as any);
-            tuiState.requestRender();
-            break;
-          }
-          case "cancelled":
-            if (tuiState.activeToolActivity) {
-              const cancelled = tuiState.cancelActiveToolActivity();
-              if (cancelled) {
-                tuiState.appendMessage({
-                  role: "tool",
-                  tool_call_id: cancelled.callId,
-                  name: cancelled.name,
-                  content: JSON.stringify({ error: "Cancelled", exitCode: 130 }),
-                  durationMs: cancelled.elapsedMs,
-                  cancelled: true,
-                } as any);
-                tuiState.activeToolActivity = null;
-              }
-            }
-            tuiState.finalizeActiveReasoning("cancelled");
-            tuiState.finalizeAssistantDraft("cancelled");
-            tuiState.agentPhase = "cancelled";
-            break;
-          case "agent-complete":
-            tuiState.finalizeActiveReasoning("agent-complete");
-            tuiState.finalizeAssistantDraft("agent-complete");
-            tuiState.agentPhase = "done";
-            break;
-          default:
-            break;
-        }
-      },
+      // ONE canonical reasoning path: onEvent → reasoning-start/delta/end.
+      // (No onReasoningDelta — wiring both duplicated every chunk.)
+      ...buildTuiAgentCallbacks(runId),
       requestApproval: async ({ name, args, reason }) => {
         const decision = await requestApprovalModal({
           toolName: name,

@@ -36,6 +36,13 @@ export interface RenderedChatFrame {
   activityLines: string[];
 }
 
+/**
+ * Max activity rows drawn at once. Bounds the transient overlay's vertical
+ * footprint so parallel tools can never grow into (or shift) the composer,
+ * footer, or transcript viewport on a 52x20 terminal.
+ */
+export const MAX_ACTIVITY_ROWS = 4;
+
 export function renderActiveToolActivity(activity: ActiveToolActivity, cols: number): string[] {
   const isNarrow = cols <= 60;
   const elapsedSec = Math.max(0, Math.floor(activity.elapsedMs / 1000));
@@ -66,6 +73,28 @@ export function renderActiveToolActivity(activity: ActiveToolActivity, cols: num
   }
 
   return lines;
+}
+
+/**
+ * Render EVERY running tool activity, bounded.
+ *
+ * A single activity keeps the full panel (header + progress tail). With more
+ * than one, each collapses to its header row plus a `… +N more` overflow row:
+ * parallel tools stay individually readable without flooding the frame, and the
+ * total is capped at MAX_ACTIVITY_ROWS so the layout below never moves.
+ */
+export function renderToolActivities(activities: ActiveToolActivity[], cols: number): string[] {
+  const running = activities.filter((activity) => activity.status === "running");
+  if (running.length === 0) return [];
+  if (running.length === 1) return renderActiveToolActivity(running[0], cols);
+
+  const visible = running.slice(-MAX_ACTIVITY_ROWS);
+  const rows = visible.map((activity) => renderActiveToolActivity(activity, cols)[0]);
+  const hidden = running.length - visible.length;
+  if (hidden > 0) {
+    rows.push(`  ${A.dim}${A.fgMuted}… +${hidden} more${A.reset}`);
+  }
+  return rows.slice(-MAX_ACTIVITY_ROWS);
 }
 
 export function formatInlineMarkdown(text: string, baseColor = A.fgText): string {
@@ -242,8 +271,8 @@ export function renderChatMessagesWithMetadata(
         );
         if (alreadyAnswered) continue;
 
-        // If in flight, rendered by activeToolActivity at transcript tail
-        if (tuiState.activeToolActivity && tuiState.activeToolActivity.callId === tc.id) {
+        // If in flight, rendered by the live activity section at transcript tail
+        if (tuiState.hasActiveToolActivity(tc.id)) {
           continue;
         }
 
@@ -381,9 +410,7 @@ export function renderChatFrame(
 ): RenderedChatFrame {
   return {
     chat: renderChatMessagesWithMetadata(messages, chatCols, primaryColor, verbose),
-    activityLines: tuiState.activeToolActivity?.status === "running"
-      ? renderActiveToolActivity(tuiState.activeToolActivity, chatCols)
-      : [],
+    activityLines: renderToolActivities(tuiState.getActiveToolActivities(), chatCols),
   };
 }
 
@@ -394,11 +421,12 @@ export function renderChatMessages(
   verbose = false
 ): string[] {
   const lines = renderChatMessagesWithMetadata(messages, chatCols, primaryColor, verbose).lines;
-  // Legacy transcript contract: an in-flight tool activity is appended to the
-  // rendered chat. The live TUI renders it as a separate frame section via
-  // `renderChatFrame` so it stays outside the viewport's transcript mapping.
-  if (tuiState.activeToolActivity && tuiState.activeToolActivity.status === "running") {
-    lines.push(...renderActiveToolActivity(tuiState.activeToolActivity, chatCols));
+  // Legacy transcript contract: in-flight tool activities are appended to the
+  // rendered chat. The live TUI renders them as a separate frame section via
+  // `renderChatFrame` so they stay outside the viewport's transcript mapping.
+  const activityLines = renderToolActivities(tuiState.getActiveToolActivities(), chatCols);
+  if (activityLines.length > 0) {
+    lines.push(...activityLines);
     lines.push("");
   }
   return lines;

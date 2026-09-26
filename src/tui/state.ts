@@ -104,11 +104,63 @@ export class TuiState {
    */
   activeReasoningDraft: ReasoningBlock | null = null;
   /**
-   * In-flight tool activity for the active turn.
-   * Single source of truth for the currently executing tool; rendered
-   * live with animated dot, timer, and bounded tail lines.
+   * Canonical multi-tool live activity store, keyed by tool call id.
+   *
+   * The core runs independent read-only tools in PARALLEL within one model
+   * turn (see ToolPlanner), so a single slot silently drops every tool but the
+   * last — the UI would look like one tool ran while N actually did. Keying by
+   * callId keeps each tool's own timer, progress tail and lifecycle.
+   *
+   * This is UI state ONLY: it is never the source of truth for the transcript
+   * or a tool result (the engine owns those).
    */
-  activeToolActivity: ActiveToolActivity | null = null;
+  private toolActivities = new Map<string, ActiveToolActivity>();
+
+  /**
+   * Live RUNNING activities, oldest→newest so the render order is stable.
+   * Returned by reference: renderers and tests read `elapsedMs`/`tail` without
+   * a per-frame copy.
+   */
+  getActiveToolActivities(): ActiveToolActivity[] {
+    return [...this.toolActivities.values()]
+      .filter((activity) => activity.status === "running")
+      .sort((a, b) => a.startedAt - b.startedAt);
+  }
+
+  /** Look up one activity by call id (running or settled). */
+  findToolActivity(callId: string): ActiveToolActivity | undefined {
+    return this.toolActivities.get(callId);
+  }
+
+  /** True when a call id has a live activity (avoids duplicate transcript rows). */
+  hasActiveToolActivity(callId: string): boolean {
+    return this.toolActivities.has(callId);
+  }
+
+  /** Remove every live activity (run reset / abort teardown). */
+  clearToolActivities(): void {
+    this.toolActivities.clear();
+  }
+
+  /**
+   * Backward-compatible primary accessor. Prefers the most recently started
+   * RUNNING activity; falls back to the most recently started one so status
+   * reads after completion still work. Assigning replaces the whole set — the
+   * old single-slot API is preserved for callers and tests that used it.
+   */
+  get activeToolActivity(): ActiveToolActivity | null {
+    const all = [...this.toolActivities.values()];
+    if (all.length === 0) return null;
+    const running = all.filter((activity) => activity.status === "running");
+    const pool = running.length > 0 ? running : all;
+    return pool.reduce((latest, activity) => (activity.startedAt >= latest.startedAt ? activity : latest));
+  }
+
+  set activeToolActivity(activity: ActiveToolActivity | null) {
+    this.toolActivities.clear();
+    if (activity) this.toolActivities.set(activity.callId, activity);
+  }
+
   /** One canonical assistant draft for the current model response. */
   activeAssistantDraft: AssistantDraft | null = null;
   private currentAssistantMessageId: string | null = null;
@@ -275,7 +327,7 @@ export class TuiState {
     const actionInfo = classifyToolAction(name, args);
     const target = prettyToolTarget(name, args);
     const isBg = args && typeof args === "object" && (args as any).background === true;
-    this.activeToolActivity = {
+    const activity: ActiveToolActivity = {
       callId,
       name,
       args,
@@ -288,36 +340,71 @@ export class TuiState {
       status: "running",
       isBackground: isBg,
     };
-    return this.activeToolActivity;
+    // Additive: starting tool B must not evict the still-running tool A.
+    this.toolActivities.set(callId, activity);
+    return activity;
   }
 
   updateActiveToolProgress(callId: string, progress: { elapsedMs?: number; tail?: string[] }): void {
-    if (this.activeToolActivity && this.activeToolActivity.callId === callId && this.activeToolActivity.status === "running") {
-      if (typeof progress.elapsedMs === "number") {
-        this.activeToolActivity.elapsedMs = progress.elapsedMs;
-      } else {
-        this.activeToolActivity.elapsedMs = Date.now() - this.activeToolActivity.startedAt;
-      }
-      if (progress.tail && progress.tail.length > 0) {
-        this.activeToolActivity.tail = progress.tail.slice(-5);
-      }
-      this.requestStreamRender();
+    const activity = this.toolActivities.get(callId);
+    if (!activity || activity.status !== "running") return;
+    if (typeof progress.elapsedMs === "number") {
+      activity.elapsedMs = progress.elapsedMs;
+    } else {
+      activity.elapsedMs = Date.now() - activity.startedAt;
     }
+    if (progress.tail && progress.tail.length > 0) {
+      activity.tail = progress.tail.slice(-5);
+    }
+    this.requestStreamRender();
   }
 
-  cancelActiveToolActivity(): ActiveToolActivity | null {
-    if (this.activeToolActivity && this.activeToolActivity.status === "running") {
-      this.activeToolActivity.status = "cancelled";
-      this.activeToolActivity.elapsedMs = Date.now() - this.activeToolActivity.startedAt;
-      return { ...this.activeToolActivity };
+  /**
+   * Cancel one activity by call id, or every running activity when omitted.
+   * Returns a COPY of the first cancelled activity (transcript entries need a
+   * frozen snapshot); the live entry keeps mutating until it is cleared.
+   */
+  cancelActiveToolActivity(callId?: string): ActiveToolActivity | null {
+    const targets = callId
+      ? [this.toolActivities.get(callId)].filter((activity): activity is ActiveToolActivity => !!activity)
+      : this.getActiveToolActivities();
+    let first: ActiveToolActivity | null = null;
+    for (const activity of targets) {
+      if (activity.status !== "running") continue;
+      activity.status = "cancelled";
+      activity.elapsedMs = Date.now() - activity.startedAt;
+      if (!first) first = { ...activity };
     }
-    return null;
+    if (first) this.requestStreamRender();
+    return first;
   }
 
-  closeActiveToolActivity(callId: string): void {
-    if (this.activeToolActivity && this.activeToolActivity.callId === callId) {
-      this.activeToolActivity = null;
+  /** Cancel every running activity; returns copies for transcript entries. */
+  cancelAllToolActivities(): ActiveToolActivity[] {
+    const cancelled: ActiveToolActivity[] = [];
+    for (const activity of this.getActiveToolActivities()) {
+      activity.status = "cancelled";
+      activity.elapsedMs = Date.now() - activity.startedAt;
+      cancelled.push({ ...activity });
     }
+    if (cancelled.length > 0) this.requestStreamRender();
+    return cancelled;
+  }
+
+  /**
+   * Close one activity by call id, or all of them when omitted. Returns the
+   * removed activity (the primary one for the no-arg teardown case).
+   */
+  closeActiveToolActivity(callId?: string): ActiveToolActivity | null {
+    if (callId) {
+      const existing = this.toolActivities.get(callId);
+      if (!existing) return null;
+      this.toolActivities.delete(callId);
+      return existing;
+    }
+    const primary = this.activeToolActivity;
+    this.toolActivities.clear();
+    return primary;
   }
 
   bypassMode = bypassEngine.isEnabled();
@@ -1153,12 +1240,19 @@ export function updateActiveToolProgress(
 }
 
 export function cancelActiveToolActivity(callId?: string): boolean {
-  const res = tuiState.cancelActiveToolActivity();
-  return res !== null;
+  return tuiState.cancelActiveToolActivity(callId) !== null;
 }
 
 export function closeActiveToolActivity(callId?: string): ActiveToolActivity | null {
-  const current = tuiState.activeToolActivity;
-  tuiState.closeActiveToolActivity(callId || current?.callId || "");
-  return current;
+  return tuiState.closeActiveToolActivity(callId);
+}
+
+/** Running live tool activities, oldest→newest (multi-tool turns). */
+export function getActiveToolActivities(): ActiveToolActivity[] {
+  return tuiState.getActiveToolActivities();
+}
+
+/** Cancel every running activity; returns frozen copies for transcript rows. */
+export function cancelAllToolActivities(): ActiveToolActivity[] {
+  return tuiState.cancelAllToolActivities();
 }

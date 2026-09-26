@@ -160,8 +160,10 @@ export class StatusManager {
       tuiState.spinnerIdx = (tuiState.spinnerIdx + 1) % SPINNER.length;
       const elapsed = ((Date.now() - tuiState.startTime) / 1000).toFixed(1);
       tuiState.elapsedDisplay = `${elapsed}s`;
-      if (tuiState.activeToolActivity && tuiState.activeToolActivity.status === "running") {
-        tuiState.activeToolActivity.elapsedMs = Date.now() - tuiState.activeToolActivity.startedAt;
+      // Advance every running activity, not just the primary: parallel tools
+      // each show their own live timer.
+      for (const activity of tuiState.getActiveToolActivities()) {
+        activity.elapsedMs = Date.now() - activity.startedAt;
       }
       tuiState.requestChromeRender();
     }, this.intervalMs);

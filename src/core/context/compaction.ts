@@ -297,22 +297,41 @@ function fail(
  * Serialize compaction per session. Two competing summaries for the same context
  * head would waste model calls and could persist whichever finished last rather
  * than whichever is correct, so callers within a process queue behind each other.
+ *
+ * The map value is a SETTLED guard promise (never rejects) — callers queue on
+ * it, but it is only ever used as an identity token for the tail of the queue.
  */
 const inFlight = new Map<string, Promise<unknown>>();
+
+/**
+ * Stable per-session lock key. A missing session id shares one anonymous slot:
+ * serializing unrelated callers is safe, whereas two concurrent compactions for
+ * the SAME session would be a correctness bug.
+ */
+export function compactionLockKey(sessionId?: string): string {
+  return sessionId ? `session:${sessionId}` : "session:__anonymous__";
+}
 
 export function withCompactionLock<T>(key: string, run: () => Promise<T> | T): Promise<T> {
   const previous = inFlight.get(key) ?? Promise.resolve();
   const next = previous.then(run, run);
-  inFlight.set(
-    key,
-    next.then(
-      () => undefined,
-      () => undefined,
-    ),
+
+  // The cleanup guard must be IDENTITY-based. A queued successor B overwrites
+  // the slot before A settles; a blind `delete` would then drop B's lock and
+  // let a third caller run concurrently with B. So we install the exact guard
+  // this call owns and delete only while it is still the current holder.
+  const guard = next.then(
+    () => undefined,
+    () => undefined,
   );
-  void next.finally(() => {
-    if (inFlight.get(key) === undefined) inFlight.delete(key);
-  });
+  inFlight.set(key, guard);
+
+  const release = () => {
+    if (inFlight.get(key) === guard) inFlight.delete(key);
+  };
+  // `.then(release, release)` so the derived promise never rejects — `void`ing
+  // a rejecting `.finally(...)` would surface as an unhandled rejection.
+  void next.then(release, release);
   return next as Promise<T>;
 }
 

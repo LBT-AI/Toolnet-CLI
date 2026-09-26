@@ -50,6 +50,7 @@ export {
   runBoundedCompaction,
   withCompactionLock,
   isCompactionInFlight,
+  compactionLockKey,
   observeCompletedRequest,
   DEFAULT_MAX_PASSES,
   DEFAULT_MIN_SAVINGS_TOKENS,

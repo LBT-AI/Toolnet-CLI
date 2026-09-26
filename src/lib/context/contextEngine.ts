@@ -10,6 +10,7 @@ import { calculateContextBudget } from "./modelBudgets";
 import { pruneOldToolResults } from "./toolPruner";
 import { compactMessagesAtomically } from "./atomicCompactor";
 import { contextManager } from "../../core/context/manager";
+import { compactionLockKey, withCompactionLock } from "../../core/context/compaction";
 import type { SummaryStepResult } from "../../core/context/compaction";
 import { getSessionMemory, SessionMemoryStore } from "./sessionMemory";
 import { getSessionContext } from "./contextRegistry";
@@ -228,10 +229,18 @@ export class ContextEngine {
   }
 
   async compact(messages: ContextMessage[], options?: CompactionOptions): Promise<CompactionResult> {
-    return compactMessagesAtomically(messages, {
-      ...options,
-      memory: options?.memory || this.resolveMemory(options?.sessionId),
-    });
+    // `/compact` is the external compaction entry. Serialize it per session
+    // against the ContextManager.prepare path (same lock key) so a manual
+    // compaction and an automatic one never race for the same context head.
+    // The nested atomic call inside `summarizeAtomically` is intentionally
+    // NOT locked — re-entering the same key from inside the lock would deadlock.
+    const sessionId = options?.sessionId || this.boundSessionId || undefined;
+    return withCompactionLock(compactionLockKey(sessionId), () =>
+      compactMessagesAtomically(messages, {
+        ...options,
+        memory: options?.memory || this.resolveMemory(options?.sessionId),
+      }),
+    );
   }
 
   prune(messages: ContextMessage[], options?: PruneOptions) {

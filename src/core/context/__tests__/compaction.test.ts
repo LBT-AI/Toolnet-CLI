@@ -208,7 +208,10 @@ describe("bounded compaction", () => {
     });
     await Promise.all([first, second]);
     expect(order).toEqual(["first:start", "first:end", "second:start"]);
-    expect(isCompactionInFlight("sess-1")).toBe(true);
+    // Once the queue drains the lock must be RELEASED. A retained entry would
+    // leak per session and, because cleanup used to be inverted, could also let
+    // a settling first compaction delete a queued second one's lock.
+    expect(isCompactionInFlight("sess-1")).toBe(false);
   });
 });
 

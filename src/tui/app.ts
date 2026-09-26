@@ -2,7 +2,7 @@ import { tuiState } from "./state";
 import { computeLayout, stripAnsi, visibleWidth } from "./layout";
 import { resolveViewport } from "./viewport";
 import { renderHeader } from "./renderers/headerRenderer";
-import { renderChatFrame, renderActiveToolActivity } from "./renderers/chatRenderer";
+import { renderChatFrame, renderToolActivities } from "./renderers/chatRenderer";
 import { renderSidebar } from "./renderers/sidebarRenderer";
 import { renderWorkingStatus, renderInputArea, renderFooter } from "./renderers/statusRenderer";
 import { renderConfirmationModal, renderToast, renderSecretInputModal, renderDeviceCodeModal } from "./renderers/modalRenderer";
@@ -227,13 +227,17 @@ export function buildFrame(): string {
   // while scrolling during a tool run). Drawn after clearDown — so the base
   // frame is never clobbered — and with no CRLF, so the measured ledger
   // (header/chat/popup/status/composer/footer) stays exact.
-  if (tuiState.activeToolActivity?.status === "running") {
-    const activityLines = renderActiveToolActivity(tuiState.activeToolActivity, cols);
+  const activityLines = renderToolActivities(tuiState.getActiveToolActivities(), cols);
+  if (activityLines.length > 0) {
     const firstActivityRow = layout.composerRow - 1;
     for (let i = 0; i < activityLines.length; i++) {
+      // Never draw above row 0: bounded activity rows keep the overlay strictly
+      // above the composer, so parallel tools cannot shift the bottom chrome.
+      const row = firstActivityRow - i;
+      if (row < 0) break;
       // clearLine so the overlay fully owns each row (never leaves transcript
       // text bleeding past the right edge of a short progress line).
-      out.push(T.goto(Math.max(0, firstActivityRow - i) + 1, 1) + T.clearLine + activityLines[i]);
+      out.push(T.goto(row + 1, 1) + T.clearLine + activityLines[i]);
     }
   }
 

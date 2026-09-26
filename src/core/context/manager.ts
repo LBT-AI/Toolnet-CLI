@@ -12,7 +12,7 @@
 import { sessionStore } from "../session/store";
 import { contextCache, type CacheStats, type ContextCache, hashContent, tokenCacheKey } from "./cache";
 import { computeContextBudget, projectedRequestTokens, type BudgetInput } from "./budget";
-import { runBoundedCompaction, type CompactionRunInput } from "./compaction";
+import { compactionLockKey, runBoundedCompaction, withCompactionLock, type CompactionRunInput } from "./compaction";
 import { tokenEstimator, type EstimatableMessage, type TokenEstimator } from "./estimator";
 import { planContext, type PlannerInput } from "./planner";
 import type { CompactionOutcome, CompactionRecord, ContextBudget, ContextPlan } from "./types";
@@ -83,22 +83,30 @@ export class ContextManager {
       return { messages: input.messages, budget, plan, compacted: false };
     }
 
+    // Serialize compaction per session: two competing summaries for the same
+    // context head would waste model calls and could persist whichever finished
+    // last instead of whichever is correct. The lock is acquired ONLY when a
+    // compaction will actually run (after the skip guard above), so ordinary
+    // in-budget turns never queue. Different sessions have different keys and
+    // stay independent.
     input.onEvent?.({ type: "context:compaction_started", beforeTokens: budget.estimatedInput });
-    const compaction = await runBoundedCompaction({
-      messages: input.messages,
-      ...(input.model ? { model: input.model } : {}),
-      ...(input.tools ? { tools: input.tools } : {}),
-      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-      ...(input.force !== undefined ? { force: input.force } : {}),
-      ...(input.maxPasses !== undefined ? { maxPasses: input.maxPasses } : {}),
-      ...(input.minSavingsTokens !== undefined ? { minSavingsTokens: input.minSavingsTokens } : {}),
-      ...(input.minSavingsRatio !== undefined ? { minSavingsRatio: input.minSavingsRatio } : {}),
-      ...(input.outputBudget !== undefined ? { outputBudget: input.outputBudget } : {}),
-      ...(input.signal ? { signal: input.signal } : {}),
-      ...(input.prune ? { prune: input.prune } : {}),
-      ...(input.summarize ? { summarize: input.summarize } : {}),
-      ...(input.overflowObserved !== undefined ? { overflowObserved: input.overflowObserved } : {}),
-    });
+    const compaction = await withCompactionLock(compactionLockKey(input.sessionId), () =>
+      runBoundedCompaction({
+        messages: input.messages,
+        ...(input.model ? { model: input.model } : {}),
+        ...(input.tools ? { tools: input.tools } : {}),
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        ...(input.force !== undefined ? { force: input.force } : {}),
+        ...(input.maxPasses !== undefined ? { maxPasses: input.maxPasses } : {}),
+        ...(input.minSavingsTokens !== undefined ? { minSavingsTokens: input.minSavingsTokens } : {}),
+        ...(input.minSavingsRatio !== undefined ? { minSavingsRatio: input.minSavingsRatio } : {}),
+        ...(input.outputBudget !== undefined ? { outputBudget: input.outputBudget } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
+        ...(input.prune ? { prune: input.prune } : {}),
+        ...(input.summarize ? { summarize: input.summarize } : {}),
+        ...(input.overflowObserved !== undefined ? { overflowObserved: input.overflowObserved } : {}),
+      }),
+    );
 
     if (!compaction.compacted) {
       const failure = compaction.failure ?? "no_reduction";
