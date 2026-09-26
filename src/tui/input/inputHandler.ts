@@ -16,6 +16,8 @@ import { messageQueue } from "../../lib/messageQueue";
 import { pendingInputs } from "../../core/agent/pendingInput";
 import { overlayIsActive, handleOverlayKey } from "./overlayInput";
 import { workspaceAccessAnimation } from "../animations/modalAnimation";
+import { getSize } from "../../term";
+import { runOutputViewerPageSize } from "../renderers/runOutputViewerRenderer";
 
 const inputBufferManager = new MultilineInputBuffer();
 
@@ -341,6 +343,28 @@ function _handleKeyInternal(
       return;
     }
     return;
+  }
+
+  // 0A. Run output viewer / pager — owns the keyboard while it is open.
+  //   Lives ahead of every other handler so a paging key never leaks into the
+  //   composer or triggers a global shortcut (e.g. a stray "k"/"q").
+  if (tuiState.runOutputViewer) {
+    const pageSize = runOutputViewerPageSize(getSize().rows);
+    if (hex === "1b5b41" || hex === "1b4f41" || s === "k") { tuiState.scrollRunOutputViewer(-1, pageSize); return; }
+    if (hex === "1b5b42" || hex === "1b4f42" || s === "j") { tuiState.scrollRunOutputViewer(1, pageSize); return; }
+    if (hex === "1b5b357e") { tuiState.pageRunOutputViewer(-1, pageSize); return; } // PgUp
+    if (hex === "1b5b367e") { tuiState.pageRunOutputViewer(1, pageSize); return; }  // PgDn
+    // Home/Ctrl+Home → top, End/Ctrl+End → bottom (resumes follow).
+    if (hex === "1b5b48" || hex === "1b4f48" || hex === "1b5b317e" || hex === "1b5b313b3548") {
+      tuiState.runOutputViewerToTop();
+      return;
+    }
+    if (hex === "1b5b46" || hex === "1b4f46" || hex === "1b5b347e" || hex === "1b5b313b3546") {
+      tuiState.runOutputViewerToBottom();
+      return;
+    }
+    if (hex === "1b" || s === "q") { tuiState.closeRunOutputViewer(); renderAll(); return; }
+    return; // swallow everything else while paging
   }
 
   // 0. Bracketed Paste detection in incoming buffer
@@ -1382,6 +1406,18 @@ function _handleKeyInternal(
     tuiState.inputBuffer = inputBufferManager.getText();
     tuiState.cursorPos = inputBufferManager.getCursor();
     tuiState.cmdSuggestIdx = 0;
+    renderAll();
+    return;
+  }
+
+  // 20A. Ctrl+O — open the Run output viewer for the most recent captured output.
+  if (hex === "0f" || s === "\x0f") {
+    const target = tuiState.latestToolOutputForViewer();
+    if (target) {
+      tuiState.openRunOutputViewer(target);
+    } else {
+      tuiState.showToast("No tool output to view", 2000);
+    }
     renderAll();
     return;
   }

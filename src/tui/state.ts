@@ -34,6 +34,7 @@ import {
 import type { SessionItem } from "./renderers/sessionPickerRenderer";
 import { classifyToolAction, type ToolCategory } from "../lib/commandClassifier";
 import { prettyToolTarget } from "../lib/tool-format";
+import { sanitizeTerminalText } from "../lib/terminalOutput";
 
 export interface ActiveToolActivity {
   callId: string;
@@ -56,6 +57,36 @@ export interface AssistantDraft {
   runId: string;
   turnId: number;
   streaming: boolean;
+}
+
+/**
+ * Dedicated viewer for a command's full stdout/stderr.
+ *
+ * The transcript shows a one-line summary; the raw buffer is kept HERE and
+ * paged on demand, so a 378-line run never floods the chat. `followTail`
+ * auto-tracks new lines while the command runs; scrolling up pauses it and
+ * returning to the bottom resumes it.
+ */
+export interface RunOutputViewerState {
+  callId: string;
+  title: string;
+  lines: string[];
+  /** Top visible line index — authoritative only while `followTail` is false. */
+  offset: number;
+  followTail: boolean;
+  /** True while the source command is still producing output. */
+  running: boolean;
+}
+
+/** Visible [start, end) window for a run-output viewer at the given body size. */
+export function runOutputWindow(
+  viewer: RunOutputViewerState,
+  pageSize: number
+): { start: number; end: number } {
+  const size = Math.max(1, pageSize);
+  const maxOffset = Math.max(0, viewer.lines.length - size);
+  const start = viewer.followTail ? maxOffset : Math.max(0, Math.min(viewer.offset, maxOffset));
+  return { start, end: Math.min(viewer.lines.length, start + size) };
 }
 
 export const SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
@@ -568,6 +599,9 @@ export class TuiState {
   availableSessions: SessionItem[] = [];
   filteredSessions: SessionItem[] = [];
 
+  /** Open Run output viewer/pager, or null when closed. */
+  runOutputViewer: RunOutputViewerState | null = null;
+
   abortController: AbortController | null = null;
 
   /** Active teamwork DAG scheduler abort hook — cancelled by Ctrl+C. */
@@ -1020,6 +1054,116 @@ export class TuiState {
     this.requestRender();
   }
 
+  // ── Run output viewer / pager ────────────────────────────────────────────
+
+  openRunOutputViewer(input: { callId: string; title: string; lines: string[]; running?: boolean }): void {
+    this.closeSupportingModals();
+    this.runOutputViewer = {
+      callId: input.callId,
+      title: input.title,
+      lines: input.lines.length > 0 ? input.lines : [""],
+      offset: 0,
+      followTail: true,
+      running: Boolean(input.running),
+    };
+    this.setStatus("");
+    this.requestRender();
+  }
+
+  closeRunOutputViewer(): void {
+    this.runOutputViewer = null;
+    this.requestRender();
+  }
+
+  /** Append streamed lines while the command runs; keeps following the tail. */
+  appendRunOutputLines(lines: string[]): void {
+    const viewer = this.runOutputViewer;
+    if (!viewer || lines.length === 0) return;
+    viewer.lines.push(...lines);
+    this.requestRender();
+  }
+
+  /** Materialize an absolute top offset even when currently following. */
+  private runOutputTopFor(offset: number, pageSize: number): number {
+    const viewer = this.runOutputViewer;
+    if (!viewer) return 0;
+    const maxOffset = Math.max(0, viewer.lines.length - Math.max(1, pageSize));
+    return Math.max(0, Math.min(offset, maxOffset));
+  }
+
+  /**
+   * Scroll the viewer by `delta` lines. Any move away from the bottom pauses
+   * auto-follow; reaching the bottom again resumes it.
+   */
+  scrollRunOutputViewer(delta: number, pageSize: number): void {
+    const viewer = this.runOutputViewer;
+    if (!viewer) return;
+    const maxOffset = Math.max(0, viewer.lines.length - Math.max(1, pageSize));
+    const from = viewer.followTail ? maxOffset : viewer.offset;
+    const next = Math.max(0, Math.min(from + delta, maxOffset));
+    viewer.offset = next;
+    viewer.followTail = next >= maxOffset;
+    this.requestRender();
+  }
+
+  /** Page up (-1) or down (+1). */
+  pageRunOutputViewer(direction: number, pageSize: number): void {
+    this.scrollRunOutputViewer(direction * Math.max(1, pageSize - 1), pageSize);
+  }
+
+  runOutputViewerToTop(): void {
+    const viewer = this.runOutputViewer;
+    if (!viewer) return;
+    viewer.offset = 0;
+    viewer.followTail = false;
+    this.requestRender();
+  }
+
+  runOutputViewerToBottom(): void {
+    const viewer = this.runOutputViewer;
+    if (!viewer) return;
+    viewer.followTail = true;
+    this.requestRender();
+  }
+
+  /**
+   * The visible [start, end) window. Computed from `followTail` so a running
+   * command always shows its newest lines without the state tracking a viewport.
+   */
+  getRunOutputWindow(pageSize: number): { start: number; end: number } {
+    const viewer = this.runOutputViewer;
+    if (!viewer) return { start: 0, end: 0 };
+    return runOutputWindow(viewer, pageSize);
+  }
+
+  /** Find the most recent tool message with captured stdout, for Ctrl+O. */
+  latestToolOutputForViewer(): { callId: string; title: string; lines: string[]; running: boolean } | null {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const msg = this.messages[i];
+      if (msg.role !== "tool" || typeof msg.content !== "string") continue;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(msg.content);
+      } catch {
+        continue;
+      }
+      const stdout = typeof parsed?.stdout === "string" ? parsed.stdout : "";
+      const stderr = typeof parsed?.stderr === "string" ? parsed.stderr : "";
+      // Output restored from an older session may still carry escapes or \r
+      // frames; normalize once, here, so the pager never shows control bytes.
+      const text = sanitizeTerminalText([stdout, stderr].filter(Boolean).join("\n"));
+      if (!text) continue;
+      const lines = text.split("\n");
+      return {
+        callId: msg.tool_call_id || `tool-${i}`,
+        title: msg.name ? `Run ${msg.name}` : "Run output",
+        lines,
+        running: false,
+      };
+    }
+    return null;
+  }
+
   // ── Tools / Harness panel overlay ─────────────────────────────────────────
 
   private closeSupportingModals(): void {
@@ -1029,6 +1173,7 @@ export class TuiState {
     this.showSkillsPicker = false;
     this.showQueueManager = false;
     this.showSessionPicker = false;
+    this.runOutputViewer = null;
   }
 
   openToolsOverlay(query?: string): void {

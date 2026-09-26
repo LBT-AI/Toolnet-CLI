@@ -7,6 +7,7 @@ import { classifyToolAction } from "../../lib/commandClassifier";
 import { renderUnifiedDiffLines, renderFileMutations } from "./diffRenderer";
 import type { FileMutation } from "../../core/contracts";
 import { redactOutputSecrets } from "../../lib/security/outputRedactor";
+import { sanitizeTerminalText } from "../../lib/terminalOutput";
 import { renderReasoningPanel } from "./reasoningPanel";
 import type { ReasoningBlock } from "../../lib/reasoning";
 import { tuiState, type ActiveToolActivity } from "../state";
@@ -19,6 +20,13 @@ import { countLines } from "../input/composerDocument";
  */
 export const TRANSCRIPT_COLLAPSE_MIN_LINES = 12;
 export const TRANSCRIPT_COLLAPSE_MIN_CHARS = 1200;
+
+/**
+ * Tool output longer than this gets a single summary row instead of a tail
+ * dump. The full buffer still lives in `msg.content` and is paged by the Run
+ * output viewer (Ctrl+O), so nothing is lost — the transcript just stays calm.
+ */
+export const RUN_OUTPUT_INLINE_MAX_LINES = 8;
 
 export function shouldCollapseTranscriptMessage(content: string): boolean {
   return (
@@ -245,8 +253,11 @@ export function renderChatMessagesWithMetadata(
         outStr = msg.content;
       }
 
-      // Redact output secrets
-      outStr = redactOutputSecrets(outStr);
+      // Redact output secrets, then normalize the terminal stream: a tool's
+      // stdout can still carry ANSI escapes, OSC titles and \r progress frames
+      // (e.g. tool output restored from an older session). Never trust it to be
+      // pre-sanitized — raw escapes would corrupt the whole frame.
+      outStr = sanitizeTerminalText(redactOutputSecrets(outStr));
 
       if (outStr.trim()) {
         if (isDiffTool && (outStr.includes("@@") || outStr.includes("+++") || outStr.includes("---"))) {
@@ -264,10 +275,16 @@ export function renderChatMessagesWithMetadata(
             pushRenderedLines(result, ["    " + A.fgMuted + `… (${lines.length - maxLines} more lines)` + A.reset], msg);
           }
         } else {
-          // Successful verbose commands: show small tail/summary (1-3 lines)
+          // Successful commands: a short output keeps its tail, a long one is
+          // summarized to ONE row plus the viewer hint. Hundreds of progress
+          // lines must never flood the main transcript.
           const lines = outStr.trim().split("\n").filter((l) => l.trim().length > 0);
-          const maxSummaryLines = chatCols < 60 ? 1 : 3;
-          if (lines.length > 0) {
+          if (lines.length > RUN_OUTPUT_INLINE_MAX_LINES) {
+            pushRenderedLines(result, [
+              "    " + A.fgSubtext + A.dim + `${lines.length} lines · Ctrl+O to view` + A.reset,
+            ], msg);
+          } else if (lines.length > 0) {
+            const maxSummaryLines = chatCols < 60 ? 1 : 3;
             const tail = lines.slice(-maxSummaryLines);
             for (let i = 0; i < tail.length; i++) {
               pushRenderedLines(result, ["    " + A.fgSubtext + A.dim + truncate(tail[i], chatCols - 6) + A.reset], msg);

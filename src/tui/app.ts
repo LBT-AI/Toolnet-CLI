@@ -11,6 +11,7 @@ import { renderKeyManagerBox } from "./renderers/keyManagerRenderer";
 import { renderSkillsPickerBox } from "./renderers/skillsPickerRenderer";
 import { renderQueueManagerBox } from "./renderers/queueManagerRenderer";
 import { renderSessionPickerBox } from "./renderers/sessionPickerRenderer";
+import { renderRunOutputViewerBox } from "./renderers/runOutputViewerRenderer";
 import { renderSuggestionsPopup } from "./renderers/suggestRenderer";
 import { renderReasoningPanel } from "./renderers/reasoningPanel";
 import { renderToolsPanelBox } from "./renderers/toolsPanelRenderer";
@@ -255,6 +256,7 @@ export function buildFrame(): string {
     tuiState.showSkillsPicker ||
     tuiState.showQueueManager ||
     tuiState.showSessionPicker ||
+    Boolean(tuiState.runOutputViewer) ||
     Boolean(tuiState.deviceCodeModal) ||
     providerPicker.show ||
     tuiState.overlay.type !== "none";
@@ -328,6 +330,10 @@ export function buildFrame(): string {
       currentSessionId: tuiState.currentSessionId,
       currentWorkspace: process.cwd(),
     }));
+  }
+
+  if (tuiState.runOutputViewer) {
+    out.push(renderRunOutputViewerBox(cols, rows, tuiState.runOutputViewer).join(""));
   }
 
   if (providerPicker.show) {
@@ -405,6 +411,7 @@ function commitFrame(): void {
       tuiState.showQueueManager = false;
       tuiState.showSessionPicker = false;
       tuiState.showHelp = false;
+      tuiState.runOutputViewer = null;
       tuiState.overlay = { type: "none" };
       if (providerPicker.show) providerPicker.show = false;
       tuiState.setStatus(`⚠️ UI recovered from render glitch (${error.message})`);

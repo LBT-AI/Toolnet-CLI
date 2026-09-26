@@ -9,6 +9,7 @@ import type { FileMutation } from "../core/contracts";
 import { redactSecrets } from "./security/secretGuard";
 import { redactOutputSecrets } from "./security/outputRedactor";
 import { resolveDefaultTimeout, clampTimeout } from "./commandClassifier";
+import { TerminalOutputBuffer } from "./terminalOutput";
 
 export interface ToolResult {
   success: boolean;
@@ -774,8 +775,10 @@ export async function toolBash(command: string, timeoutMs?: number, execCtx?: Sh
       return resolve({ success: false, error: msg, data: msg, exitCode: 1 });
     }
 
-    let stdoutBuf = "";
-    let stderrBuf = "";
+    // Each stream gets its OWN stateful decoder + line editor: a partial
+    // multi-byte char or escape sequence on stderr must never corrupt stdout.
+    const stdoutTerm = new TerminalOutputBuffer();
+    const stderrTerm = new TerminalOutputBuffer();
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let stdoutCapped = false;
@@ -802,10 +805,12 @@ export async function toolBash(command: string, timeoutMs?: number, execCtx?: Sh
       else ctx.signal.addEventListener("abort", markAborted, { once: true });
     }
 
+    // Input is already normalized by the terminal buffers (no escapes, no
+    // carriage returns), so this only splits and trims — never rewrites text.
     const extractTailLines = (text: string, maxLines = 5): string[] => {
       const lines = text
         .split("\n")
-        .map((l) => l.replace(/[\r\x1b\[[0-9;]*[a-zA-Z]/g, "").trim())
+        .map((l) => l.trim())
         .filter((l) => l.length > 0);
       return lines.slice(-maxLines);
     };
@@ -827,7 +832,7 @@ export async function toolBash(command: string, timeoutMs?: number, execCtx?: Sh
         progressTimer = null;
       }
       lastProgressTime = now;
-      const recentOut = stdoutBuf.slice(-4096) + "\n" + stderrBuf.slice(-4096);
+      const recentOut = stdoutTerm.getText().slice(-4096) + "\n" + stderrTerm.getText().slice(-4096);
       const cleanRecent = redactOutputSecrets(recentOut);
       const tail = extractTailLines(cleanRecent, 5);
       ctx.onProgress({
@@ -853,24 +858,27 @@ export async function toolBash(command: string, timeoutMs?: number, execCtx?: Sh
     // STREAMING output bounds: cap bytes as they arrive, never buffer unbounded.
     const wireStream = (stream: any, isStdout: boolean) => {
       if (!stream) return;
+      const term = isStdout ? stdoutTerm : stderrTerm;
       stream.on("data", (d: Buffer) => {
-        const text = d.toString("utf8");
         if (isStdout) {
           if (stdoutBytes >= outputCap) { stdoutCapped = true; return; }
           const remaining = outputCap - stdoutBytes;
           const chunk = d.length > remaining ? d.subarray(0, remaining) : d;
           stdoutBytes += chunk.length;
-          stdoutBuf += chunk.toString("utf8");
           if (chunk.length < d.length) stdoutCapped = true;
+          // Stateful decode → line editor. Never `toString()` a raw chunk:
+          // a UTF-8 character split across chunks would decode to "�".
+          const visible = term.write(chunk);
+          emitProgress(false, visible, true);
         } else {
           if (stderrBytes >= outputCap) { stderrCapped = true; return; }
           const remaining = outputCap - stderrBytes;
           const chunk = d.length > remaining ? d.subarray(0, remaining) : d;
           stderrBytes += chunk.length;
-          stderrBuf += chunk.toString("utf8");
           if (chunk.length < d.length) stderrCapped = true;
+          const visible = term.write(chunk);
+          emitProgress(false, visible, false);
         }
-        emitProgress(false, text, isStdout);
       });
     };
     wireStream(child.stdout, true);
@@ -881,7 +889,12 @@ export async function toolBash(command: string, timeoutMs?: number, execCtx?: Sh
       settled = true;
       cleanup();
 
-      let finalStdout = stdoutBuf;
+      // Flush both decoders so a trailing character/line is never lost, then
+      // render from STABLE committed text (the live progress line is finalized
+      // exactly once, never persisted frame-by-frame).
+      stdoutTerm.flush();
+      stderrTerm.flush();
+      let finalStdout = stdoutTerm.getCommittedText();
       const cwdMarkerIdx = finalStdout.lastIndexOf(cwdMarker);
       if (cwdMarkerIdx !== -1) {
         const afterMarker = finalStdout.substring(cwdMarkerIdx + cwdMarker.length).trim();
@@ -896,7 +909,7 @@ export async function toolBash(command: string, timeoutMs?: number, execCtx?: Sh
 
       const capMarker = "\n... [output truncated at byte cap]";
       if (stdoutCapped) finalStdout += capMarker;
-      let finalStderr = stderrBuf;
+      let finalStderr = stderrTerm.getCommittedText();
       if (stderrCapped) finalStderr += capMarker;
 
       const exitCode = aborted ? 130 : (timedOut ? 124 : (code ?? 0));
