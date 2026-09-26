@@ -1277,28 +1277,34 @@ function _handleKeyInternal(
   // Submit serializes the LOGICAL document: collapsed paste blocks contribute
   // their real content, never the token shown in the composer.
   if (hex === "0d") {
-    const text = inputBufferManager.getContent().trim();
-    if (!text) return;
-    if (tuiState.appState !== "ready" && text !== "/exit") return;
+    // Serialize the LOGICAL document: a collapsed paste contributes its real
+    // bytes, never the token shown in the composer. The trimmed form is used
+    // ONLY for dispatch decisions (empty check, "/exit" guard, slash routing);
+    // the payload sent to the model keeps the paste's exact leading/trailing
+    // newlines and whitespace — trimming it here would silently corrupt a paste.
+    const content = inputBufferManager.getContent();
+    const dispatchText = content.trim();
+    if (!dispatchText) return;
+    if (tuiState.appState !== "ready" && dispatchText !== "/exit") return;
 
     inputBufferManager.clear();
     tuiState.inputBuffer = "";
     tuiState.cursorPos = 0;
     tuiState.cmdSuggestIdx = 0;
 
-    // Slash command -> run immediately
-    if (text.startsWith("/")) {
+    // Slash command -> run immediately (a single-line directive: trim to route)
+    if (dispatchText.startsWith("/")) {
       tuiState.setStatus("");
       renderAll();
-      sendMessage(text);
+      sendMessage(dispatchText);
       return;
     }
 
-    tuiState.pushPromptHistory(text);
+    tuiState.pushPromptHistory(content);
 
     // If agent is currently working/streaming or processing -> enqueue into message queue
     if (tuiState.isStreaming || messageQueue.getIsProcessing()) {
-      const queued = messageQueue.enqueue(text);
+      const queued = messageQueue.enqueue(content);
       tuiState.saveCurrentSession();
       if (queued) {
         tuiState.showToast(`Queued (${messageQueue.size()} in queue)`);
@@ -1310,7 +1316,7 @@ function _handleKeyInternal(
     // Agent is idle -> execute immediately
     tuiState.setStatus("");
     renderAll();
-    sendMessage(text);
+    sendMessage(content);
     return;
   }
 

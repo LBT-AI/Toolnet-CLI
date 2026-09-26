@@ -361,6 +361,88 @@ describe("composer — mobile 52x20 render", () => {
   });
 });
 
+describe("composer — submit preserves the exact paste payload", () => {
+  let sent: string[];
+
+  beforeEach(() => {
+    resetInputState();
+    sent = [];
+    tuiState.appState = "ready";
+    tuiState.isStreaming = false;
+    tuiState.promptHistory = [];
+    tuiState.historyIndex = -1;
+  });
+
+  afterEach(() => {
+    tuiState.appState = "boot";
+    resetInputState();
+  });
+
+  const callbacks = () => ({
+    renderAll: () => {},
+    sendMessage: (text: string) => sent.push(text),
+    exitApp: () => {},
+    openModelPicker: async () => {},
+  });
+
+  test("leading/trailing newlines and whitespace of a paste reach the model unchanged", () => {
+    const content = "\n\n" + lines(20) + "  \n";
+    handlePaste(content, callbacks());
+    handleKey(ENTER, callbacks());
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toBe(content);
+    expect(sent[0].startsWith("\n\n")).toBe(true);
+    expect(sent[0].endsWith("  \n")).toBe(true);
+  });
+
+  test("text wrapped around a paste is submitted together, in order, verbatim", () => {
+    handleKey(Buffer.from("hãy kiểm tra:\n"), callbacks());
+    handlePaste(lines(365), callbacks());
+    handleKey(Buffer.from("\nrồi sửa lỗi"), callbacks());
+    handleKey(ENTER, callbacks());
+
+    expect(sent[0]).toBe(`hãy kiểm tra:\n${lines(365)}\nrồi sửa lỗi`);
+    expect(sent[0]).not.toContain("pasted #");
+  });
+
+  test("typed text with surrounding blank lines is submitted without silently losing bytes", () => {
+    handleKey(Buffer.from("  padded prompt  "), callbacks());
+    handleKey(ENTER, callbacks());
+    expect(sent[0]).toBe("  padded prompt  ");
+  });
+
+  test("a whitespace-only draft is never submitted", () => {
+    handleKey(Buffer.from("   "), callbacks());
+    handleKey(ENTER, callbacks());
+    expect(sent).toHaveLength(0);
+  });
+
+  test("slash commands still dispatch (trimmed) after a paste-free draft", () => {
+    handleKey(Buffer.from("/help"), callbacks());
+    handleKey(ENTER, callbacks());
+    expect(sent).toEqual(["/help"]);
+  });
+
+  test("Left/Right jump over a paste token through the key handler", () => {
+    handleKey(Buffer.from("ab"), callbacks());
+    handlePaste(lines(20), callbacks());
+    handleKey(Buffer.from("cd"), callbacks());
+
+    const tokenLen = pastePlaceholder({ id: 1, lineCount: 20 }).length;
+    // Caret ends after "cd"; two Lefts step over "cd".
+    handleKey(ARROW_LEFT, callbacks());
+    handleKey(ARROW_LEFT, callbacks());
+    expect(getInputState().cursor).toBe(2 + tokenLen);
+    // One more Left jumps the ENTIRE token to its start.
+    handleKey(ARROW_LEFT, callbacks());
+    expect(getInputState().cursor).toBe(2);
+    // Right from the token start skips the whole token.
+    handleKey(ARROW_RIGHT, callbacks());
+    expect(getInputState().cursor).toBe(2 + tokenLen);
+  });
+});
+
 describe("transcript — collapsed user message, full content retained", () => {
   test("a long user prompt renders compact but keeps its content in state", () => {
     const content = lines(365);
