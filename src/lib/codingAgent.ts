@@ -4,6 +4,8 @@ import path from "node:path";
 import { pushSnapshot, commitSnapshot } from "./history";
 import { evaluatePermission, isPathInsideWorkspace, getSandboxMode } from "./permissions";
 import { applyStructuredPatch, generateDiff } from "./patchUtils";
+import { buildFileMutation } from "./fileMutation";
+import type { FileMutation } from "../core/contracts";
 import { redactSecrets } from "./security/secretGuard";
 import { redactOutputSecrets } from "./security/outputRedactor";
 import { resolveDefaultTimeout, clampTimeout } from "./commandClassifier";
@@ -16,6 +18,8 @@ export interface ToolResult {
   stderr?: string;
   exitCode?: number;
   truncated?: boolean;
+  /** Structured file mutations, emitted by the write/edit/patch tools. */
+  mutations?: FileMutation[];
 }
 
 export let currentCwd = process.cwd();
@@ -449,7 +453,8 @@ export function toolEdit(filePath: string, oldString: string, newString: string,
     commitSnapshot(absPath);
     const rel = path.relative(currentCwd, absPath);
     const diff = generateDiff(content, newContent, rel);
-    return { success: true, data: `Edited ${rel}:\n${diff}` };
+    const mutation = buildFileMutation(rel, "update", content, newContent);
+    return { success: true, data: `Edited ${rel}:\n${diff}`, mutations: [mutation] };
   } catch (err: unknown) {
     return { success: false, error: `Edit error: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -474,7 +479,8 @@ export function toolReplaceAll(filePath: string, oldString: string, newString: s
     const count = (content.match(new RegExp(oldString.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
     const rel = path.relative(currentCwd, absPath);
     const diff = generateDiff(content, newContent, rel);
-    return { success: true, data: `Replaced ${count} occurrence(s) in ${rel}:\n${diff}` };
+    const mutation = buildFileMutation(rel, "update", content, newContent);
+    return { success: true, data: `Replaced ${count} occurrence(s) in ${rel}:\n${diff}`, mutations: [mutation] };
   } catch (err: unknown) {
     return { success: false, error: `ReplaceAll error: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -489,8 +495,9 @@ export function toolWrite(filePath: string, content: string, ctx?: PathExecConte
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
+    const existed = fs.existsSync(absPath);
     let oldContent = "";
-    if (fs.existsSync(absPath)) {
+    if (existed) {
       try {
         oldContent = fs.readFileSync(absPath, "utf8");
       } catch {}
@@ -499,9 +506,13 @@ export function toolWrite(filePath: string, content: string, ctx?: PathExecConte
     fs.writeFileSync(absPath, content, "utf8");
     commitSnapshot(absPath);
     const rel = path.relative(currentCwd, absPath);
+    // A brand-new file has no pre-image: every line is an addition, so the
+    // structured mutation carries the full content even though the human
+    // stdout stays the short "Written N bytes" line.
+    const mutation = buildFileMutation(rel, existed ? "update" : "create", existed ? oldContent : "", content);
     const diff = oldContent ? generateDiff(oldContent, content, rel) : "";
     const msg = diff ? `Written ${content.length} bytes to ${rel}:\n${diff}` : `Written ${content.length} bytes to ${rel}`;
-    return { success: true, data: msg };
+    return { success: true, data: msg, mutations: [mutation] };
   } catch (err: unknown) {
     return { success: false, error: `Write error: ${err instanceof Error ? err.message : String(err)}` };
   }

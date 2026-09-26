@@ -321,6 +321,9 @@ export function buildTuiAgentCallbacks(runId: string): {
             name: toolNames.get(event.callId) || "tool",
             content: JSON.stringify(event.result),
             durationMs,
+            // Structured mutation payload persists with the transcript item, so
+            // the diff is re-rendered from state (never from ANSI text).
+            ...(event.result.fileMutations?.length ? { fileMutations: event.result.fileMutations } : {}),
           } as any);
           tuiState.requestRender();
           break;

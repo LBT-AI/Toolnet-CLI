@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { pushSnapshot, commitSnapshot } from "./history";
 import { isPathInsideWorkspace, evaluatePermission } from "./permissions";
+import { buildFileMutation, unifiedDiffFromMutation } from "./fileMutation";
+import type { FileMutation } from "../core/contracts";
 import type { ToolResult } from "./codingAgent";
 
 export interface Hunk {
@@ -158,38 +160,15 @@ export function applyHunksToContent(originalContent: string, hunks: Hunk[]): { s
   return { success: true, content: lines.join("\n") };
 }
 
+/**
+ * Unified diff for a single file. Delegates to the structured mutation builder
+ * so there is ONE diff algorithm: an LCS alignment that reports an insertion as
+ * `+new` (the old positional walk mis-reported insertions as `-old +new`) and
+ * emits real multi-hunk headers with correct line numbers.
+ */
 export function generateDiff(oldContent: string, newContent: string, fileName = "file"): string {
-  const oldLines = oldContent ? oldContent.split("\n") : [];
-  const newLines = newContent ? newContent.split("\n") : [];
-
   if (oldContent === newContent) return "";
-
-  const diffOutput: string[] = [];
-  diffOutput.push(`--- a/${fileName}`);
-  diffOutput.push(`+++ b/${fileName}`);
-  diffOutput.push(`@@ -1,${oldLines.length} +1,${newLines.length} @@`);
-
-  let i = 0;
-  let j = 0;
-
-  while (i < oldLines.length || j < newLines.length) {
-    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
-      diffOutput.push(` ${oldLines[i]}`);
-      i++;
-      j++;
-    } else {
-      if (i < oldLines.length) {
-        diffOutput.push(`-${oldLines[i]}`);
-        i++;
-      }
-      if (j < newLines.length) {
-        diffOutput.push(`+${newLines[j]}`);
-        j++;
-      }
-    }
-  }
-
-  return diffOutput.join("\n");
+  return unifiedDiffFromMutation(buildFileMutation(fileName, "update", oldContent, newContent));
 }
 
 export function applyStructuredPatch(patchText: string, cwd: string): ToolResult {
@@ -203,6 +182,7 @@ export function applyStructuredPatch(patchText: string, cwd: string): ToolResult
   }
 
   const results: string[] = [];
+  const mutations: FileMutation[] = [];
 
   for (const p of patches) {
     const targetFile = p.newPath || p.oldPath;
@@ -215,8 +195,9 @@ export function applyStructuredPatch(patchText: string, cwd: string): ToolResult
       return { success: false, error: `Patch target path "${targetFile}" is outside workspace.` };
     }
 
+    const existed = fs.existsSync(absPath);
     let oldContent = "";
-    if (fs.existsSync(absPath)) {
+    if (existed) {
       try {
         oldContent = fs.readFileSync(absPath, "utf8");
       } catch (err: any) {
@@ -240,6 +221,8 @@ export function applyStructuredPatch(patchText: string, cwd: string): ToolResult
 
       const diffPreview = generateDiff(oldContent, res.content, targetFile);
       results.push(`Applied patch to ${targetFile}:\n${diffPreview}`);
+      // Structured projection for the TUI: one mutation per patched file.
+      mutations.push(buildFileMutation(targetFile, existed ? "update" : "create", oldContent, res.content));
     } catch (err: any) {
       return { success: false, error: `Failed writing patch to ${targetFile}: ${err.message}` };
     }
@@ -247,6 +230,7 @@ export function applyStructuredPatch(patchText: string, cwd: string): ToolResult
 
   return {
     success: true,
-    data: results.join("\n\n")
+    data: results.join("\n\n"),
+    mutations,
   };
 }

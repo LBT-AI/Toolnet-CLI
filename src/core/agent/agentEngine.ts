@@ -251,6 +251,9 @@ export function toToolResult(raw: unknown): ToolResult {
     truncated: typeof r.truncated === "boolean" ? r.truncated : undefined,
     outputPath: typeof r.outputPath === "string" ? r.outputPath : undefined,
     metadata: (r.metadata as Record<string, unknown> | undefined) ?? undefined,
+    // Structured file mutations travel with the result so the TUI renders a
+    // diff from data, not by parsing the stdout text.
+    fileMutations: Array.isArray(r.fileMutations) ? (r.fileMutations as ToolResult["fileMutations"]) : undefined,
   };
 }
 

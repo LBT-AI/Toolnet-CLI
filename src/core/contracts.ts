@@ -31,6 +31,54 @@ export interface ToolResult {
   verification?: VerificationResult;
 
   metadata?: Record<string, unknown>;
+
+  /**
+   * Structured file mutations produced by this tool (write/edit/replace/patch).
+   * The tool layer already knows before/after, so it emits this ONCE here and
+   * the TUI renders diffs from it — never from assistant prose. Absent for
+   * non-mutating tools.
+   */
+  fileMutations?: FileMutation[];
+}
+
+// ── File Mutations (structured diff payload) ────────────────────────────────
+
+/** What happened to the file, independent of how it is presented. */
+export type FileMutationOperation = "create" | "update" | "delete";
+
+/** One unified-diff line: added, deleted, or unchanged context. */
+export type FileMutationLineKind = "add" | "del" | "context";
+
+export interface FileMutationLine {
+  kind: FileMutationLineKind;
+  text: string;
+  /** 1-based pre-image line number (absent for pure additions). */
+  oldLine?: number;
+  /** 1-based post-image line number (absent for pure deletions). */
+  newLine?: number;
+}
+
+/** One changed region, with the unified-diff header ranges. */
+export interface FileMutationHunk {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  lines: FileMutationLine[];
+}
+
+/**
+ * The one structured shape the TUI renders a file change from. Designed to map
+ * directly onto a future `FileMutationPart` without translating ANSI text.
+ */
+export interface FileMutation {
+  path: string;
+  operation: FileMutationOperation;
+  additions: number;
+  deletions: number;
+  hunks: FileMutationHunk[];
+  /** Reserved for renames: the previous path, when the tool reported one. */
+  fromPath?: string;
 }
 
 export interface VerificationResult {

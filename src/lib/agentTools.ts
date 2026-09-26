@@ -179,7 +179,7 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
           return JSON.stringify({ stdout: "", stderr: post.error, exitCode: 1 });
         }
       }
-      return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
+      return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1, ...(res.mutations?.length ? { fileMutations: res.mutations } : {}) });
     } else if (name === "edit_file") {
       const oldStr = args.old_string || args.oldString || "";
       const newStr = args.new_string || args.newString || "";
@@ -191,7 +191,7 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
           return JSON.stringify({ stdout: "", stderr: post.error, exitCode: 1 });
         }
       }
-      return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
+      return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1, ...(res.mutations?.length ? { fileMutations: res.mutations } : {}) });
     } else if (name === "replace_all") {
       const oldStr = args.old_string || args.oldString || "";
       const newStr = args.new_string || args.newString || "";
@@ -203,7 +203,7 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
           return JSON.stringify({ stdout: "", stderr: post.error, exitCode: 1 });
         }
       }
-      return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
+      return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1, ...(res.mutations?.length ? { fileMutations: res.mutations } : {}) });
     } else if (name === "apply_patch" || name === "patch") {
       const patchText = args.patch || args.diff || "";
       const res = await toolApplyPatch(patchText);
@@ -221,7 +221,7 @@ export async function _executeToolRaw(name: string, args: any, options?: Execute
           }
         }
       }
-      return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1 });
+      return JSON.stringify({ stdout: res.data || "", stderr: res.error || "", exitCode: res.success ? 0 : 1, ...(res.mutations?.length ? { fileMutations: res.mutations } : {}) });
     } else if (name === "git_status") {
       const res = await toolGitStatus(args.path);
       return JSON.stringify({ stdout: res.stdout || res.data || "", stderr: res.stderr || res.error || "", exitCode: res.exitCode ?? (res.success ? 0 : 1) });

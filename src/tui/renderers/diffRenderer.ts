@@ -1,5 +1,7 @@
-import { A } from "../../term";
+import { A, theme } from "../../term";
 import { truncate, stripAnsi } from "../layout";
+import { formatDuration } from "../../lib/tool-format";
+import type { FileMutation, FileMutationLine } from "../../core/contracts";
 
 export interface DiffStat {
   fileName: string;
@@ -82,4 +84,115 @@ export function renderUnifiedDiffLines(
   }
 
   return output;
+}
+
+// ── Structured file mutations ───────────────────────────────────────────────
+
+/**
+ * Diff lines rendered before a mutation block collapses. The FULL diff always
+ * stays in the mutation payload — this bounds only what is drawn.
+ */
+export const FILE_MUTATION_MAX_LINES = 24;
+const FILE_MUTATION_HEAD = 18;
+const FILE_MUTATION_TAIL = 6;
+const MUTATION_GUTTER = 4;
+
+export type MutationRenderStatus = "running" | "success" | "error" | "cancelled";
+
+export interface MutationRenderOptions {
+  status?: MutationRenderStatus;
+  durationMs?: number;
+  maxLines?: number;
+}
+
+function mutationVerb(operation: FileMutation["operation"]): string {
+  if (operation === "create") return "Wrote";
+  if (operation === "delete") return "Deleted";
+  return "Edited";
+}
+
+/**
+ * Heading line for one mutation, e.g. `✓ Edited src/x.ts (+4 -1) · 1.2s`.
+ * Uses the existing semantic write/edit palette (never a new one) and is
+ * width-bounded so a long path cannot overflow a 52-col terminal.
+ */
+export function renderFileMutationHeading(
+  mutation: FileMutation,
+  status: MutationRenderStatus = "success",
+  durationMs?: number,
+  cols = 80,
+): string {
+  const icon = status === "cancelled" ? "■" : status === "error" ? "✗" : "✓";
+  // Mutations are writes: create/delete use the write color, edits the edit
+  // color — both owned by the theme.
+  const color = mutation.operation === "update" ? theme.edit : theme.write;
+  const elapsed = durationMs !== undefined ? ` ${A.dim}${A.fgMuted}· ${formatDuration(durationMs)}${A.reset}` : "";
+  const hasDiff = mutation.hunks.length > 0;
+  const stats = hasDiff
+    ? ` ${A.dim}(${A.reset}${A.fgGreen}+${mutation.additions}${A.reset} ${A.fgRed}-${mutation.deletions}${A.reset}${A.dim})${A.reset}`
+    : "";
+  return truncate(`${color}${icon} ${mutationVerb(mutation.operation)} ${mutation.path}${A.reset}${stats}${elapsed}`, cols) + A.reset;
+}
+
+/** One diff row: dim line number, semantic sign, normal/ivory context. */
+function renderMutationLine(line: FileMutationLine, cols: number, numberWidth: number): string {
+  const lineNo = line.kind === "del" ? line.oldLine : line.newLine;
+  const number = String(lineNo ?? 0).padStart(numberWidth, " ");
+  const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
+  const color = line.kind === "add" ? A.fgGreen : line.kind === "del" ? A.fgRed : A.fgText;
+  const textWidth = Math.max(1, cols - MUTATION_GUTTER - numberWidth - 2);
+  const text = truncate(line.text, textWidth);
+  return `${" ".repeat(MUTATION_GUTTER)}${A.dim}${A.fgMuted}${number}${A.reset} ${color}${sign}${text}${A.reset}`;
+}
+
+/** Bounded diff body across every hunk of one mutation. */
+export function renderFileMutationBody(
+  mutation: FileMutation,
+  cols: number,
+  maxLines = FILE_MUTATION_MAX_LINES,
+): string[] {
+  let maxLineNo = 1;
+  for (const hunk of mutation.hunks) {
+    maxLineNo = Math.max(maxLineNo, hunk.oldStart + hunk.oldCount, hunk.newStart + hunk.newCount);
+    for (const line of hunk.lines) maxLineNo = Math.max(maxLineNo, line.oldLine ?? 0, line.newLine ?? 0);
+  }
+  const numberWidth = String(maxLineNo).length;
+
+  const all: string[] = [];
+  for (const hunk of mutation.hunks) {
+    const header = `${A.dim}${A.fgSubtext}@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount} @@${A.reset}`;
+    all.push(" ".repeat(MUTATION_GUTTER) + truncate(header, Math.max(1, cols - MUTATION_GUTTER)));
+    for (const line of hunk.lines) all.push(renderMutationLine(line, cols, numberWidth));
+  }
+
+  if (all.length <= maxLines) return all;
+
+  const head = all.slice(0, FILE_MUTATION_HEAD);
+  const tail = all.slice(all.length - FILE_MUTATION_TAIL);
+  const hidden = all.length - head.length - tail.length;
+  const marker = `${A.dim}${A.fgMuted}[${hidden} lines hidden — full diff retained]${A.reset}`;
+  return [...head, " ".repeat(MUTATION_GUTTER) + truncate(marker, Math.max(1, cols - MUTATION_GUTTER)), ...tail];
+}
+
+/** Heading + bounded body for one mutation, as a stable transcript block. */
+export function renderFileMutation(
+  mutation: FileMutation,
+  cols: number,
+  options: MutationRenderOptions = {},
+): string[] {
+  return [
+    renderFileMutationHeading(mutation, options.status ?? "success", options.durationMs, cols),
+    ...renderFileMutationBody(mutation, cols, options.maxLines),
+  ];
+}
+
+/** Several mutations (e.g. one multi-file patch), each bounded independently. */
+export function renderFileMutations(
+  mutations: FileMutation[],
+  cols: number,
+  options: MutationRenderOptions = {},
+): string[] {
+  const out: string[] = [];
+  for (const mutation of mutations) out.push(...renderFileMutation(mutation, cols, options));
+  return out;
 }

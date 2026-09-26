@@ -4,7 +4,8 @@ import type { Msg } from "../types";
 import { formatToolStart, formatToolEnd } from "../toolActivity";
 import { renderToolLine, prettyToolTarget } from "../../lib/tool-format";
 import { classifyToolAction } from "../../lib/commandClassifier";
-import { renderUnifiedDiffLines } from "./diffRenderer";
+import { renderUnifiedDiffLines, renderFileMutations } from "./diffRenderer";
+import type { FileMutation } from "../../core/contracts";
 import { redactOutputSecrets } from "../../lib/security/outputRedactor";
 import { renderReasoningPanel } from "./reasoningPanel";
 import type { ReasoningBlock } from "../../lib/reasoning";
@@ -206,6 +207,22 @@ export function renderChatMessagesWithMetadata(
 
       const durationMs = (msg as any).durationMs ?? parsedTool?.durationMs;
       const status = isCancelled ? "cancelled" : isSuccess ? "success" : "error";
+
+      // Structured file mutations render as a real diff block (create/edit/
+      // delete) from DATA, never by sniffing the tool's stdout for a diff.
+      const structuredMutations: FileMutation[] | undefined =
+        Array.isArray((msg as any).fileMutations) && (msg as any).fileMutations.length > 0
+          ? (msg as any).fileMutations
+          : Array.isArray(parsedTool?.fileMutations) && parsedTool.fileMutations.length > 0
+            ? parsedTool.fileMutations
+            : undefined;
+
+      if (structuredMutations) {
+        pushRenderedLines(result, renderFileMutations(structuredMutations, chatCols, { status, durationMs }), msg);
+        pushRenderedLines(result, [""], msg);
+        continue;
+      }
+
       const headerText = renderToolLine(toolName, argsObj, status, durationMs);
       pushRenderedLines(result, [headerText], msg);
 

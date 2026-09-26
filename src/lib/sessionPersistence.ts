@@ -139,6 +139,9 @@ function formatMessages(messages: any[]): SessionMessage[] {
     if (msg.tool_calls !== undefined) item.tool_calls = msg.tool_calls;
     if (msg.tool_call_id !== undefined) item.tool_call_id = msg.tool_call_id;
     if (msg.name !== undefined) item.name = msg.name;
+    // Structured file mutations are part of the durable transcript: the diff is
+    // re-rendered from this payload on resume, never from ANSI text.
+    if (Array.isArray(msg.fileMutations) && msg.fileMutations.length > 0) item.fileMutations = msg.fileMutations;
     return item;
   });
 }
