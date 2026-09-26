@@ -29,6 +29,7 @@ import { bypassEngine } from "../bypass";
 import { getLanguageDirective, getResponseLanguage } from "../language";
 import { getModelCapabilities } from "../reasoning";
 import { sessionInbox } from "../../core/background/inbox";
+import { pendingInputs } from "../../core/agent/pendingInput";
 import { ToolCache, createMetrics, type ToolCall, type ToolPlannerMetrics } from "./toolPlanner";
 import { executeToolBatch, signatureForToolCall } from "./toolExecutor";
 import { toolRegistry } from "./toolRegistry";
@@ -1182,6 +1183,25 @@ export class AgentHarness {
         });
       }
 
+      // ── SAFE PROVIDER-TURN BOUNDARY ────────────────────────────────────────
+      // We are between provider requests: the previous turn has finished, its
+      // tool calls have settled into the conversation, and nothing is streaming.
+      // This is the ONLY place a `steer` follow-up becomes model-visible. It is
+      // never injected into an in-flight request, never between a tool call and
+      // its result, and never during a permission wait. FIFO by admission.
+      const steerInputs = pendingInputs.pending(sessionId).filter((input) => input.delivery === "steer");
+      if (steerInputs.length > 0) {
+        const promoted = pendingInputs.promote(sessionId, steerInputs.map((input) => input.id));
+        for (const input of promoted) {
+          messages.push({ role: "user", content: input.content });
+          this.emitEvent("agent:steer_promoted", mode, {
+            inputId: input.id,
+            delivery: input.delivery,
+            admittedSequence: input.admittedSequence,
+          });
+        }
+      }
+
       if (Date.now() - startTime > timeoutMs) {
         this.lastRunState.timedOut = true;
         this.agentState.transition("error", "timeout");
@@ -1522,6 +1542,34 @@ export class AgentHarness {
           this.emitEvent("agent:thinking", mode, { turnsUsed, toolCallsCount, gateReason: gate.reason, correctiveTurn: true });
           continue;
         }
+        // ── Pending follow-ups keep the loop alive ───────────────────────────
+        // The model asked for no more tools, but follow-ups admitted while it
+        // worked are still pending (e.g. a `queue` item, or a steer that arrived
+        // after the boundary). A pending input IS a valid reason for one more
+        // provider turn — the agent must not report Idle and drop it.
+        const pendingFollowUps = pendingInputs.pending(sessionId);
+        if (pendingFollowUps.length > 0) {
+          const promotedFollowUps = pendingInputs.promote(
+            sessionId,
+            pendingFollowUps.map((input) => input.id),
+          );
+          for (const input of promotedFollowUps) {
+            messages.push({ role: "user", content: input.content });
+            this.emitEvent("agent:steer_promoted", mode, {
+              inputId: input.id,
+              delivery: input.delivery,
+              admittedSequence: input.admittedSequence,
+            });
+          }
+          this.agentState.transition("thinking", "pending-input");
+          this.emitEvent("agent:thinking", mode, {
+            turnsUsed,
+            toolCallsCount,
+            pendingInputs: promotedFollowUps.length,
+          });
+          continue;
+        }
+
         this.agentState.transition("responding");
         this.emitEvent("agent:complete", mode, { output: finalOutput, turnsUsed, toolCallsCount });
 

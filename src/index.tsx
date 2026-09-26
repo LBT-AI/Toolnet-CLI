@@ -8,6 +8,7 @@ import { generateCompletionScript, getCompletionInstallHelp } from "./lib/comple
 import { handleUpdate } from "./lib/updater";
 import { loadAppConfig } from "./lib/appConfig";
 import { runSetupWizard, isTty, printSetupHint, hasUsableConfiguration, shouldAutoLaunchSetup } from "./lib/setupWizard";
+import { isSimpleMode } from "./lib/cliArgs";
 
 const CLI_VERSION = getVersion();
 const args = process.argv.slice(2);
@@ -79,7 +80,7 @@ USAGE:
 OPTIONS:
   -p, --prompt <text>   Run once without opening the TUI
   --image <path>        Attach image for multimodal inspection (repeatable)
-  -s, --simple          Run lightweight REPL
+  -s, --simple          Run lightweight REPL (bare -s; -s <id> opens a session)
   -b, --bypass [level]  Enable Bypass/Jailbreak mode (e.g. --bypass godmode)
   -v, --version         Print version
   -h, --help            Show help
@@ -90,7 +91,7 @@ OPTIONS:
   --json                JSON output with -p
   --format <fmt>        Output format: text, markdown, json, jsonl
   --resume, -r          Resume last session
-  --session, -s <id>    Open a specific session
+  --session, -s <id>    Open a specific session (a bare -s stays --simple)
   --model, -m <name>    Default model override
   --workspace <path>    Add workspace root directory (repeatable)
 
@@ -634,7 +635,9 @@ if (args.includes("--bypass") || args.includes("-b")) {
 
 // ---- Mode detection (early, before any mode-dependent logic) ----
 const isHeadless = args.includes("-p") || args.includes("--prompt");
-const isSimple = args.includes("--simple") || args.includes("-s");
+// `-s` is overloaded: bare `-s` is the lightweight REPL, `-s <id>` opens a
+// session. See isSimpleMode() for the exact rule.
+const isSimple = isSimpleMode(args);
 const isBannerOnly = args.includes("--banner");
 const isInteractiveMode = !isHeadless && !isSimple && !isBannerOnly;
 

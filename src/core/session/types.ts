@@ -96,6 +96,13 @@ export type SessionEventType =
   | "harness.selection"
   | "auth.pin"
   | "context.compaction"
+  // ── Pending (steer/queue) user input ─────────────────────────────────────
+  // A follow-up admitted while the agent is BUSY is durable BEFORE it becomes
+  // model-visible: `admitted` records it, the promoted `user.message` (carrying
+  // `inputId`) records exactly-once promotion, `cancelled` retires it.
+  | "session.input.admitted"
+  | "session.input.promoted"
+  | "session.input.cancelled"
   | "checkpoint.created";
 
 export const SESSION_EVENT_TYPES: SessionEventType[] = [
@@ -114,6 +121,9 @@ export const SESSION_EVENT_TYPES: SessionEventType[] = [
   "harness.selection",
   "auth.pin",
   "context.compaction",
+  "session.input.admitted",
+  "session.input.promoted",
+  "session.input.cancelled",
   "checkpoint.created",
 ];
 

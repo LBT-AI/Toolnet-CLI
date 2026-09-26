@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { MessageQueue, messageQueue } from "../../lib/messageQueue";
+import { pendingInputs, resetPendingInputs } from "../../core/agent/pendingInput";
 import { tuiState } from "../../tui/state";
 import { handleKey, handlePaste, resetInputState } from "../../tui/input/inputHandler";
 import { queueCommand } from "../../commands/queue";
@@ -29,6 +30,7 @@ describe("Queued Messages & Queue Manager Regression Suite", () => {
 
     messageQueue.clear();
     messageQueue.setIsProcessing(false);
+    resetPendingInputs();
     resetInputState();
 
     // Mirror the real startup flow (index.tsx calls tui.setState("ready")
@@ -76,7 +78,7 @@ describe("Queued Messages & Queue Manager Regression Suite", () => {
     expect(tuiState.inputBuffer).toBe("");
   });
 
-  it("2. Working state + message submit enqueues task and clears input", () => {
+  it("2. Working state + message submit is admitted as a steer on the same session", () => {
     const executed: string[] = [];
     const cb = {
       renderAll: () => {},
@@ -94,9 +96,12 @@ describe("Queued Messages & Queue Manager Regression Suite", () => {
 
     // Should NOT execute immediately while working
     expect(executed).toEqual([]);
-    // Should be enqueued in messageQueue
-    expect(messageQueue.size()).toBe(1);
-    expect(messageQueue.peek()?.text).toBe("run subsequent test task");
+    // BUSY submit is a STEER by default (not a queue item): it becomes
+    // model-visible at the next safe provider-turn boundary of THIS session.
+    expect(messageQueue.size()).toBe(0);
+    expect(pendingInputs.count(tuiState.currentSessionId)).toBe(1);
+    expect(pendingInputs.pending(tuiState.currentSessionId)[0].content).toBe("run subsequent test task");
+    expect(pendingInputs.pending(tuiState.currentSessionId)[0].delivery).toBe("steer");
     // Input line should be cleared for next typing
     expect(tuiState.inputBuffer).toBe("");
   });
@@ -137,7 +142,7 @@ describe("Queued Messages & Queue Manager Regression Suite", () => {
     expect(messageQueue.getAllTexts()).toEqual(["Step B (Updated with details)", "Step A"]);
   });
 
-  it("5. Paste during working state is placed into input and enqueued on Enter", () => {
+  it("5. Paste during working state is placed into input and admitted as a steer on Enter", () => {
     const executed: string[] = [];
     const cb = {
       renderAll: () => {},
@@ -151,11 +156,12 @@ describe("Queued Messages & Queue Manager Regression Suite", () => {
     handlePaste("\x1b[200~Please fix issue with /key modal\x1b[201~", cb);
     expect(tuiState.inputBuffer).toBe("Please fix issue with /key modal");
 
-    // Enter enqueues the pasted instruction
+    // Enter admits the pasted instruction as a steer (BUSY default).
     handleKey(Buffer.from("0d", "hex"), cb);
     expect(executed).toEqual([]);
-    expect(messageQueue.size()).toBe(1);
-    expect(messageQueue.peek()?.text).toBe("Please fix issue with /key modal");
+    expect(messageQueue.size()).toBe(0);
+    expect(pendingInputs.count(tuiState.currentSessionId)).toBe(1);
+    expect(pendingInputs.pending(tuiState.currentSessionId)[0].content).toBe("Please fix issue with /key modal");
     expect(tuiState.inputBuffer).toBe("");
   });
 

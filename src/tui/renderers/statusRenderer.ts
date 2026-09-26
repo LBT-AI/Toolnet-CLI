@@ -13,6 +13,12 @@ export interface WorkingStatusState {
   primaryColor: string;
   queuedCount?: number;
   nextQueuedText?: string;
+  /**
+   * Follow-ups admitted while the agent is BUSY (delivery = steer) that are not
+   * yet promoted into the conversation. Shown so the user sees their prompt was
+   * accepted instead of silently swallowed.
+   */
+  pendingInputs?: number;
 }
 
 export interface FooterState {
@@ -36,7 +42,8 @@ export function statusLineActive(state: WorkingStatusState): boolean {
     state.showHelp ||
     state.isStreaming ||
     state.statusText ||
-    (state.queuedCount && state.queuedCount > 0)
+    (state.queuedCount && state.queuedCount > 0) ||
+    (state.pendingInputs && state.pendingInputs > 0)
   );
 }
 
@@ -78,10 +85,17 @@ export function renderWorkingStatus(
     const hasIconPrefix = /^[✖✗✔✓✅●]\s/.test(state.statusText);
     content = hasIconPrefix ? state.statusText : `${icon} ${state.statusText}`;
     fg = isErr ? A.fgRed : isSuccess ? A.fgGreen : state.primaryColor;
-  } else {
+  } else if (state.queuedCount && state.queuedCount > 0) {
     const nextText = state.nextQueuedText ? ` · Next: ${truncate(state.nextQueuedText, 30)}` : "";
     content = `${state.queuedCount} queued${nextText}`;
     fg = A.fgYellow;
+  }
+
+  // Pending steer badge — appended to whatever the line already says, so
+  // "Working · 2 steers pending" stays one compact, stable row on mobile.
+  if (state.pendingInputs && state.pendingInputs > 0) {
+    const label = state.pendingInputs === 1 ? "steer" : "steers";
+    content += `${content ? " · " : ""}${state.pendingInputs} ${label} pending`;
   }
 
   const maxContent = Math.max(8, cols - 3);

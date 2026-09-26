@@ -13,6 +13,7 @@ import { statusManager } from "../statusService";
 import { cancelPendingApproval } from "../permissions/permissionModal";
 import { handleModelPickerKey } from "../modelPickerWorkflow";
 import { messageQueue } from "../../lib/messageQueue";
+import { pendingInputs } from "../../core/agent/pendingInput";
 import { overlayIsActive, handleOverlayKey } from "./overlayInput";
 import { workspaceAccessAnimation } from "../animations/modalAnimation";
 
@@ -1302,12 +1303,17 @@ function _handleKeyInternal(
 
     tuiState.pushPromptHistory(content);
 
-    // If agent is currently working/streaming or processing -> enqueue into message queue
+    // BUSY → admit the follow-up as a STEER on the SAME session. It is durable
+    // immediately but only becomes model-visible at the next safe provider-turn
+    // boundary. It never aborts the running turn and never races a second
+    // provider request. (Explicit `/queue` remains the separate queue path.)
     if (tuiState.isStreaming || messageQueue.getIsProcessing()) {
-      const queued = messageQueue.enqueue(content);
-      tuiState.saveCurrentSession();
-      if (queued) {
-        tuiState.showToast(`Queued (${messageQueue.size()} in queue)`);
+      const steer = pendingInputs.admit(tuiState.currentSessionId, content, { delivery: "steer" });
+      if (steer) {
+        const pending = pendingInputs.count(tuiState.currentSessionId);
+        tuiState.showToast(`✓ Steer queued (${pending} pending)`);
+      } else {
+        tuiState.showToast("⚠️ Could not queue follow-up", 2500);
       }
       renderAll();
       return;

@@ -38,6 +38,8 @@ import { getActiveProviderConfig, getActiveProvider, autoRestoreActiveProvider }
 import { onProviderSwitch } from "../commands/provider";
 import { statusManager } from "./statusService";
 import { messageQueue } from "../lib/messageQueue";
+import { pendingInputs } from "../core/agent/pendingInput";
+import { readPendingInputs } from "../core/session/pendingInputJournal";
 import { workspaceAccessAnimation } from "./animations/modalAnimation";
 
 setupTerminalLifecycle();
@@ -94,11 +96,13 @@ let pendingRerender = false;
  */
 export function buildFrame(): string {
   const activeSuggests = getSuggestions(tuiState.inputBuffer);
+  const pendingSteerCount = pendingInputs.count(tuiState.currentSessionId);
   const statusActive =
     tuiState.showHelp ||
     tuiState.isStreaming ||
     Boolean(tuiState.statusText) ||
-    messageQueue.size() > 0;
+    messageQueue.size() > 0 ||
+    pendingSteerCount > 0;
   const layout = computeLayout(activeSuggests.length, 2, tuiState.cursorPos, statusActive, tuiState.inputBuffer ? tuiState.inputBuffer.split("\n").length : 1, tuiState.inputBuffer);
   const { cols, rows, hasPanel, panelWidth, chatCols, chatRows, popupRows } = layout;
   const out: string[] = [];
@@ -194,6 +198,7 @@ export function buildFrame(): string {
     primaryColor,
     queuedCount: messageQueue.size(),
     nextQueuedText: messageQueue.peek()?.text,
+    pendingInputs: pendingSteerCount,
   }));
 
   // 9. Input Area — drawn exactly once (divider + prompt line)
@@ -496,6 +501,8 @@ export async function main(): Promise<void> {
     // Carry the durable title across a crash recovery so the footer shows the
     // same session label after restart (title is metadata, not run state).
     tuiState.sessionTitle = sessionDisplayTitle(loadSession(pendingRecovery.sessionId));
+    // Steers admitted before the crash are durable — bring them back pending.
+    pendingInputs.restore(pendingRecovery.sessionId, readPendingInputs(pendingRecovery.sessionId));
     if (pendingRecovery.model && pendingRecovery.model !== "openai/gpt-4o" && pendingRecovery.model !== "none" && pendingRecovery.model !== "default") {
       tuiState.currentModel = pendingRecovery.model;
     }
@@ -544,6 +551,7 @@ export async function main(): Promise<void> {
       }
       // Restore the durable title so `toolnet -s <id>` shows the same label.
       tuiState.sessionTitle = sessionDisplayTitle(loaded);
+      pendingInputs.restore(loaded.sessionId, readPendingInputs(loaded.sessionId));
       tuiState.setStatus(`Loaded session: ${tuiState.currentSessionId}`);
     } else {
       tuiState.currentSessionId = requestedSessionId;
@@ -564,6 +572,7 @@ export async function main(): Promise<void> {
         }
         // Restore the durable title so `toolnet resume` shows the same label.
         tuiState.sessionTitle = sessionDisplayTitle(loaded);
+        pendingInputs.restore(loaded.sessionId, readPendingInputs(loaded.sessionId));
         tuiState.setStatus(`Resumed session: ${tuiState.currentSessionId}`);
       }
     }

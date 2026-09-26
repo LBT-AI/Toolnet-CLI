@@ -9,6 +9,8 @@ import {
 import { bypassEngine } from "../lib/bypass";
 import type { Msg, PendingConfirmation, Overlay } from "./types";
 import { updateCrashGoal } from "../lib/crashRecovery";
+import { pendingInputs } from "../core/agent/pendingInput";
+import { readPendingInputs } from "../core/session/pendingInputJournal";
 import { createChatViewport, type ChatViewportState } from "./viewport";
 import {
   loadAllSkills,
@@ -1010,6 +1012,8 @@ export class TuiState {
     this.replaceMessages((loaded.messages as any) || []);
     this.sessionTitle = loaded.title
       ?? (typeof loaded.metadata?.name === "string" && loaded.metadata.name ? loaded.metadata.name : undefined);
+    // Resume any steer that was admitted before the process ended.
+    pendingInputs.restore(loaded.sessionId, readPendingInputs(loaded.sessionId));
     if (loaded.metadata?.model) this.currentModel = loaded.metadata.model;
     if (loaded.metadata?.provider) this.providerName = loaded.metadata.provider;
     if (loaded.metadata?.agentMode) this.agentMode = loaded.metadata.agentMode;

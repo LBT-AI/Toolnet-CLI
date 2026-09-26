@@ -26,6 +26,8 @@ export type HarnessEventType =
   | "agent:reasoning_end"
  /** a runtime notification was injected into the conversation. */
   | "agent:notification"
+ /** a pending steer/queue input was promoted into the conversation at a safe boundary. */
+  | "agent:steer_promoted"
   | "tool:queued"
   | "tool:approval_required"
   | "tool:start"

@@ -19,6 +19,8 @@ import { A } from "../../term";
 import { updateCrashToolResult, markCleanExit } from "../../lib/crashRecovery";
 import { restoreTerminal } from "../../lib/terminalLifecycle";
 import { pinToTail } from "../viewport";
+import { pendingInputs } from "../../core/agent/pendingInput";
+import { readPendingInputs } from "../../core/session/pendingInputJournal";
 import { getActiveProvider, getActiveDefaultModel } from "../../providers";
 import { statusManager } from "../statusService";
 import { messageQueue } from "../../lib/messageQueue";
@@ -762,6 +764,9 @@ export function buildTuiCommandContext(): any {
       // Switching sessions must swap the footer label too, and clear it when the
       // target is untitled (never leak the previous session's title).
       tuiState.sessionTitle = sessionDisplayTitle(loaded);
+      // Pending steers are session-scoped: restore the TARGET's, never the
+      // source's (a different session must not see this session's follow-ups).
+      pendingInputs.restore(loaded.sessionId, readPendingInputs(loaded.sessionId));
       if (loaded.metadata?.model) tuiState.currentModel = loaded.metadata.model;
       if (loaded.metadata?.agentMode) tuiState.agentMode = loaded.metadata.agentMode;
       if (loaded.metadata?.queuedMessages && Array.isArray(loaded.metadata.queuedMessages)) {
