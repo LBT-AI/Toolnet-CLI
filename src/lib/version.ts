@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 // @codebuff keep in sync with package.json "version" (guarded by test)
-export const EMBEDDED_VERSION = "1.2.4";
+export const EMBEDDED_VERSION = "1.3.0";
 
 const PACKAGE_NAME = "toolnetcli";
 

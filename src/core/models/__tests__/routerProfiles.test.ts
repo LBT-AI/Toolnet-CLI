@@ -7,6 +7,7 @@ import { ProviderRegistry } from "../registry";
 import { ModelRouter, providerSpeed, resetRoutingConfig, setRoutingConfig } from "../router";
 import { formatModelRef } from "../ref";
 import type { ModelDefinition, ProviderRegistration } from "../types";
+import { resetAppConfigCache } from "../../../lib/appConfig";
 
 function model(providerId: string, apiModelId: string, extra: Partial<ModelDefinition> = {}): ModelDefinition {
   return {
@@ -33,6 +34,7 @@ describe("profile-driven routing", () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-profiles-"));
     process.env.TOOLNETCLI_CONFIG_DIR = tempDir;
+    resetAppConfigCache();
     catalog = new ModelCatalog();
     registry = new ProviderRegistry(catalog);
     router = new ModelRouter({ registry, catalog, activeProviderId: () => null });

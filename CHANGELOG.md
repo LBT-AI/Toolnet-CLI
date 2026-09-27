@@ -1,4 +1,22 @@
 # Changelog
+
+## [1.3.0] - 2026-09-27
+### Added
+- Added ToolNet Skills as the default built-in MCP server for immediate usability without configuration.
+- Added provider routing intelligence with fallback mechanisms.
+- Render structured file-mutation diffs in the TUI for clearer code review.
+- Show live long-running tool activity and unify semantic terminal colors.
+- Allow TUI to admit BUSY follow-ups as session steers at the next turn boundary.
+- Support durable session titles and auto-title on the first real task.
+- Collapse long pastes in the composer to avoid flooding the terminal frame.
+
+### Changed
+- Improved context engine with a token budgeting compaction as a lossy, per-model checkpoint.
+- Hardened security and test environment isolation (reset policy engine, isolate session state).
+- Improved terminal interface reliability: anchored cursor correctly, stabilized viewport under live updates, fixed mobile IME input for Vietnamese text, and parsed inline markdown.
+- Standardized and extended model provider support (added default models like agnes-2.0-flash, bob/fast, bob/rnj-1-test).
+- Improved cross-harness compatibility and environment isolation for testing.
+
 All notable changes to ToolNet CLI will be documented here.
 The project follows Semantic Versioning.
 

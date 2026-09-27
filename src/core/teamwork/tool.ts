@@ -9,7 +9,6 @@
 
 import type { ToolExecutionContext } from "../../lib/security/types";
 import type { ToolDefinition } from "../../lib/harness/toolRegistry";
-import { backgroundJobs, renderBackgroundNotification, sessionInbox } from "../background";
 import { permissionScopeFromSandbox } from "../agent/agents/permissions";
 import { DEFAULT_SUBAGENT_MAX_DEPTH } from "../agent/agents/types";
 import type { TeamworkResult, TeamworkPlan } from "./types";
@@ -166,6 +165,7 @@ async function startBackgroundPlan(
   runOptions: TeamworkRunOptions,
   plan: TeamworkPlan
 ): Promise<string> {
+  const { backgroundJobs, renderBackgroundNotification, sessionInbox } = await import("../background");
   const title = `Teamwork plan ${plan.id} (${plan.nodes.length} nodes)`;
 
   const job = backgroundJobs.start({

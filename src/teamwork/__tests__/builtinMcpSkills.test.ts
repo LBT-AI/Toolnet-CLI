@@ -23,6 +23,10 @@ import { ToolGateway } from "../../lib/security/toolGateway";
 import { mcpCommand } from "../../commands/mcp";
 import { runMcpCli } from "../../commands/mcpCli";
 
+import { sessionTrust } from "../../lib/security/sessionTrust";
+import { policyEngine } from "../../lib/security/policyEngine";
+import { setSandboxMode } from "../../lib/permissions";
+
 describe("Built-in Default MCP — ToolNet Skills", () => {
   let tempHome: string;
   let tempWorkspace: string;
@@ -32,10 +36,15 @@ describe("Built-in Default MCP — ToolNet Skills", () => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-skills-home-"));
     tempWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-skills-ws-"));
     process.env.TOOLNETCLI_CONFIG_DIR = tempHome;
+    setSandboxMode("workspace");
+    sessionTrust.clear();
+    policyEngine.reload();
     toolRegistry.clearDynamic();
   });
 
   afterEach(() => {
+    sessionTrust.clear();
+    policyEngine.reload();
     if (originalHome !== undefined) {
       process.env.TOOLNETCLI_CONFIG_DIR = originalHome;
     } else {
@@ -278,7 +287,7 @@ describe("Built-in Default MCP — ToolNet Skills", () => {
     const toolName = "mcp__toolnet-skills__list_skills";
     const res = await ToolGateway.execute(
       { name: toolName, args: {} },
-      { sessionId: "test-skills-session", workspaceRoot: tempWorkspace }
+      { sessionId: "test-skills-session", workspaceRoot: tempWorkspace, sandboxMode: "workspace", userApproved: true }
     );
 
     expect(res.allowed).toBe(true);

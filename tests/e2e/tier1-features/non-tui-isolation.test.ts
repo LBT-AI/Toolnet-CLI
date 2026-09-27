@@ -9,7 +9,7 @@ describe("Tier 1 Feature Coverage: Non-TUI Commands Isolation & Shared Contracts
     const res = await runToolNetCli({ args: ["version"] });
     expect(res.exitCode).toBe(0);
     expect(res.hasAltScreen).toBe(false);
-    expect(res.stdout).toContain("ToolNet CLI v1.2.4");
+    expect(res.stdout).toContain("ToolNet CLI v1.3.0");
   });
 
   it("F2.2: 'toolnet --help' prints global help and exits cleanly with code 0", async () => {

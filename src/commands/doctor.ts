@@ -4,8 +4,6 @@ import { getSessionsDir } from "../lib/sessionPersistence";
 import { getCwdInfo } from "../lib/codingAgent";
 import { getCliKey } from "../lib/keys";
 import { bypassEngine } from "../lib/bypass";
-import { getEffectiveMcpServers } from "../lib/mcpRunner";
-import { mcpManager } from "../core/mcp/manager";
 import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
 import fs from "node:fs";
@@ -66,6 +64,25 @@ export const doctorCommand: Command = {
     const hasAnthropicKey = Boolean(getCliKey("anthropic"));
     const hasDashscopeKey = Boolean(getCliKey("alibaba") || getCliKey("dashscope") || process.env.DASHSCOPE_API_KEY);
 
+    const { getEffectiveMcpServers } = await import("../lib/mcpRunner");
+    const { mcpManager } = await import("../core/mcp/manager");
+    const mcpServers = getEffectiveMcpServers();
+    const mcpLines =
+      mcpServers.length > 0
+        ? mcpServers.map((s) => {
+            const status = mcpManager.status(s.serverId);
+            const toolCount = mcpManager.listTools(s.serverId).length;
+            const displayStatus =
+              status === "connected"
+                ? `connected (${toolCount} tools)`
+                : status === "disabled"
+                ? "disabled"
+                : "available";
+            const builtinTag = s.sourceKind === "BUILTIN" ? " (builtin)" : "";
+            return `• ${s.name}${builtinTag}: ${displayStatus}`;
+          })
+        : ["• None configured"];
+
     const report = [
       `=== ToolNet API CLI Doctor Report ===`,
       ``,
@@ -85,20 +102,7 @@ export const doctorCommand: Command = {
       `• Gateway URL  : ${ctx.gateway?.getBaseUrl() ?? "(none)"} [${gwStatus}]`,
       ``,
       `MCP Extensions:`,
-      ...(getEffectiveMcpServers().length > 0
-        ? getEffectiveMcpServers().map((s) => {
-            const status = mcpManager.status(s.serverId);
-            const toolCount = mcpManager.listTools(s.serverId).length;
-            const displayStatus =
-              status === "connected"
-                ? `connected (${toolCount} tools)`
-                : status === "disabled"
-                ? "disabled"
-                : "available";
-            const builtinTag = s.sourceKind === "BUILTIN" ? " (builtin)" : "";
-            return `• ${s.name}${builtinTag}: ${displayStatus}`;
-          })
-        : ["• None configured"]),
+      ...mcpLines,
       ``,
       `Stored API Keys:`,
       `• ToolNet / Default   : ${hasToolnetKey ? "Set ✓" : "Not Set"}`,

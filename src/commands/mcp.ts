@@ -7,7 +7,7 @@ import {
   getEffectiveMcpServers,
   mcpTrustManager,
 } from "../lib/mcpRunner";
-import { isBuiltinSkillsMcp } from "../core/mcp";
+import { isBuiltinSkillsMcp } from "../core/mcp/builtin";
 import { mcpManager } from "../core/mcp/manager";
 import { runMcpCli } from "./mcpCli";
 
