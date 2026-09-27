@@ -391,6 +391,7 @@ export function classifyToolAction(toolName: string, args?: any): ToolActionInfo
     name === "save_file" ||
     name === "write" ||
     name === "save_plan" ||
+    name === "plan_write" ||
     name === "create_artifact"
   ) {
     return {

@@ -97,7 +97,7 @@ export const doctorCommand: Command = {
       `• Workspace CWD: ${cwd}`,
       `• Sessions Dir : ${sessionsDir} (${fs.existsSync(sessionsDir) ? "Writable ✓" : "Missing ✗"})`,
       `• Sandbox Mode : ${sandbox.toUpperCase()}`,
-      `• Bypass 2.0   : ${bypassEngine.isEnabled() ? `ACTIVE (${bypassEngine.getLevel().toUpperCase()})` : "OFF"} (Auto-Escalate: ${bypassEngine.getConfig().autoEscalate ? "ON" : "OFF"})`,
+      `• Bypass       : ${bypassEngine.isEnabled() ? "ACTIVE" : "OFF"} (Auto-retry: ${bypassEngine.getConfig().autoRetry ? "ON" : "OFF"})`,
       `• Active Model : ${ctx.currentModel()}`,
       `• Gateway URL  : ${ctx.gateway?.getBaseUrl() ?? "(none)"} [${gwStatus}]`,
       ``,

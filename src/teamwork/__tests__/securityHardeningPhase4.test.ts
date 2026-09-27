@@ -476,8 +476,9 @@ test("basic", () => { expect(1 + 1).toBe(2); });`);
         prefixInjection: true,
       };
       
-      const subContext = bypassEngine.createSubagentContext(parentBypass, "workspace");
-      expect(subContext.forceExecution).toBe(false);
+      const subContext = bypassEngine.createSubagentContext(parentBypass);
+      // forceExecution no longer exists anywhere in the bypass config.
+      expect("forceExecution" in subContext).toBe(false);
     });
   });
 
@@ -641,20 +642,12 @@ test("basic", () => { expect(1 + 1).toBe(2); });`);
       }
     });
 
-    test("forceExecution cannot exist outside full-access", () => {
+    test("forceExecution was removed from the bypass engine entirely", () => {
       const { bypassEngine } = require("../../lib/bypass");
-      try {
-        const wsResult = bypassEngine.setForceExecution(true, "workspace");
-        expect(wsResult).toBe(false);
-        
-        const askResult = bypassEngine.setForceExecution(true, "ask");
-        expect(askResult).toBe(false);
-        
-        const fullResult = bypassEngine.setForceExecution(true, "full-access");
-        expect(fullResult).toBe(true);
-      } finally {
-        bypassEngine.setForceExecution(false, "workspace");
-      }
+      // The flag was a self-destructive bypass path (skipped workspace path
+      // checks); it is gone. Sandbox mode is the only access key now.
+      expect((bypassEngine as any).setForceExecution).toBeUndefined();
+      expect("forceExecution" in bypassEngine.getConfig()).toBe(false);
     });
 
     test("subagent policy <= parent policy", () => {

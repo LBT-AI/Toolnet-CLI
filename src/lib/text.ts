@@ -172,6 +172,71 @@ export function caretCellWidth(text: string, offset: number): number {
   return cells;
 }
 
+/**
+ * Drop unpaired UTF-16 surrogates (and nothing else).
+ *
+ * A lone surrogate is never a real character: it can only come from slicing a
+ * string by UTF-16 units through an emoji/astral character. When such a value
+ * reaches stdout it is encoded as U+FFFD, and a terminal that cannot render the
+ * replacement glyph prints `?`. Removing it here guarantees the frame contains
+ * only well-formed sequences — no `?`/`�` artifact can escape the process.
+ */
+export function toWellFormed(value: string): string {
+  if (!value) return value;
+  let out = "";
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out += value[i] + value[i + 1];
+        i++;
+      }
+      // Lone high surrogate: drop — it is an encoding artifact, not content.
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) continue; // lone low surrogate
+    out += value[i];
+  }
+  return out;
+}
+
+/**
+ * Deterministic ASCII transliteration for terminals without Unicode glyph
+ * support. ANSI escapes are ASCII, so a plain per-character map leaves them
+ * untouched. Astral characters (emoji) cannot be represented in ASCII and are
+ * dropped rather than handed to a terminal that would answer with `?`.
+ */
+const GLYPH_ASCII: Readonly<Record<string, string>> = {
+  "─": "-", "━": "-", "═": "=", "╌": "-", "┄": "-", "┈": "-",
+  "│": "|", "┃": "|", "║": "|", "┆": "|", "┊": "|",
+  "╭": "+", "╮": "+", "╰": "+", "╯": "+",
+  "┌": "+", "┐": "+", "└": "+", "┘": "+",
+  "├": "+", "┤": "+", "┬": "+", "┴": "+", "┼": "+",
+  "•": "*", "․": ".", "●": "*", "○": "o", "◦": "o", "◌": "o", "◍": "o",
+  "◈": "<>", "◇": "<>", "◆": "<>", "♦": "<>",
+  "✓": "v", "✔": "v", "✗": "x", "✘": "x", "✖": "x",
+  "■": "#", "▊": "|", "▎": "|", "▌": "|", "▍": "|", "▏": "|", "█": "#",
+  "▲": "^", "▼": "v", "↑": "^", "↓": "v", "⇡": "^", "⇣": "v",
+  "⇞": "PgUp", "⇟": "PgDn", "⇑": "^", "⇓": "v",
+  "…": "...", "⋯": "...", "···": "...",
+  "›": ">", "❯": ">", "»": ">", "«": "<", "⤷": "->", "→": "->", "←": "<-",
+  "✦": "*", "✧": "*", "⏺": "*", "⏵": ">", "▶": ">", "◀": "<",
+  "↵": "\\n", "⚠": "!", "※": "*", "⸻": "-", "—": "-", "–": "-",
+  "\u200b": "", "\u200c": "", "\u200d": "", "\ufeff": "", "\ufe0f": "",
+};
+
+/** Replace Unicode glyphs with their ASCII twins; drop astral characters. */
+export function transliterateGlyphs(value: string): string {
+  if (!value) return value;
+  let out = "";
+  for (const ch of value) {
+    if (ch.codePointAt(0)! > 0xffff) continue; // emoji/astral: not representable
+    out += GLYPH_ASCII[ch] ?? ch;
+  }
+  return out;
+}
+
 /** List-entry shape shared by CLI catalog listings and TUI list panels. */
 export interface ListItem {
   id: string;

@@ -109,8 +109,8 @@ export function renderConfirmationModal(
     const labelColor = option.key === "n" ? A.fgRed : A.fgText;
     if (selected) {
       body.push(
-        A.fgCyan + A.bold + "❯ " + A.reset +
-        labelColor + (closingFlash ? A.bold + A.fgCyan : A.bold) + label + A.reset
+        A.fgAccent + A.bold + "❯ " + A.reset +
+        labelColor + (closingFlash ? A.bold + A.fgAccent : A.bold) + label + A.reset
       );
     } else {
       body.push(
@@ -128,7 +128,7 @@ export function renderConfirmationModal(
     body,
     footer,
     width: modalWidth,
-    accent: A.fgCyan,
+    accent: A.fgAccent,
     borderColor: A.fgBorder,
     animation,
   });

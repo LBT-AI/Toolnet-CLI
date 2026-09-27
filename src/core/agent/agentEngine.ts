@@ -180,6 +180,18 @@ export function toAgentEvents(ev: HarnessEvent): AgentEvent[] {
       return [{ type: "tool-call", callId, name: String(payload.toolName ?? "unknown"), input: payload.toolArgs ?? {} }];
     }
 
+    // A tool is gated on a user/security decision. Surfaced as a first-class
+    // event so a front-end can render "waiting for approval" from canonical
+    // state instead of inferring it from a stalled tool timer.
+    case "tool:approval_required": {
+      const callId = String(payload.id ?? payload.callId ?? payload.toolName ?? "unknown");
+      return [{
+        type: "permission-required",
+        callId,
+        resource: String(payload.toolName ?? payload.resource ?? callId),
+      }];
+    }
+
     case "tool:start":
       return [{ type: "tool-running", callId: String(payload.id ?? payload.toolName ?? "unknown") }];
 
@@ -210,6 +222,29 @@ export function toAgentEvents(ev: HarnessEvent): AgentEvent[] {
         type: "tool-error",
         callId: String(payload.id ?? payload.toolName ?? "unknown"),
         error: payload.reason || payload.error || "Tool execution failed",
+      }];
+
+    case "verification-start":
+      return [{
+        type: "verification-start",
+        callId: String(payload.id ?? payload.toolName ?? "unknown"),
+      }];
+
+    case "verification-result":
+      return [{
+        type: "verification-result",
+        callId: String(payload.id ?? payload.toolName ?? "unknown"),
+        ok: payload.ok === true,
+      }];
+
+    // Context compaction: one canonical event so the UI can show a distinct
+    // "compacting" state rather than appearing to hang while history is pruned.
+    case "agent:compact":
+      return [{
+        type: "compaction",
+        trigger: typeof payload.trigger === "string" ? payload.trigger : undefined,
+        originalTokens: typeof payload.originalTokens === "number" ? payload.originalTokens : undefined,
+        newCount: typeof payload.newCount === "number" ? payload.newCount : undefined,
       }];
 
     case "agent:complete":

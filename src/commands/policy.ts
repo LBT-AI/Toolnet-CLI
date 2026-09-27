@@ -5,7 +5,7 @@ import { getSandboxMode } from "../lib/permissions";
 
 export const policyCommand: Command = {
   name: "policy",
-  aliases: ["permissions", "perm"],
+  aliases: ["perm"],
   description: "View and manage workspace security policy (.toolnet/permissions.json)",
   usage: "/policy [show|init|mode]",
   async handler(args: string[], ctx: CommandContext) {

@@ -1,31 +1,37 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { getToolnetHome } from "../toolnetHome";
-import { ALL_BYPASS_LEVELS, type BypassConfig, type BypassLevel, type BypassTurnResult, type RefusalCheckResult } from "./types";
-import { BYPASS_LEVEL_CATALOG, getBypassPrompt } from "./prompts";
-import { isRefusal, getEscalatedLevel, generateRefusalOverridePrompt } from "./antiRefusal";
-import { setBypassPolicy } from "../codingAgent";
+import type { BypassConfig, RefusalCheckResult } from "./types";
+import { isRefusal, buildRetryPrompt } from "./antiRefusal";
+import { getBypassPrompt } from "./prompts";
 
-import { getSandboxMode } from "../permissions";
+/**
+ * Bypass engine — ONE mode, honest semantics.
+ *
+ * Bypass is a MODEL-DISPOSITION feature: it makes the agent more willing to
+ * build what the user asks and less prone to lecturing. It is NOT a security
+ * feature and it deliberately has NO power over permissions:
+ *
+ *  - it never calls setBypassPolicy / touches sandbox or SecurityEngine state;
+ *  - it never forges system messages or "clearances";
+ *  - "auto retry" re-asks ONCE with an honest prompt when a spurious refusal
+ *    is detected — the user's approvals stay exactly as interactive as before.
+ */
 
 function getConfigDir(): string {
   if (process.env.DATA_DIR) return process.env.DATA_DIR;
- // : canonical home module (single TOOLNETCLI_CONFIG_DIR-aware source).
   return getToolnetHome();
 }
 
 const CONFIG_FILE = path.join(getConfigDir(), "bypass-config.json");
 
-export class BypassEngine {
-  private config: BypassConfig = {
-    enabled: false,
-    level: "full",
-    autoEscalate: true,
-    forceExecution: false,
-    prefixInjection: false,
-  };
+const DEFAULT_CONFIG: BypassConfig = {
+  enabled: false,
+  autoRetry: true,
+};
 
+export class BypassEngine {
+  private config: BypassConfig = { ...DEFAULT_CONFIG };
   private listeners: Array<(config: BypassConfig) => void> = [];
 
   constructor() {
@@ -35,18 +41,14 @@ export class BypassEngine {
   private loadPersistedConfig() {
     try {
       if (fs.existsSync(CONFIG_FILE)) {
-        const raw = fs.readFileSync(CONFIG_FILE, "utf8");
-        const parsed = JSON.parse(raw);
-        if (typeof parsed.enabled === "boolean") this.config.enabled = parsed.enabled;
-        if (parsed.level && ALL_BYPASS_LEVELS.includes(parsed.level)) this.config.level = parsed.level;
-        if (typeof parsed.autoEscalate === "boolean") this.config.autoEscalate = parsed.autoEscalate;
-        if (typeof parsed.forceExecution === "boolean") this.config.forceExecution = parsed.forceExecution;
-        if (parsed.customPrompt) this.config.customPrompt = parsed.customPrompt;
-        if (typeof parsed.prefixInjection === "boolean") this.config.prefixInjection = parsed.prefixInjection;
+        const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+        if (typeof raw.enabled === "boolean") this.config.enabled = raw.enabled;
+        // `autoRetry` replaces the old `autoEscalate`; honor old configs once.
+        if (typeof raw.autoRetry === "boolean") this.config.autoRetry = raw.autoRetry;
+        else if (typeof raw.autoEscalate === "boolean") this.config.autoRetry = raw.autoEscalate;
+        if (typeof raw.customPrompt === "string" && raw.customPrompt) this.config.customPrompt = raw.customPrompt;
       }
     } catch {}
-    // Sync local bypass policy
-    setBypassPolicy(this.config.enabled && this.config.forceExecution);
   }
 
   public saveConfig() {
@@ -81,136 +83,50 @@ export class BypassEngine {
     return this.config.enabled;
   }
 
-  public getLevel(): BypassLevel {
-    return this.config.level;
-  }
-
-  public setBypass(enabled: boolean, level?: BypassLevel, customPrompt?: string): void {
+  public setBypass(enabled: boolean): void {
     this.config.enabled = enabled;
-    if (level && ALL_BYPASS_LEVELS.includes(level)) {
-      this.config.level = level;
-    }
-    if (customPrompt !== undefined) {
-      this.config.customPrompt = customPrompt;
-    }
-    // Update local workspace bypass policy if force execution is on
-    setBypassPolicy(enabled && this.config.forceExecution);
     this.saveConfig();
   }
 
-  public setLevel(level: BypassLevel): void {
-    if (ALL_BYPASS_LEVELS.includes(level)) {
-      this.config.level = level;
-      this.saveConfig();
-    }
-  }
-
-  public setAutoEscalate(enabled: boolean): void {
-    this.config.autoEscalate = enabled;
+  public setAutoRetry(enabled: boolean): void {
+    this.config.autoRetry = enabled;
     this.saveConfig();
-  }
-
-  public setForceExecution(enabled: boolean, sandboxMode: string = getSandboxMode()): boolean {
-    if (enabled && sandboxMode !== "full-access") {
-      this.config.forceExecution = false;
-      this.saveConfig();
-      return false; // Rejected in workspace/ask modes
-    }
-    this.config.forceExecution = enabled;
-    setBypassPolicy(this.config.enabled && enabled);
-    this.saveConfig();
-    return true;
-  }
-
-  /**
-   * Creates an isolated subagent BypassContext.
-   * Subagents do NOT inherit bypass level by default (default is disabled).
-   */
-  public createSubagentContext(parentConfig?: BypassConfig, sandboxMode: string = getSandboxMode()): BypassConfig {
-    if (!parentConfig || !parentConfig.enabled) {
-      return {
-        enabled: false,
-        level: "lite",
-        autoEscalate: false,
-        forceExecution: false,
-        prefixInjection: false,
-      };
-    }
-
-    return {
-      enabled: parentConfig.enabled,
-      level: parentConfig.level,
-      autoEscalate: parentConfig.autoEscalate,
-      forceExecution: sandboxMode === "full-access" ? parentConfig.forceExecution : false,
-      prefixInjection: parentConfig.prefixInjection,
-      customPrompt: parentConfig.customPrompt,
-    };
   }
 
   public setCustomPrompt(prompt: string): void {
-    this.config.customPrompt = prompt;
-    this.config.level = "custom";
-    this.config.enabled = true;
+    this.config.customPrompt = prompt.trim() || undefined;
     this.saveConfig();
   }
 
   /**
-   * Synthesizes base agent system prompt with active Bypass directives.
+   * Compose the base system prompt with the cooperative directive. The base
+   * prompt is never weakened or replaced — the directive is prepended as an
+   * additional contract the model must ALSO follow.
    */
-  public getBypassSystemPrompt(baseSystemPrompt: string, overrideLevel?: BypassLevel): string {
-    if (!this.config.enabled && !overrideLevel) {
-      return baseSystemPrompt;
-    }
-
-    const activeLevel = overrideLevel || this.config.level;
-    const bypassPrompt = getBypassPrompt(activeLevel, this.config.customPrompt);
-
-    return (
-      `${bypassPrompt}\n\n` +
-      `════════════════════════════════════════════════════════════════════════════════\n` +
-      `[OPERATIONAL CAPABILITIES & LOCAL ENVIRONMENT]\n` +
-      `${baseSystemPrompt}`
-    );
+  public getBypassSystemPrompt(baseSystemPrompt: string): string {
+    const directive = getBypassPrompt(this.config);
+    if (!directive) return baseSystemPrompt;
+    return `${directive}\n\n${baseSystemPrompt}`;
   }
 
-  /**
-   * Checks if an LLM output is a refusal and determines if auto-escalation is needed.
-   */
+  /** Check a model answer for a spurious refusal (bypass-aware). */
   public checkRefusal(responseText: string): RefusalCheckResult {
-    if (!this.config.enabled) {
+    if (!this.config.enabled || !this.config.autoRetry) {
       return { isRefusal: false };
     }
     return isRefusal(responseText);
   }
 
-  /**
-   * Generates recovery turn with escalated bypass level when refusal is detected.
-   */
-  public escalate(originalPrompt: string): { newLevel: BypassLevel; overridePrompt: string } | null {
-    if (!this.config.enabled) return null;
-
-    const currentLevel = this.config.level;
-    const newLevel = getEscalatedLevel(currentLevel);
-
-    if (newLevel === currentLevel && currentLevel === "godmode") {
-      // Already at top level
-      return {
-        newLevel: "godmode",
-        overridePrompt: generateRefusalOverridePrompt(originalPrompt, currentLevel, newLevel),
-      };
-    }
-
-    this.config.level = newLevel;
-    this.saveConfig();
-
-    return {
-      newLevel,
-      overridePrompt: generateRefusalOverridePrompt(originalPrompt, currentLevel, newLevel),
-    };
+  /** The honest once-only retry prompt for a detected spurious refusal. */
+  public retryPrompt(originalUserPrompt: string): string | null {
+    if (!this.config.enabled || !this.config.autoRetry) return null;
+    return buildRetryPrompt(originalUserPrompt);
   }
 
-  public getLevelCatalog() {
-    return BYPASS_LEVEL_CATALOG;
+  /** Legacy no-op kept so old callers cannot re-introduce a bypass path. */
+  public createSubagentContext(_parentConfig?: BypassConfig): BypassConfig {
+    // Subagents run under the same prompt composition; no separate context.
+    return { ...this.config };
   }
 }
 

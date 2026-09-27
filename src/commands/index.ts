@@ -83,6 +83,11 @@ export interface Command {
   aliases: string[];
   description: string;
   usage: string;
+  /**
+   * Selectable subcommands for namespace commands. ONE source that drives
+   * `/help <cmd>` output and the subcommand picker — never a second list.
+   */
+  subcommands?: Array<{ name: string; usage: string; description: string }>;
   handler: (args: string[], ctx: CommandContext) => Promise<void>;
 }
 

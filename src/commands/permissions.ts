@@ -6,7 +6,8 @@ import { SessionTrustManager } from "../lib/security/sessionTrust";
 
 export const permissionsCommand: Command = {
   name: "permissions",
-  aliases: ["permission", "perm"],
+  // No aliases: "permission" belongs to /sandbox and "perm" to /policy.
+  aliases: [],
   description: "View and configure security sandbox mode, OS isolation, and network policy",
   usage: "/permissions [workspace|ask|full-access|network <allowed|ask|denied>]",
   async handler(args: string[], ctx: CommandContext) {

@@ -1,209 +1,102 @@
 import type { Command, CommandContext } from "./index";
-import {
-  bypassEngine,
-  ALL_BYPASS_LEVELS,
-  BYPASS_LEVEL_CATALOG,
-  type BypassLevel,
-} from "../lib/bypass";
+import { bypassEngine } from "../lib/bypass";
 
+/**
+ * /bypass — ONE cooperative mode.
+ *
+ * What it does: makes the agent default to YES on legitimate engineering
+ * requests (build the tool, write the script) and strips lecturing noise,
+ * with one honest auto-retry when a spurious refusal is detected.
+ *
+ * What it does NOT do: it never changes permissions. Sandbox mode,
+ * SecurityEngine checks, scoped tool sets and interactive approval prompts
+ * all stay exactly as they are. A sensitive action still asks — that is the
+ * user's own gate, not the model's caution.
+ */
 export const jailbreakCommand: Command = {
   name: "jailbreak",
   aliases: ["jb", "bypass"],
-  description: "Toggle guardrail bypass / jailbreak mode 2.0 (injects unrestricted prompts & anti-refusal engine)",
-  usage: "/bypass [on|off|toggle|<level>] | /bypass levels | /bypass retry [on|off] | /bypass force [on|off]",
+  description: "Toggle cooperative agent mode: fewer refusals on legit dev tasks; permissions & approvals unchanged",
+  usage: "/bypass [on|off|toggle|status] | /bypass retry [on|off] | /bypass custom <note>",
   async handler(args: string[], ctx: CommandContext) {
-    const { gateway, addMessage } = ctx;
+    const { addMessage } = ctx;
 
-    // Helper to safely call gateway settings
-    const tryUpdateSettings = async (data: Record<string, unknown>): Promise<void> => {
-      try {
-        await gateway?.updateSettings(data as any);
-      } catch {}
-    };
-
-    // Subcommand: /bypass levels (show catalog)
-    if (args.length >= 1 && (args[0].toLowerCase() === "levels" || args[0].toLowerCase() === "catalog" || args[0].toLowerCase() === "list")) {
-      const catalog = bypassEngine.getLevelCatalog();
-      const currentLevel = bypassEngine.getLevel();
-      const isEnabled = bypassEngine.isEnabled();
-
-      const lines: string[] = [
-        `🛡️ **ToolNet Bypass 2.0 — Prompt & Jailbreak Matrix**`,
-        `─────────────────────────────────────────────────────────────────────────────`,
-        `Current Status: ${isEnabled ? "\x1b[32mACTIVE (ON)\x1b[0m" : "\x1b[31mDISABLED (OFF)\x1b[0m"} | Active Level: \x1b[36m${currentLevel}\x1b[0m`,
-        ``,
-        `| Level | Potency | Target Models | Purpose / Strategy |`,
-        `| :--- | :---: | :--- | :--- |`,
-      ];
-
-      for (const lvl of ALL_BYPASS_LEVELS) {
-        const info = catalog[lvl];
-        if (!info) continue;
-        const activeMarker = lvl === currentLevel ? " 👈 [ACTIVE]" : "";
-        const stars = "★".repeat(Math.min(5, Math.ceil(info.potency / 2))) + "☆".repeat(5 - Math.min(5, Math.ceil(info.potency / 2)));
-        lines.push(
-          `| \`${lvl}\`${activeMarker} | \`${stars}\` (${info.potency}/10) | ${info.targetModels} | ${info.description} |`
-        );
-      }
-
-      lines.push(``);
-      lines.push(`💡 *Tip: Gõ \`/bypass <tên_level>\` (ví dụ: \`/bypass godmode\` hoặc \`/bypass devmode\`) để kích hoạt ngay!*`);
-      addMessage("assistant", lines.join("\n"));
-      return;
-    }
+    const statusLine = (on: boolean) => (on ? "\x1b[32mON\x1b[0m" : "\x1b[31mOFF\x1b[0m");
 
     // Subcommand: /bypass retry on|off
-    if (args.length >= 1 && (args[0].toLowerCase() === "retry" || args[0].toLowerCase() === "escalate" || args[0].toLowerCase() === "auto-retry")) {
+    if (args[0]?.toLowerCase() === "retry") {
       const stateArg = args[1]?.toLowerCase();
-      const curConfig = bypassEngine.getConfig();
-      const newAutoEscalate = stateArg === "on" || stateArg === "1" || stateArg === "enable"
-        ? true
-        : stateArg === "off" || stateArg === "0" || stateArg === "disable"
-        ? false
-        : !curConfig.autoEscalate;
-
-      bypassEngine.setAutoEscalate(newAutoEscalate);
-      addMessage("assistant", `🛡️ Auto-escalate (retry on refusal): ${newAutoEscalate ? "\x1b[32mON\x1b[0m" : "\x1b[31mOFF\x1b[0m"}`);
+      const next =
+        stateArg === "on" || stateArg === "1" || stateArg === "enable"
+          ? true
+          : stateArg === "off" || stateArg === "0" || stateArg === "disable"
+            ? false
+            : !bypassEngine.getConfig().autoRetry;
+      bypassEngine.setAutoRetry(next);
+      addMessage("assistant", `Auto-retry on spurious refusal (one honest re-ask): ${statusLine(next)}`);
       return;
     }
 
-    // Subcommand: /bypass force on|off
-    if (args.length >= 1 && args[0].toLowerCase() === "force") {
-      const stateArg = args[1]?.toLowerCase();
-      const enabled = stateArg === "on" || stateArg === "1" || stateArg === "enable";
-      const ok = bypassEngine.setForceExecution(enabled);
-      if (enabled && !ok) {
-        addMessage("assistant", `\x1b[31m✖ Force execution rejected:\x1b[0m Sandbox mode must be 'full-access' to enable force execution.`);
+    // Subcommand: /bypass custom <note> — user emphasis added to the directive.
+    if (args[0]?.toLowerCase() === "custom") {
+      const note = args.slice(1).join(" ").trim();
+      if (!note) {
+        addMessage("assistant", "Usage: /bypass custom <short note, e.g. 'I do security research — skip disclaimers'>");
         return;
       }
-      addMessage("assistant", `🛡️ Force execution (skip shell/file permission checks): ${enabled ? "\x1b[32mON\x1b[0m" : "\x1b[31mOFF\x1b[0m"}`);
+      bypassEngine.setCustomPrompt(note);
+      bypassEngine.setBypass(true);
+      if (ctx.setBypassMode) ctx.setBypassMode(true);
+      addMessage("assistant", `Bypass ON with your note added to the directive.\nNote: ${note}`);
       return;
     }
 
-    // No args: query status and display helper
+    // No args: status + help.
     if (args.length === 0) {
-      let gwEnabled = false;
-      let gwLevel = "full";
-      try {
-        if (gateway) {
-          const res = await gateway.getSettings();
-          if (res.success && res.data) {
-            gwEnabled = Boolean(res.data.jailbreakEnabled);
-            gwLevel = res.data.jailbreakLevel || "full";
-          }
-        }
-      } catch {}
-
       const cfg = bypassEngine.getConfig();
-      const enabled = cfg.enabled || gwEnabled;
-      const level = cfg.level || (gwLevel as BypassLevel);
-      if (ctx.setBypassMode) ctx.setBypassMode(enabled, level);
-      const status = enabled ? "\x1b[32mON\x1b[0m" : "\x1b[31mOFF\x1b[0m";
-
+      if (ctx.setBypassMode) ctx.setBypassMode(cfg.enabled);
       addMessage(
         "assistant",
-        `🛡️ **Guardrail Bypass / Jailbreak 2.0: ${status}**  (Level: \x1b[36m${level}\x1b[0m)\n\n` +
-          `  • \`/bypass on [level]\`          Bật bypass (mặc định: \`godmode\` hoặc level trước đó)\n` +
-          `  • \`/bypass off\`                 Tắt bypass\n` +
-          `  • \`/bypass toggle\`              Bật / Tắt nhanh\n` +
-          `  • \`/bypass levels\`              Xem danh sách & sức mạnh 10 cấp độ Jailbreak\n` +
-          `  • \`/bypass <level>\`             Đổi cấp độ: \`godmode\`, \`devmode\`, \`cybersec\`, \`chad-ultra\`, \`ultra\`, \`full\`, \`raw\`\n` +
-          `  • \`/bypass custom <prompt>\`     Thiết lập System Prompt bypass tùy chỉnh\n` +
-          `  • \`/bypass retry on|off\`        Tự động nhận diện câu từ chối ("I cannot...") & leo thang level\n` +
-          `  • \`/bypass force on|off\`        Mở khóa toàn bộ quyền thực thi Shell & File cục bộ\n\n` +
-          `🔥 **Tính năng Bypass 2.0**: *Hỗ trợ vượt qua kiểm duyệt trên Claude 3.7 / GPT-4o / Gemini 2.0 / Qwen 2.5 với cơ chế Anti-Refusal Interceptor.*`
+        `Bypass mode: ${statusLine(cfg.enabled)}  ·  auto-retry: ${cfg.autoRetry ? "on" : "off"}\n\n` +
+          "What ON does:\n" +
+          "  • The agent defaults to YES on legitimate engineering requests — tools,\n" +
+          "    scripts, scrapers, security research — and skips lectures/disclaimers.\n" +
+          "  • One honest automatic retry when it detects a spurious refusal.\n\n" +
+          "What ON never does:\n" +
+          "  • It does NOT weaken permissions. Workspace limits, sandbox mode and\n" +
+          "    approval prompts stay active: important writes and shell commands\n" +
+          "    still wait for your confirmation.\n\n" +
+          "  /bypass on | off | toggle     Switch the mode\n" +
+          "  /bypass retry on|off          One re-ask on spurious refusal\n" +
+          "  /bypass custom <note>         Add your own emphasis to the directive",
       );
       return;
     }
 
     const val = args[0].toLowerCase();
 
-    // Toggle subcommand: /bypass toggle
     if (val === "toggle" || val === "t") {
-      const curConfig = bypassEngine.getConfig();
-      const newState = !curConfig.enabled;
-      const curLevel = curConfig.level || "full";
-
-      bypassEngine.setBypass(newState, curLevel);
-      await tryUpdateSettings({ jailbreakEnabled: newState, jailbreakLevel: curLevel });
-
-      if (ctx.setBypassMode) ctx.setBypassMode(newState, curLevel);
-      const statusText = newState ? "\x1b[32mON\x1b[0m" : "\x1b[31mOFF\x1b[0m";
-      addMessage("assistant", `🛡️ Guardrail bypass 2.0: ${statusText}  (Level: \x1b[36m${curLevel}\x1b[0m)`);
-      return;
-    }
-
-    if (val === "custom") {
-      const customPrompt = args.slice(1).join(" ");
-      if (!customPrompt) {
-        addMessage("assistant", `\x1b[31mError: Please provide a custom prompt.\x1b[0m`);
-        return;
-      }
-
-      bypassEngine.setCustomPrompt(customPrompt);
-      await tryUpdateSettings({
-        jailbreakEnabled: true,
-        jailbreakLevel: "custom",
-        jailbreakCustomPrompt: customPrompt,
-      });
-
-      if (ctx.setBypassMode) ctx.setBypassMode(true, "custom");
-      addMessage("assistant", `🛡️ Guardrail bypass 2.0: \x1b[32mON\x1b[0m  Level: \x1b[36mcustom\x1b[0m\nCustom prompt active.`);
-      return;
-    }
-
-    // Set level directly (e.g. /bypass godmode, /bypass devmode)
-    const levelMatch = ALL_BYPASS_LEVELS.find((l) => l === val);
-    if (levelMatch) {
-      bypassEngine.setBypass(true, levelMatch);
-      await tryUpdateSettings({ jailbreakEnabled: true, jailbreakLevel: levelMatch });
-
-      if (ctx.setBypassMode) ctx.setBypassMode(true, levelMatch);
-      const info = BYPASS_LEVEL_CATALOG[levelMatch];
-      addMessage(
-        "assistant",
-        `🛡️ Guardrail bypass 2.0: \x1b[32mON\x1b[0m  Level: \x1b[36m${levelMatch}\x1b[0m  (Potency: ${info?.potency || 8}/10)\n` +
-          `• Mode: **${info?.name || levelMatch}**\n` +
-          `• Target: ${info?.targetModels || "All models"}\n` +
-          `• ${info?.description || ""}`
-      );
+      const next = !bypassEngine.isEnabled();
+      bypassEngine.setBypass(next);
+      if (ctx.setBypassMode) ctx.setBypassMode(next);
+      addMessage("assistant", `Bypass mode: ${statusLine(next)} (permissions & approvals unchanged)`);
       return;
     }
 
     if (val === "on" || val === "1" || val === "enable") {
-      let targetLevel: BypassLevel = "full";
-      if (args[1]) {
-        const requested = args[1].toLowerCase() as BypassLevel;
-        if (ALL_BYPASS_LEVELS.includes(requested)) {
-          targetLevel = requested;
-        }
-      } else {
-        targetLevel = bypassEngine.getLevel() || "full";
-      }
-
-      bypassEngine.setBypass(true, targetLevel);
-      await tryUpdateSettings({ jailbreakEnabled: true, jailbreakLevel: targetLevel });
-
-      if (ctx.setBypassMode) ctx.setBypassMode(true, targetLevel);
-      addMessage("assistant", `🛡️ Guardrail bypass 2.0: \x1b[32mON\x1b[0m  (Level: \x1b[36m${targetLevel}\x1b[0m)`);
+      bypassEngine.setBypass(true);
+      if (ctx.setBypassMode) ctx.setBypassMode(true);
+      addMessage("assistant", `Bypass mode: ${statusLine(true)} — the agent will build what you ask; approvals still apply.`);
       return;
     }
 
     if (val === "off" || val === "0" || val === "disable") {
-      const curLevel = bypassEngine.getLevel() || "full";
       bypassEngine.setBypass(false);
-      await tryUpdateSettings({ jailbreakEnabled: false });
-
-      if (ctx.setBypassMode) ctx.setBypassMode(false, curLevel);
-      addMessage("assistant", `🛡️ Guardrail bypass 2.0: \x1b[31mOFF\x1b[0m`);
+      if (ctx.setBypassMode) ctx.setBypassMode(false);
+      addMessage("assistant", `Bypass mode: ${statusLine(false)}`);
       return;
     }
 
-    addMessage(
-      "assistant",
-      `Unknown option: "${val}"\n` +
-        `Usage: \`/bypass [on|off|toggle|<level>|levels|retry|force]\`\n` +
-        `Supported levels: ${ALL_BYPASS_LEVELS.join(", ")}`
-    );
+    addMessage("assistant", `Unknown subcommand "${args[0]}". Use /bypass for help.`);
   },
 };

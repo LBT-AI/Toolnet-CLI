@@ -1,6 +1,8 @@
 import { A, T } from "../../term";
 import { stripAnsi, truncate } from "../layout";
 import { SPINNER } from "../state";
+import type { AgentPhase } from "../../lib/reasoning";
+import { describeAgentPhase } from "../sessionStatus";
 
 export interface HeaderState {
   agentMode: string;
@@ -9,6 +11,18 @@ export interface HeaderState {
   isStreaming?: boolean;
   spinnerIdx?: number;
   statusText?: string;
+  /**
+   * Canonical lifecycle phase. When supplied the badge renders from it rather
+   * than inferring "Thinking" from `statusText` — the production path passes
+   * `tuiState.agentPhase`.
+   */
+  agentPhase?: AgentPhase;
+  /**
+   * True when the transient activity line below the transcript owns the live
+   * status. Exactly ONE status indicator is painted at a time, so the header
+   * falls back to a calm neutral dot instead of repeating the same label.
+   */
+  statusDelegated?: boolean;
 }
 
 export function renderHeader(
@@ -28,9 +42,18 @@ export function renderHeader(
     modeTag = A.reset + A.fgYellow + A.bold + " Plan" + A.reset;
   }
 
-  // Right side status badge (Idle / Working / Thinking / Error / Done)
+  // Right side status badge (Idle / Working / Thinking / Error / Done).
+  // While the activity line owns the live state this collapses to a neutral
+  // dot: the header is identity chrome, not a second status bar.
   let statusBadge = A.reset + A.fgCyan + "● Idle" + A.reset;
-  if (state.isStreaming) {
+  const canonical = state.agentPhase ? describeAgentPhase(state.agentPhase) : null;
+  if (state.statusDelegated) {
+    statusBadge = A.reset + A.fgMuted + "●" + A.reset;
+  } else if (canonical && canonical.animated) {
+    const sp = SPINNER[(state.spinnerIdx || 0) % SPINNER.length];
+    statusBadge = A.reset + canonical.color + A.bold + `${sp} ` + A.reset + canonical.color + canonical.label + A.reset;
+  } else if (state.isStreaming) {
+    // Legacy fallback: no canonical phase supplied (isolated callers/tests).
     const sp = SPINNER[(state.spinnerIdx || 0) % SPINNER.length];
     const isThinking = (state.statusText || "").toLowerCase().includes("think");
     const color = isThinking ? A.fgViolet : A.fgAmber;
@@ -54,7 +77,8 @@ export function renderHeader(
   const leftVisibleLen = stripAnsi(leftVisible).length;
   const padding = Math.max(1, cols - 1 - leftVisibleLen - rightLen);
 
-  const headerLine = T.clearLine + leftVisible + " ".repeat(padding) + statusBadge + "\r\n";
+  // A softly lit header strip (navy panel) instead of bare terminal black.
+  const headerLine = T.clearLine + A.bgPanel + leftVisible + " ".repeat(padding) + statusBadge + A.reset + "\r\n";
   const divider = T.clearLine + A.fgBorder + "─".repeat(cols - 1) + A.reset + "\r\n";
 
   return headerLine + divider;

@@ -22,6 +22,7 @@ import {
   type SkillInfo,
 } from "../lib/skillsLoader";
 import { messageQueue } from "../lib/messageQueue";
+import { S } from "../term";
 import { setCurrentSessionId as bindCurrentContextSession } from "../lib/context";
 import { setResponseLanguage } from "../lib/language";
 import { listProviders, getDefaultProviderConfig } from "../providers/registry";
@@ -89,7 +90,11 @@ export function runOutputWindow(
   return { start, end: Math.min(viewer.lines.length, start + size) };
 }
 
-export const SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+/**
+ * Spinner frames come from the glyph set so a terminal without Unicode
+ * braille support degrades to clean ASCII `|/-\\` instead of `?`.
+ */
+export const SPINNER: readonly string[] = S.spinner;
 
 export class TuiState {
   appState: string = "boot";
@@ -439,7 +444,7 @@ export class TuiState {
   }
 
   bypassMode = bypassEngine.isEnabled();
-  bypassLevel = bypassEngine.getLevel();
+  bypassLevel: string = bypassEngine.isEnabled() ? "ON" : "OFF";
 
   /** Provider base URL — null means no provider configured */
   gatewayUrl: string | null = null;
@@ -602,6 +607,14 @@ export class TuiState {
   /** Open Run output viewer/pager, or null when closed. */
   runOutputViewer: RunOutputViewerState | null = null;
 
+  /**
+   * Most recent oversized content the transcript reduced to a summary + hint
+   * (a wide table, a long report, a big tool output). Ctrl+O prefers this over
+   * raw tool output, so the hint's promise — “Ctrl+O for details” — opens
+   * exactly the content that was summarized, never a generic last command.
+   */
+  lastDetailViewerTarget: { title: string; lines: string[] } | null = null;
+
   abortController: AbortController | null = null;
 
   /** Active teamwork DAG scheduler abort hook — cancelled by Ctrl+C. */
@@ -616,6 +629,13 @@ export class TuiState {
   toastTimer: ReturnType<typeof setTimeout> | null = null;
 
   cmdSuggestIdx = 0;
+  /**
+   * Composer text for which the user explicitly dismissed the slash picker
+   * (Esc). While the buffer still equals this value the picker stays closed,
+   * so a namespace-level Esc preserves the typed command instead of clearing
+   * it. Any edit changes the buffer and re-arms the picker.
+   */
+  cmdSuggestDismissedFor: string | null = null;
 
   // History
   promptHistory: string[] = [];
@@ -1075,6 +1095,16 @@ export class TuiState {
     this.requestRender();
   }
 
+  /**
+   * Record the full content of something the transcript summarized, so the
+   * hint row can deliver on its Ctrl+O promise. Called by the chat renderer
+   * while it draws; reset at the start of each frame build.
+   */
+  noteDetailLines(title: string, lines: string[]): void {
+    if (lines.length === 0) return;
+    this.lastDetailViewerTarget = { title, lines };
+  }
+
   /** Append streamed lines while the command runs; keeps following the tail. */
   appendRunOutputLines(lines: string[]): void {
     const viewer = this.runOutputViewer;
@@ -1136,8 +1166,20 @@ export class TuiState {
     return runOutputWindow(viewer, pageSize);
   }
 
-  /** Find the most recent tool message with captured stdout, for Ctrl+O. */
+  /**
+   * Ctrl+O target: the most recent summarized detail (table/report/output —
+   * its hint row sent the user here), then the most recent tool message with
+   * captured stdout.
+   */
   latestToolOutputForViewer(): { callId: string; title: string; lines: string[]; running: boolean } | null {
+    if (this.lastDetailViewerTarget) {
+      return {
+        callId: "detail-viewer",
+        title: this.lastDetailViewerTarget.title,
+        lines: this.lastDetailViewerTarget.lines,
+        running: false,
+      };
+    }
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const msg = this.messages[i];
       if (msg.role !== "tool" || typeof msg.content !== "string") continue;

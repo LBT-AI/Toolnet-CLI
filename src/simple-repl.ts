@@ -448,7 +448,7 @@ export async function main() {
   const commandNames = getAllCommands().map(c => c.name);
 
   const getPromptString = () => {
-    const bp = bypassEngine.isEnabled() ? `\x1b[31m[Bypass:${bypassEngine.getLevel()}]\x1b[0m ` : "";
+    const bp = bypassEngine.isEnabled() ? `\x1b[31m[Bypass]\x1b[0m ` : "";
     return bp + color.teal + "▸ " + C.reset;
   };
 
@@ -489,8 +489,8 @@ export async function main() {
           process.exit(0);
         },
         currentModel: () => currentModel,
-        setBypassMode: (enabled: boolean, level?: string) => {
-          bypassEngine.setBypass(enabled, level as any);
+        setBypassMode: (enabled: boolean, _level?: string) => {
+          bypassEngine.setBypass(enabled);
           rl.setPrompt(getPromptString());
         },
       };

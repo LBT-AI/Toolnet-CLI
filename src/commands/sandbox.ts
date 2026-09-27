@@ -19,7 +19,7 @@ const ALL_CAPABILITIES: PermissionCapability[] = [
 
 export const sandboxCommand: Command = {
   name: "sandbox",
-  aliases: ["permission", "permissions", "security"],
+  aliases: ["permission", "security"],
   description: "View or manage sandbox mode, project permissions matrix, and code safety policies",
   usage: "/sandbox [workspace|ask|full-access|grant <cap>|revoke <cap>|init|clear]",
   async handler(args: string[], ctx: CommandContext) {

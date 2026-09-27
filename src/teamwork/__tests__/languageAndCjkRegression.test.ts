@@ -151,6 +151,6 @@ describe("CJK/Unicode terminal width", () => {
     expect(plain).toContain("✦");
     // assistant block is visually distinct from the user block (bg highlight)
     const assistantLine = lines.find((l) => l.includes("当然可以"));
-    expect(assistantLine).toContain("48;2;22;22;26"); // bgTool
+    expect(assistantLine).toContain("48;2;16;24;38"); // bgTool
   });
 });

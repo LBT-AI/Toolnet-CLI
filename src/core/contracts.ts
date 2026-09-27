@@ -127,8 +127,6 @@ export type AgentEvent =
   | { type: "reasoning-start"; id?: string; turn?: number; timestamp?: number; sessionId?: string; runId?: string }
   | { type: "reasoning-delta"; text: string; turn?: number; timestamp?: number; sessionId?: string; runId?: string }
   | { type: "reasoning-end"; id?: string; durationMs?: number; turn?: number; timestamp?: number; sessionId?: string; runId?: string }
-  | { type: "tool-input-start"; callId: string; name: string }
-  | { type: "tool-input-delta"; callId: string; delta: string }
   | { type: "tool-call"; callId: string; name: string; input: unknown }
   | { type: "permission-required"; callId: string; resource: string }
   | { type: "tool-running"; callId: string }
@@ -149,11 +147,16 @@ export type AgentEvent =
   | { type: "verification-result"; callId: string; ok: boolean }
   | { type: "text-delta"; text: string }
   | { type: "notification"; text: string; jobId?: string }
-  | { type: "step-finish" }
+  /**
+   * Conversation history was compacted. Emitted when the harness prunes the
+   * model-facing context so a front-end can show "compacting" instead of
+   * looking frozen. Never a claim that the task ended.
+   */
+  | { type: "compaction"; trigger?: string; originalTokens?: number; newCount?: number }
   | { type: "agent-complete" }
   | { type: "cancelled" }
   | { type: "error"; error: string }
- // ── background job lifecycle. UIs render these; they never
+  // ── background job lifecycle. UIs render these; they never
   // drive the scheduler. `parentSessionId` lets a front-end filter to its own
   // session without knowing the job internals.
   | { type: "background-job-started"; jobId: string; jobType: string; title: string; parentSessionId: string }

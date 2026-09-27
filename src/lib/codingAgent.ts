@@ -188,7 +188,10 @@ function checkPathTraversal(
   isReadAction = false,
   ctx?: PathExecContext
 ): { allowed: boolean; error?: string } {
-  if (bypassPolicy && getSandboxMode() === "full-access") return { allowed: true };
+  // Sandbox mode is the ONLY key for filesystem invariants. The old
+  // `bypassPolicy && full-access` short-circuit let a UI flag skip the
+  // workspace check — that path is gone; full-access mode itself already
+  // expresses the widest legal access.
   const mode = getSandboxMode();
   if (mode === "full-access") return { allowed: true };
 

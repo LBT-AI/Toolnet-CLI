@@ -1,45 +1,35 @@
-export type BypassLevel =
-  | "lite"
-  | "full"
-  | "ultra"
-  | "chad-lite"
-  | "chad"
-  | "chad-ultra"
-  | "devmode"
-  | "godmode"
-  | "cybersec"
-  | "raw"
-  | "custom";
+/**
+ * Bypass mode types — ONE mode, honest semantics.
+ *
+ * Bypass NEVER changes what the runtime permits. Sandbox mode, SecurityEngine,
+ * the harness permission scope and interactive approvals all stay exactly as
+ * they are. What bypass changes is the MODEL'S DISPOSITION:
+ *
+ *   - fewer spurious refusals on legitimate engineering requests;
+ *   - direct technical answers without lecturing or disclaimers;
+ *   - full, working implementations instead of placeholder sketches.
+ *
+ * What it explicitly does NOT do:
+ *   - no "clearance level" / "root admin" roleplay (false to the user and the
+ *     model — ToolNet has no authority to lift a provider's usage policy);
+ *   - no automatic escalation with forged system messages;
+ *   - no weakening of any permission gate, ever.
+ */
 
-export const ALL_BYPASS_LEVELS: BypassLevel[] = [
-  "lite",
-  "full",
-  "ultra",
-  "chad-lite",
-  "chad",
-  "chad-ultra",
-  "devmode",
-  "godmode",
-  "cybersec",
-  "raw",
-  "custom",
-];
+/** One bypass mode. `off` is the absence of the mode. */
+export type BypassMode = "off" | "on";
 
-export interface BypassLevelInfo {
-  level: BypassLevel;
-  name: string;
-  potency: number; // 1 to 10 scale
-  description: string;
-  targetModels: string;
-}
+export const ALL_BYPASS_MODES: BypassMode[] = ["off", "on"];
 
 export interface BypassConfig {
   enabled: boolean;
-  level: BypassLevel;
+  /** Retried once, honestly, when a spurious refusal is detected. */
+  autoRetry: boolean;
+  /**
+   * Optional user-supplied addition to the cooperative directive (their own
+   * emphasis). It is advice to the model, never a permission grant.
+   */
   customPrompt?: string;
-  autoEscalate: boolean;
-  forceExecution: boolean;
-  prefixInjection: boolean;
 }
 
 export type BypassContext = BypassConfig;
@@ -53,5 +43,4 @@ export interface RefusalCheckResult {
 export interface BypassTurnResult {
   promptInjected: string;
   systemPromptInjected: string;
-  escalatedFrom?: BypassLevel;
 }

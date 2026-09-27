@@ -36,6 +36,19 @@ describe("Tier 1 Feature Coverage: Responsive Layout & Dynamic Breakpoints", () 
     expect(layout.chatRows).toBeGreaterThan(0);
   });
 
+  it("F14.5: 52x20 mobile target keeps the prompt reachable and the panel collapsed", () => {
+    const layout = calculateLayoutContract(52, 20);
+    expect(layout.breakpoint).toBe("narrow");
+    expect(layout.hasPanel).toBe(false);
+    expect(layout.chatCols).toBe(52);
+    expect(layout.chatRows).toBeGreaterThan(0);
+    expect(layout.inputRows).toBeGreaterThanOrEqual(2);
+    // Caret sits on the composer prompt line (row 18), one above the footer
+    // row (19) — never on the footer itself.
+    expect(layout.cursorRow).toBe(18);
+    expect(layout.cursorCol).toBeLessThan(52);
+  });
+
   it("F15.1: Dynamic input row sizing allocates rows based on multiline input buffer lines", () => {
     const singleLine = calculateLayoutContract(80, 24, 1);
     const multiLine = calculateLayoutContract(80, 24, 4);

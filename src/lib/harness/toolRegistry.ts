@@ -18,6 +18,7 @@ import type { ToolDefinition as ProviderToolDefinition } from "../../providers/t
 import type { ToolExecutionContext } from "../security/types";
 import type { PostconditionResult } from "../toolVerification";
 import { taskToolDefinition } from "../../core/agent/agents/taskToolDefinition";
+import { PLAN_WRITE_TOOL } from "../../core/agent/agents/planWriteTool";
 import { teamworkToolDefinition } from "../../core/teamwork/tool";
 
 /** Risk tier — drives SecurityEngine policy and UI coloring. */
@@ -731,6 +732,11 @@ Alias for shell. Use for tests, builds, typechecks, linting and project inspecti
  // canonical teamwork DAG submission. The tool only submits a
   // plan; execution stays in the shared scheduler.
   teamworkToolDefinition,
+
+ // canonical Plan-mode mutation: the ONLY write a Plan turn can make,
+  // pinned to <workspaceRoot>/.toolnet/plans/<session-id>.md. Registered like
+  // every other tool so it flows permission → execute → verify unchanged.
+  PLAN_WRITE_TOOL,
 ];
 
 // ── Dynamic registrations (: plugins + MCP) ──────────────────────────

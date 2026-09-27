@@ -21,6 +21,139 @@ export function setNoColor(val: boolean | null): void {
   noColorOverride = val;
 }
 
+const rgb = (r: number, g: number, b: number) => CSI + `38;2;${r};${g};${b}m`;
+const bgRgb = (r: number, g: number, b: number) => CSI + `48;2;${r};${g};${b}m`;
+
+// ─── Glyph capability ───────────────────────────────────────────────────────
+// A terminal that cannot render Unicode box-drawing / wide glyphs does not
+// print a friendly placeholder: it prints `?` (or drops the cell entirely),
+// which is the source of the `??` / `????` artifacts next to borders and
+// tables. Capability is therefore decided ONCE, from the environment, and every
+// glyph is selected through `S` (or transliterated by `transliterateGlyphs`)
+// instead of being hardcoded at the call site.
+let unicodeOverride: boolean | null = null;
+
+/**
+ * Whether the current terminal can render Unicode box-drawing and symbols.
+ *
+ * Defaults to true (modern terminals are UTF-8), but any explicit signal — a
+ * non-UTF-8 locale, a dumb terminal, or the `TOOLNET_ASCII`/`TOOLNET_UNICODE`
+ * overrides — switches deterministically to the ASCII glyph set.
+ */
+export function isUnicodeCapable(): boolean {
+  if (unicodeOverride !== null) return unicodeOverride;
+  const env = typeof process !== "undefined" ? process.env : undefined;
+  if (!env) return true;
+  const ascii = (env.TOOLNET_ASCII || "").toLowerCase();
+  if (ascii === "1" || ascii === "true" || ascii === "yes") return false;
+  const unicode = (env.TOOLNET_UNICODE || "").toLowerCase();
+  if (unicode === "1" || unicode === "true" || unicode === "yes") return true;
+  if (unicode === "0" || unicode === "false" || unicode === "no") return false;
+  if ((env.TERM || "").toLowerCase() === "dumb") return false;
+  const locale = env.LC_ALL || env.LC_CTYPE || env.LANG || "";
+  if (locale && !/utf-?8/i.test(locale)) return false;
+  return true;
+}
+
+/** Test/forced override for glyph capability; `null` restores env detection. */
+export function setUnicodeCapable(value: boolean | null): void {
+  unicodeOverride = value;
+}
+
+export interface GlyphSet {
+  bullet: string;
+  check: string;
+  cross: string;
+  dot: string;
+  square: string;
+  arrowUp: string;
+  arrowDown: string;
+  pageUp: string;
+  pageDown: string;
+  ellipsis: string;
+  hrule: string;
+  caretBar: string;
+  thought: string;
+  spinner: readonly string[];
+  box: {
+    topLeft: string;
+    topRight: string;
+    bottomLeft: string;
+    bottomRight: string;
+    horizontal: string;
+    vertical: string;
+  };
+}
+
+/**
+ * The one symbol bag. Unicode is the default; every entry has an ASCII twin so
+ * a terminal without glyph support degrades to clean ASCII rather than `?`.
+ */
+const UNICODE_GLYPHS: GlyphSet = {
+  bullet: "•",
+  check: "✓",
+  cross: "✗",
+  dot: "●",
+  square: "■",
+  arrowUp: "↑",
+  arrowDown: "↓",
+  pageUp: "⇞",
+  pageDown: "⇟",
+  ellipsis: "…",
+  hrule: "─",
+  caretBar: "▊",
+  thought: "💭",
+  spinner: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+  box: {
+    topLeft: "╭",
+    topRight: "╮",
+    bottomLeft: "╰",
+    bottomRight: "╯",
+    horizontal: "─",
+    vertical: "│",
+  },
+};
+
+const ASCII_GLYPHS: GlyphSet = {
+  bullet: "-",
+  check: "v",
+  cross: "x",
+  dot: "*",
+  square: "#",
+  arrowUp: "^",
+  arrowDown: "v",
+  pageUp: "PgUp",
+  pageDown: "PgDn",
+  ellipsis: "...",
+  hrule: "-",
+  caretBar: "|",
+  thought: "*",
+  spinner: ["|", "/", "-", "\\"],
+  box: {
+    topLeft: "+",
+    topRight: "+",
+    bottomLeft: "+",
+    bottomRight: "+",
+    horizontal: "-",
+    vertical: "|",
+  },
+};
+
+export const S: GlyphSet = new Proxy(UNICODE_GLYPHS, {
+  get(_target, prop: keyof GlyphSet) {
+    const set = isUnicodeCapable() ? UNICODE_GLYPHS : ASCII_GLYPHS;
+    return set[prop];
+  },
+});
+
+/**
+ * Surface + text + semantic palette.
+ *
+ * Design intent: a dark terminal should still feel LIT. No pure black, no
+ * mud-gray text. Backgrounds are navy/charcoal, text is high-contrast ivory,
+ * and every semantic role has one obvious color. Legacy token names are kept
+ * (renderers depend on them) but re-pointed at the brighter values.
+ */
 const RAW_A = {
   reset:     CSI + "0m",
   bold:      CSI + "1m",
@@ -31,30 +164,56 @@ const RAW_A = {
   italicOff: CSI + "23m",
 
   bg:        "",
-  bgSurface: CSI + "48;2;15;15;15m",
-  bgOverlay: CSI + "48;2;30;34;44m",
-  bgStatus:  CSI + "48;2;20;20;25m",
-  bgBadge:   CSI + "48;2;35;35;45m",
-  bgTool:    CSI + "48;2;22;22;26m",
-  fgText:    CSI + "38;2;226;232;240m",
-  fgSubtext: CSI + "38;2;148;163;184m",
-  fgMuted:   CSI + "38;2;100;116;139m",
-  fgBorder:  CSI + "38;2;51;65;85m",
-  fgCyan:    CSI + "38;2;56;189;248m",
-  fgGreen:   CSI + "38;2;74;222;128m",
-  fgYellow:  CSI + "38;2;251;191;36m",
-  fgAmber:   CSI + "38;2;251;191;36m",
-  fgRed:     CSI + "38;2;248;113;113m",
-  fgBlue:    CSI + "38;2;0;255;255m",
-  fgViolet:  CSI + "38;2;167;139;250m",
-  fgMauve:   CSI + "38;2;167;139;250m",
-  fgPeach:   CSI + "38;2;251;146;60m",
-  fgOrange:  CSI + "38;2;251;146;60m",
-  fgMagenta: CSI + "38;2;167;139;250m",
+  // Surfaces — navy/charcoal, never absolute black.
+  bgSurface: bgRgb(11, 18, 32),    // #0B1220 app background
+  bgPanel:   bgRgb(17, 26, 43),    // #111A2B panel
+  bgOverlay: bgRgb(22, 32, 51),    // #162033 elevated overlay
+  bgElevated:bgRgb(26, 39, 64),    // #1A2740 elevated surface
+  bgStatus:  bgRgb(17, 26, 43),    // #111A2B status strip
+  bgBadge:   bgRgb(26, 39, 64),    // #1A2740 badge chip
+  bgTool:    bgRgb(16, 24, 38),    // #101826 assistant/tool block
+  bgSelected:bgRgb(29, 49, 82),    // #1D3152 selected row
+  bgSuggest: bgRgb(17, 26, 43),    // #111A2B suggestion palette
   bgHeader:  "",
   bgInput:   "",
-  bgSuggest: CSI + "48;2;20;20;20m",
-  bgRed:     CSI + "48;2;248;113;113m",
+  bgRed:     bgRgb(255, 107, 107),
+
+  // Foreground / text hierarchy.
+  fgText:    rgb(234, 242, 255),   // #EAF2FF primary text
+  fgPrimary: rgb(234, 242, 255),
+  fgSubtext: rgb(183, 196, 214),   // #B7C4D6 secondary text
+  fgSecondary:rgb(183, 196, 214),
+  fgMuted:   rgb(127, 140, 163),   // #7F8CA3 muted text
+  fgBorder:  rgb(34, 49, 77),      // #22314D border
+  borderStrong: rgb(46, 66, 102),  // #2E4266 stronger divider
+
+  // Metadata tones — code, paths and identifiers are NEUTRAL COOL, never a
+  // warm accent. Peach stays reserved for write/edit action semantics.
+  fgCode:    rgb(159, 182, 217),   // #9FB6D9 inline code / path metadata
+  bgCode:    bgRgb(22, 35, 58),    // #16233A very subtle code backdrop
+  fgHeadingPrimary: rgb(89, 208, 255),   // #59D0FF primary section heading
+  fgHeadingSecondary: rgb(183, 196, 214), // #B7C4D6 secondary heading
+
+  // Accents.
+  fgCyan:    rgb(89, 208, 255),    // #59D0FF cyan accent
+  fgAccent:  rgb(77, 163, 255),    // #4DA3FF primary accent
+  fgBlue:    rgb(77, 163, 255),    // #4DA3FF read / info accent
+  fgViolet:  rgb(167, 139, 250),   // #A78BFA purple accent
+  fgMauve:   rgb(167, 139, 250),
+  fgMagenta: rgb(167, 139, 250),
+  fgPeach:   rgb(255, 159, 90),    // #FF9F5A write/edit accent
+  fgOrange:  rgb(255, 159, 90),
+  fgYellow:  rgb(245, 185, 66),    // #F5B942 warning
+  fgAmber:   rgb(245, 185, 66),
+  caret:     rgb(102, 179, 255),   // #66B3FF input focus caret
+
+  // Semantic.
+  fgGreen:   rgb(46, 204, 113),    // #2ECC71 success
+  fgSuccess: rgb(46, 204, 113),
+  fgWarning: rgb(245, 185, 66),    // #F5B942 warning
+  fgInfo:    rgb(91, 192, 255),    // #5BC0FF info
+  fgRed:     rgb(255, 107, 107),   // #FF6B6B error
+  fgError:   rgb(255, 107, 107),
 };
 
 export const A: typeof RAW_A = new Proxy(RAW_A, {
@@ -66,29 +225,35 @@ export const A: typeof RAW_A = new Proxy(RAW_A, {
   }
 });
 
+/** Semantic role → color. One place that decides "what color is a read?". */
 const RAW_THEME = {
-  brand:     CSI + "38;2;56;189;248m",   // Cyan #38BDF8
-  read:      CSI + "38;2;96;165;250m",   // Blue #60A5FA
-  search:    CSI + "38;2;96;165;250m",   // Blue #60A5FA
-  lsp:       CSI + "38;2;96;165;250m",   // Blue #60A5FA
-  thinking:  CSI + "38;2;167;139;250m",  // Violet #A78BFA
-  reasoning: CSI + "38;2;167;139;250m",  // Violet #A78BFA
-  subagent:  CSI + "38;2;167;139;250m",  // Violet #A78BFA
-  running:   CSI + "38;2;251;191;36m",   // Amber #FBBF24
-  test:      CSI + "38;2;251;191;36m",   // Amber #FBBF24
-  build:     CSI + "38;2;251;191;36m",   // Amber #FBBF24
-  install:   CSI + "38;2;251;191;36m",   // Amber #FBBF24
-  mutation:  CSI + "38;2;251;146;60m",   // Peach #FB923C
-  write:     CSI + "38;2;251;146;60m",   // Peach #FB923C
-  edit:      CSI + "38;2;251;146;60m",   // Peach #FB923C
-  patch:     CSI + "38;2;251;146;60m",   // Peach #FB923C
-  success:   CSI + "38;2;74;222;128m",   // Green #4ADE80
-  error:     CSI + "38;2;248;113;113m",  // Red #F87171
-  cancelled: CSI + "38;2;100;116;139m",  // Muted Gray #64748B
-  text:      CSI + "38;2;226;232;240m",  // Text #E2E8F0
-  subtext:   CSI + "38;2;148;163;184m",  // Subtext #94A3B8
-  muted:     CSI + "38;2;100;116;139m",  // Muted #64748B
-  border:    CSI + "38;2;51;65;85m",     // Border #334155
+  brand:     rgb(89, 208, 255),    // #59D0FF cyan — brand / navigation
+  read:      rgb(77, 163, 255),    // #4DA3FF blue — read
+  search:    rgb(77, 163, 255),    // #4DA3FF blue — search
+  lsp:       rgb(77, 163, 255),    // #4DA3FF blue — lsp
+  thinking:  rgb(167, 139, 250),   // #A78BFA violet — reasoning
+  reasoning: rgb(167, 139, 250),
+  subagent:  rgb(167, 139, 250),
+  running:   rgb(245, 185, 66),    // #F5B942 amber — running/test/build
+  test:      rgb(245, 185, 66),
+  build:     rgb(245, 185, 66),
+  install:   rgb(245, 185, 66),
+  mutation:  rgb(255, 159, 90),    // #FF9F5A peach — write/edit
+  write:     rgb(255, 159, 90),
+  edit:      rgb(255, 159, 90),
+  patch:     rgb(255, 159, 90),
+  success:   rgb(46, 204, 113),    // #2ECC71
+  error:     rgb(255, 107, 107),   // #FF6B6B
+  warning:   rgb(245, 185, 66),    // #F5B942
+  info:      rgb(91, 192, 255),    // #5BC0FF
+  accent:    rgb(77, 163, 255),    // #4DA3FF
+  caret:     rgb(102, 179, 255),   // #66B3FF
+  cancelled: rgb(127, 140, 163),   // #7F8CA3
+  text:      rgb(234, 242, 255),   // #EAF2FF
+  subtext:   rgb(183, 196, 214),   // #B7C4D6
+  muted:     rgb(127, 140, 163),   // #7F8CA3
+  border:    rgb(34, 49, 77),      // #22314D
+  code:      rgb(159, 182, 217),   // #9FB6D9 inline code / path metadata
 };
 
 export const theme: typeof RAW_THEME = new Proxy(RAW_THEME, {

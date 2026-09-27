@@ -28,6 +28,8 @@ export type HarnessEventType =
   | "agent:notification"
  /** a pending steer/queue input was promoted into the conversation at a safe boundary. */
   | "agent:steer_promoted"
+ /** bypass mode detected a spurious refusal and sent ONE honest retry. */
+  | "agent:refusal_retry"
   | "tool:queued"
   | "tool:approval_required"
   | "tool:start"

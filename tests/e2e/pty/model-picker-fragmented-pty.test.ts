@@ -54,7 +54,9 @@ function runDriver(script: Array<[number, string]>): { output: string; exitCode:
 
 /** The model id currently highlighted by the picker, from the raw SGR stream. */
 function lastHighlighted(output: string): string | null {
-  const re = /\x1b\[1m● \x1b\[0m\x1b\[48;2;30;34;44m\x1b\[38;2;226;232;240m\x1b\[1m([^\x1b]*)/g;
+  // Matches the selected-row SGR: bold marker + bgOverlay + fgText + bold.
+  // Values track the semantic theme (src/term.ts).
+  const re = /\x1b\[1m● \x1b\[0m\x1b\[48;2;22;32;51m\x1b\[38;2;234;242;255m\x1b\[1m([^\x1b]*)/g;
   let m: RegExpExecArray | null;
   let last: string | null = null;
   while ((m = re.exec(output)) !== null) last = m[1].trim();

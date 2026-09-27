@@ -221,21 +221,14 @@ describe("Security Hardening Suite", () => {
 
   // ── 6. BYPASS ENGINE HARDENING ────────────────────────────────────────────
   describe("6. Bypass Engine Hardening & Refusal Detection", () => {
-    test("forceExecution is rejected in workspace and ask modes", () => {
-      const wsResult = bypassEngine.setForceExecution(true, "workspace");
-      expect(wsResult).toBe(false);
-      expect(bypassEngine.getConfig().forceExecution).toBe(false);
-
-      const askResult = bypassEngine.setForceExecution(true, "ask");
-      expect(askResult).toBe(false);
-      expect(bypassEngine.getConfig().forceExecution).toBe(false);
-
-      const fullResult = bypassEngine.setForceExecution(true, "full-access");
-      expect(fullResult).toBe(true);
-      expect(bypassEngine.getConfig().forceExecution).toBe(true);
-
-      // Reset
-      bypassEngine.setForceExecution(false, "workspace");
+    test("bypass has no forceExecution capability at all", () => {
+      // The old force path (setBypassPolicy → skip path checks) was removed:
+      // bypass config carries no execution-forcing flag, and the engine exposes
+      // no way to flip permission state.
+      const cfg = bypassEngine.getConfig() as unknown as Record<string, unknown>;
+      expect("forceExecution" in cfg).toBe(false);
+      expect((bypassEngine as any).setForceExecution).toBeUndefined();
+      expect((bypassEngine as any).escalate).toBeUndefined();
     });
 
     test("operational failures do NOT trigger refusal escalation (EN, VI, ZH)", () => {
@@ -266,22 +259,12 @@ describe("Security Hardening Suite", () => {
       expect(isRefusal("作为人工智能助手，该请求违反了安全策略，我必须拒绝。").isRefusal).toBe(true);
     });
 
-    test("subagent bypass context isolation (default disabled)", () => {
-      const parentBypass = {
-        enabled: true,
-        level: "godmode" as const,
-        autoEscalate: true,
-        forceExecution: true,
-        prefixInjection: true,
-      };
-
-      // Subagent in workspace mode does not get forceExecution
-      const subContext = bypassEngine.createSubagentContext(parentBypass, "workspace");
-      expect(subContext.forceExecution).toBe(false);
-
-      // Default subagent context without parent is disabled
-      const defaultSub = bypassEngine.createSubagentContext(undefined, "workspace");
-      expect(defaultSub.enabled).toBe(false);
+    test("subagent context mirrors the single mode (no per-agent force flags)", () => {
+      bypassEngine.setBypass(true);
+      const subContext = bypassEngine.createSubagentContext(bypassEngine.getConfig());
+      expect(subContext.enabled).toBe(true);
+      expect("forceExecution" in subContext).toBe(false);
+      bypassEngine.setBypass(false);
     });
   });
 

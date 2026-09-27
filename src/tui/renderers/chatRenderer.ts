@@ -1,4 +1,4 @@
-import { A } from "../../term";
+import { A, S } from "../../term";
 import { wrapText, truncate, visibleWidth } from "../layout";
 import type { Msg } from "../types";
 import { formatToolStart, formatToolEnd } from "../toolActivity";
@@ -10,8 +10,38 @@ import { redactOutputSecrets } from "../../lib/security/outputRedactor";
 import { sanitizeTerminalText } from "../../lib/terminalOutput";
 import { renderReasoningPanel } from "./reasoningPanel";
 import type { ReasoningBlock } from "../../lib/reasoning";
+import {
+  renderInlineMarkdown,
+  stripInFlightMarkers,
+  isHorizontalRule,
+  parseHeading,
+  renderHeading,
+  parseBullet,
+  normalizeBulletMarker,
+  scanMarkdownTables,
+  renderResponsiveTable,
+  tableToLines,
+  type MarkdownTable,
+} from "../../lib/markdown";
 import { tuiState, type ActiveToolActivity } from "../state";
 import { countLines } from "../input/composerDocument";
+
+/**
+ * Generic long-result presentation policy (content-shape based, never
+ * hard-coded to one report).
+ *
+ * When a single message renders beyond `TRANSCRIPT_RESULT_MAX_ROWS` painted
+ * rows, the transcript keeps the FIRST rows plus one compact summary row and
+ * hands the FULL rendered content to the detail viewer (Ctrl+O). Canonical
+ * data in `msg.content`/the session is never touched — this is a VIEW
+ * decision only, applied uniformly to any oversized assistant/tool result:
+ * audits, file lists, test matrices, diagnostics, whatever shape it takes.
+ */
+export const TRANSCRIPT_RESULT_MAX_ROWS = 14;
+
+export function buildResultCompactionSummary(hiddenRows: number, totalRows: number): string {
+  return A.fgMuted + `… ${hiddenRows} more lines · Ctrl+O for details` + A.reset;
+}
 
 /**
  * Transcript view collapse bounds. A submitted user message keeps its FULL
@@ -33,6 +63,27 @@ export function shouldCollapseTranscriptMessage(content: string): boolean {
     countLines(content) >= TRANSCRIPT_COLLAPSE_MIN_LINES ||
     content.length >= TRANSCRIPT_COLLAPSE_MIN_CHARS
   );
+}
+
+/**
+ * Human summary for well-known read-only tools whose raw payload is JSON.
+ * `✓ GetCwd` followed by `{"workspaceRoot":"/root",...}` is debug output; the
+ * same fact as `✓ Workspace /root` is information. Only tools with an obvious,
+ * lossless one-liner are mapped — everything else keeps its real output, and
+ * the raw JSON always remains available in the Run output viewer (Ctrl+O).
+ */
+export function friendlyToolSummary(toolName: string, parsedTool: any): string | null {
+  if (!parsedTool || typeof parsedTool !== "object") return null;
+  const name = toolName.toLowerCase();
+  const payload = (parsedTool.result !== undefined ? parsedTool.result : parsedTool) as any;
+  if (name === "get_cwd" || name === "getcwd") {
+    const root = payload?.workspaceRoot ?? payload?.cwd ?? parsedTool.stdout;
+    return typeof root === "string" && root ? `Workspace ${root}` : null;
+  }
+  if (name === "file_exists" || name === "exists") {
+    if (typeof payload === "boolean") return payload ? "File exists" : "File not found";
+  }
+  return null;
 }
 
 export interface RenderedChatMessages {
@@ -61,8 +112,9 @@ export function renderActiveToolActivity(activity: ActiveToolActivity, cols: num
   const action = activity.actionLabel || actionInfo.actionLabel;
   const target = activity.target || prettyToolTarget(activity.name, activity.args);
 
-  const dot = `${A.fgAmber}●${A.reset}`;
-  const label = `${A.bold}${A.fgAmber}${action}${A.reset}`;
+  // Running = info blue; the completed row turns green/red (tool-format).
+  const dot = `${A.fgInfo}●${A.reset}`;
+  const label = `${A.bold}${A.fgInfo}${action}${A.reset}`;
   const elapsed = `${A.dim}${A.fgMuted}· ${elapsedStr}${A.reset}`;
 
   const lines: string[] = [];
@@ -106,21 +158,21 @@ export function renderToolActivities(activities: ActiveToolActivity[], cols: num
   return rows.slice(-MAX_ACTIVITY_ROWS);
 }
 
+/**
+ * Inline Markdown for one transcript line.
+ *
+ * Delegates to the canonical parser in `lib/markdown`: only a *balanced* marker
+ * pair is styled, so `**bold**`, `***bi***`, `*it*`, `_it_` and `` `code` ``
+ * become styles while globs (`*.ts`), shell (`find . -name "*.ts"`), math
+ * (`2 * 3`) and regexes survive untouched. No character is ever deleted.
+ */
 export function formatInlineMarkdown(text: string, baseColor = A.fgText): string {
-  if (!text) return "";
-  let s = text;
-  // Inline code: `code`
-  s = s.replace(/`([^`]+)`/g, (_m, code) => `${A.fgCyan}${code}${baseColor}`);
-  // Bold italic: ***text***
-  s = s.replace(/\*\*\*([^*]+)\*\*\*/g, (_m, content) => `${A.bold}${A.italic}${content}${A.boldOff}${A.italicOff}`);
-  // Bold: **text** or __text__
-  s = s.replace(/\*\*([^*]+)\*\*/g, (_m, content) => `${A.bold}${content}${A.boldOff}`);
-  s = s.replace(/__([^_]+)__/g, (_m, content) => `${A.bold}${content}${A.boldOff}`);
-  // Italic: *text* (excluding bullet point at start of line: ^\s*\*\s)
-  s = s.replace(/(^|[^\*])\*([^\*\s][^\*\s]*?[^\*\s]|[^\*\s])\*(?!\*)/g, (pfx, content) => {
-    return `${pfx}${A.italic}${content}${A.italicOff}`;
-  });
-  return s;
+  return renderInlineMarkdown(text, baseColor);
+}
+
+/** Render one horizontal-rule marker as a thin divider, never as `***`. */
+export function renderMarkdownDivider(width: number): string {
+  return A.fgBorder + S.hrule.repeat(Math.max(3, width)) + A.reset;
 }
 
 function pushRenderedLines(
@@ -147,10 +199,20 @@ export function renderChatMessagesWithMetadata(
   verbose = false,
 ): RenderedChatMessages {
   const result: RenderedChatMessages = { lines: [], messageIds: [] };
+  // The renderer runs on every frame; recording is refreshed each pass so the
+  // Ctrl+O target always mirrors what the transcript is currently showing.
+  tuiState.lastDetailViewerTarget = null;
 
   for (let mIdx = 0; mIdx < messages.length; mIdx++) {
     const msg = messages[mIdx];
     const isUser = msg.role === "user";
+    // Start index of THIS message's painted segment — the long-result policy
+    // compacts per message, never across message boundaries.
+    const msgStartIdx = result.lines.length;
+    // Full rows of a table this message summarized (its hint borrows them for
+    // the detail viewer); appended to the compaction target so no data is
+    // ever unreachable.
+    let msgTableFullLines: string[] | null = null;
 
     // ── 0. Finalized Reasoning Block ───────────────────────────────────────
     if (msg.role === "reasoning") {
@@ -260,7 +322,11 @@ export function renderChatMessagesWithMetadata(
       outStr = sanitizeTerminalText(redactOutputSecrets(outStr));
 
       if (outStr.trim()) {
-        if (isDiffTool && (outStr.includes("@@") || outStr.includes("+++") || outStr.includes("---"))) {
+        // Known read-only tools answer in one human line instead of raw JSON.
+        const friendly = !verbose && isSuccess ? friendlyToolSummary(toolName, parsedTool) : null;
+        if (friendly !== null) {
+          pushRenderedLines(result, ["    " + A.fgSubtext + truncate(friendly, chatCols - 6) + A.reset], msg);
+        } else if (isDiffTool && (outStr.includes("@@") || outStr.includes("+++") || outStr.includes("---"))) {
           pushRenderedLines(result, renderUnifiedDiffLines(outStr, 25, chatCols - 6), msg);
         } else if (isCancelled) {
           // No output tail dumped for cancelled operations
@@ -356,15 +422,29 @@ export function renderChatMessagesWithMetadata(
       }
     }
 
-    const cleanContent = redactOutputSecrets(msg.content || "") + (isStreamingAssistant ? "▊" : "");
+    // Canonical content stays raw Markdown; the caret is a VIEW-only glyph and
+    // is appended per line so an in-flight trailing marker can be suppressed.
+    const cleanContent = redactOutputSecrets(msg.content || "");
     const rawLines = cleanContent.split("\n");
 
     let inCodeBlock = false;
     let codeLang = "";
     let inThoughtBlock = false;
 
+    // Pre-scan pipe tables (outside fences) so an oversized report renders as a
+    // compact summary + viewer hint instead of a wrapped 8-column grid.
+    const tableSpans = scanMarkdownTables(rawLines);
+
     for (let lIdx = 0; lIdx < rawLines.length; lIdx++) {
       let rawLine = rawLines[lIdx];
+
+      // Streaming safety: the newest line may still be missing its closing
+      // marker. Suppress the partial run for DISPLAY only — `msg.content` and
+      // the session keep the canonical text, and the marker appears the moment
+      // its pair arrives. No `**`/`***` ever flashes in the transcript.
+      if (!inCodeBlock && !inThoughtBlock && isStreamingAssistant && lIdx === rawLines.length - 1) {
+        rawLine = stripInFlightMarkers(rawLine).text + S.caretBar;
+      }
 
       // Code block and syntax formatting
       if (rawLine.trim().startsWith("```")) {
@@ -372,15 +452,66 @@ export function renderChatMessagesWithMetadata(
         const linePrefix = lIdx === 0 ? prefix : prefixIndent;
         if (inCodeBlock) {
           codeLang = rawLine.trim().slice(3).toLowerCase();
-          pushRenderedLines(result, [msgBg + linePrefix + A.fgBorder + "┌─ " + A.fgCyan + (codeLang || "code") + " " + "─".repeat(Math.max(0, wrapWidth - 8 - (codeLang || "code").length)) + A.reset], msg);
+          pushRenderedLines(result, [msgBg + linePrefix + A.fgBorder + S.box.topLeft + S.box.horizontal + " " + A.fgCyan + (codeLang || "code") + " " + S.box.horizontal.repeat(Math.max(0, wrapWidth - 8 - (codeLang || "code").length)) + A.reset], msg);
           continue;
         } else {
-          pushRenderedLines(result, [msgBg + linePrefix + A.fgBorder + "└" + "─".repeat(Math.max(0, wrapWidth - 2)) + A.reset], msg);
+          pushRenderedLines(result, [msgBg + linePrefix + A.fgBorder + S.box.bottomLeft + S.box.horizontal.repeat(Math.max(0, wrapWidth - 2)) + A.reset], msg);
           continue;
         }
       }
 
-      const formattedLine = !inCodeBlock && !inThoughtBlock ? formatInlineMarkdown(rawLine, isUser ? A.fgText : A.fgText) : rawLine;
+      // ── Block-level Markdown (never inside a fence) ──
+      if (!inCodeBlock && !inThoughtBlock) {
+        // Responsive table: aligned grid when it fits, stacked cards when the
+        // terminal is narrow, summary + viewer hint when it is long.
+        const span = tableSpans.get(lIdx);
+        if (span) {
+          const renderedTable = renderResponsiveTable(span.table, wrapWidth);
+          const linePrefix = lIdx === 0 ? prefix : prefixIndent;
+          for (const row of renderedTable.lines) {
+            pushRenderedLines(result, [msgBg + linePrefix + row + A.reset], msg);
+          }
+          if (renderedTable.viewerHint) {
+            // The hint promises “Ctrl+O for details” — hand the pager the
+            // untouched, never-styled source rows so it renders the whole
+            // table (header + every row) with line numbers.
+            msgTableFullLines = tableToLines(span.table);
+            tuiState.noteDetailLines("Table", msgTableFullLines);
+            pushRenderedLines(result, [msgBg + prefixIndent + renderedTable.viewerHint + A.reset], msg);
+          }
+          lIdx = span.end - 1;
+          continue;
+        }
+
+        // Horizontal rule: `***` / `---` / `___` alone on a line render as a
+        // thin divider instead of three raw marker characters.
+        if (isHorizontalRule(rawLine)) {
+          const linePrefix = lIdx === 0 ? prefix : prefixIndent;
+          pushRenderedLines(result, [msgBg + linePrefix + renderMarkdownDivider(wrapWidth - 2) + A.reset], msg);
+          continue;
+        }
+
+        // ATX heading: hierarchy by weight/color, not by repeating `#`.
+        const heading = parseHeading(rawLine);
+        if (heading) {
+          const linePrefix = lIdx === 0 ? prefix : prefixIndent;
+          pushRenderedLines(result, [msgBg + linePrefix + renderHeading(heading.level, heading.text) + A.reset], msg);
+          continue;
+        }
+      }
+
+      let bulletPrefix = "";
+      if (!inCodeBlock && !inThoughtBlock) {
+        const bullet = parseBullet(rawLine);
+        if (bullet) {
+          bulletPrefix = bullet.indent + normalizeBulletMarker(bullet.marker) + " ";
+          rawLine = bullet.text;
+        }
+      }
+
+      const formattedLine = !inCodeBlock && !inThoughtBlock
+        ? bulletPrefix + formatInlineMarkdown(rawLine, A.fgText)
+        : rawLine;
       const wrapped = wrapText(formattedLine, wrapWidth);
 
       for (let wIdx = 0; wIdx < wrapped.length; wIdx++) {
@@ -410,10 +541,11 @@ export function renderChatMessagesWithMetadata(
             }
           } else {
             color = A.fgText;
+            // Low-density code highlighting: keywords only. Recoloring every
+            // literal and string turned code blocks into a color mosaic; the
+            // body stays ivory so the code itself is what you read.
             content = content
-              .replace(/\b(const|let|var|function|class|return|if|else|for|while|import|from|export|async|await|try|catch)\b/g, A.fgBlue + "$1" + A.fgText)
-              .replace(/\b(true|false|null|undefined)\b/g, A.fgPeach + "$1" + A.fgText)
-              .replace(/(["'`])(.*?)(["'`])/g, A.fgGreen + "$1$2$3" + A.fgText);
+              .replace(/\b(const|let|var|function|class|return|if|else|for|while|import|from|export|async|await|try|catch)\b/g, A.fgBlue + "$1" + A.fgText);
           }
           pushRenderedLines(result, [msgBg + linePrefix + A.fgBorder + "│ " + A.reset + msgBg + color + content + A.reset], msg);
           continue;
@@ -431,9 +563,36 @@ export function renderChatMessagesWithMetadata(
       }
     }
     pushRenderedLines(result, [""], msg);
+
+    // Generic long-result policy: if ONE message painted beyond the transcript
+    // budget, keep its head, replace the tail with one summary row, and hand
+    // the full content to the Ctrl+O detail viewer. Skips the streaming draft
+    // (transient) and user messages (collapsed by their own rule above).
+    if (!isStreamingAssistant && !isUser && result.lines.length - msgStartIdx > TRANSCRIPT_RESULT_MAX_ROWS + 1) {
+      const segment = result.lines.splice(msgStartIdx);
+      const ids = result.messageIds.splice(msgStartIdx);
+      const kept = segment.slice(0, TRANSCRIPT_RESULT_MAX_ROWS);
+      // The compaction summary is the hint closest to the user, so its promise
+      // wins: the detail viewer gets the WHOLE rendered message plus the full
+      // source rows of any summarized table — nothing is lost, only relocated.
+      const detailLines = [
+        ...segment.map(stripAnsiSafe),
+        ...(msgTableFullLines ? ["", ...msgTableFullLines] : []),
+      ];
+      tuiState.noteDetailLines(msg.role === "assistant" ? "Response details" : "Output details", detailLines);
+      const hidden = segment.length - TRANSCRIPT_RESULT_MAX_ROWS - 1;
+      result.lines.push(...kept, buildResultCompactionSummary(hidden, segment.length), "");
+      result.messageIds.push(...ids.slice(0, TRANSCRIPT_RESULT_MAX_ROWS), msg.id ?? null, msg.id ?? null);
+    }
   }
 
   return result;
+}
+
+/** stripAnsi re-export guard for the compaction path (keeps imports local). */
+function stripAnsiSafe(line: string): string {
+  // eslint-disable-next-line no-control-regex
+  return line.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
 }
 
 export function renderChatFrame(

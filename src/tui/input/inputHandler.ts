@@ -18,8 +18,24 @@ import { overlayIsActive, handleOverlayKey } from "./overlayInput";
 import { workspaceAccessAnimation } from "../animations/modalAnimation";
 import { getSize } from "../../term";
 import { runOutputViewerPageSize } from "../renderers/runOutputViewerRenderer";
+import { getNamespacePickerItems } from "../mcpPicker";
+import { commandNameOf, isAllowedWhileBusy } from "../../commands/commandMeta";
 
 const inputBufferManager = new MultilineInputBuffer();
+
+/**
+ * One suggestion row in the slash palette. `complete` marks namespace-level
+ * items (MCP subcommands / servers) whose Enter COMPLETES the composer instead
+ * of executing — the final Enter then runs the completed command.
+ */
+export interface SuggestionItem {
+  name: string;
+  desc: string;
+  /** Stable id (used by namespace items, e.g. MCP serverId). */
+  id?: string;
+  complete?: boolean;
+  insert?: string;
+}
 
 /**
  * The draft parked when prompt-history navigation began. Stored as a document
@@ -54,8 +70,12 @@ export function resetInputState(): void {
   tuiState.cursorPos = 0;
 }
 
-export function getSuggestions(input: string) {
+export function getSuggestions(input: string): SuggestionItem[] {
   if (!input.startsWith("/")) return [];
+  // Namespace commands (`/mcp`, …) get their own picker (subcommands, then
+  // arguments) instead of the top-level command list; selection completes.
+  const namespaceItems = getNamespacePickerItems(input);
+  if (namespaceItems) return namespaceItems;
   const search = input.toLowerCase().slice(1);
   const all = getAllCommands();
   if (!search) {
@@ -83,6 +103,18 @@ export function getSuggestions(input: string) {
       .map((c) => ({ name: "/" + c.name, desc: c.description }));
   }
   return [];
+}
+
+/**
+ * Suggestions honoring an explicit Esc dismissal: while the composer still
+ * holds exactly the dismissed text the picker stays closed. Any edit changes
+ * the buffer and re-arms it.
+ */
+export function getActiveSuggestions(input: string): SuggestionItem[] {
+  if (tuiState.cmdSuggestDismissedFor !== null && input === tuiState.cmdSuggestDismissedFor) {
+    return [];
+  }
+  return getSuggestions(input);
 }
 
 /**
@@ -1046,7 +1078,7 @@ function _handleKeyInternal(
   }
 
   // 8. Slash Command Suggestions Palette (Priority handler when palette is OPEN)
-  const suggests = getSuggestions(inputBufferManager.getText());
+  const suggests = getActiveSuggestions(inputBufferManager.getText());
   if (suggests.length > 0) {
     // 8A. Up Arrow / Ctrl+P — navigate up in palette (wrap around)
     if (hex === "1b5b41" || hex === "1b4f41" || hex === "10" || s === "\x10") {
@@ -1091,45 +1123,80 @@ function _handleKeyInternal(
       return;
     }
 
-    // 8E. Tab — autocomplete highlighted command into input without executing
+    // 8E. Tab — autocomplete highlighted item into input without executing.
+    // Namespace items (MCP subcommands/servers) carry an explicit `insert`.
     if (hex === "09") {
       const safeIdx = Math.max(0, Math.min(tuiState.cmdSuggestIdx, suggests.length - 1));
-      const selected = suggests[safeIdx]?.name;
+      const selected = suggests[safeIdx];
       if (selected) {
-        inputBufferManager.setText(selected + " ");
+        inputBufferManager.setText(selected.insert ?? (selected.name + " "));
         tuiState.inputBuffer = inputBufferManager.getText();
         tuiState.cursorPos = inputBufferManager.getCursor();
         tuiState.cmdSuggestIdx = 0;
+        tuiState.cmdSuggestDismissedFor = null;
         renderAll();
       }
       return;
     }
 
-    // 8F. Enter — execute the highlighted command without submitting raw input.
-    // Determinism: if the typed text names a command exactly, THAT command runs
-    // — never a fuzzy suggestion at a stale palette index.
+    // 8F. Enter — namespace items COMPLETE the composer; a top-level command
+    // executes. Determinism: if the typed text names a command exactly, THAT
+    // command runs — never a fuzzy suggestion at a stale palette index.
     if (hex === "0d" || hex === "0a" || s === "\r" || s === "\n") {
       const typed = inputBufferManager.getText().trim();
       const exact = suggests.find((c) => c.name === typed);
-      const selected = exact?.name ?? suggests[Math.max(0, Math.min(tuiState.cmdSuggestIdx, suggests.length - 1))]?.name;
-      if (selected) {
+      const item = exact ?? suggests[Math.max(0, Math.min(tuiState.cmdSuggestIdx, suggests.length - 1))];
+      if (item) {
+        if (item.complete && typeof item.insert === "string") {
+          // Complete only — never execute. The next Enter on the completed
+          // command runs it (e.g. `/mcp` → select `show` → server picker →
+          // `/mcp show toolnet-skills` → Enter).
+          inputBufferManager.setText(item.insert);
+          tuiState.inputBuffer = inputBufferManager.getText();
+          tuiState.cursorPos = inputBufferManager.getCursor();
+          tuiState.cmdSuggestIdx = 0;
+          tuiState.cmdSuggestDismissedFor = null;
+          tuiState.setStatus("");
+          renderAll();
+          return;
+        }
+        // Top-level command selected: respect the canonical busy policy.
+        const selectedName = commandNameOf(item.name);
+        const busy = tuiState.isStreaming || messageQueue.getIsProcessing();
+        if (busy && !isAllowedWhileBusy(selectedName) && selectedName !== "exit" && selectedName !== "quit") {
+          tuiState.setStatus(`/${selectedName} is unavailable while the agent is running`);
+          tuiState.showToast(`⚠️ /${selectedName} not available while busy`, 2500);
+          renderAll();
+          return;
+        }
         inputBufferManager.clear();
         tuiState.inputBuffer = "";
         tuiState.cursorPos = 0;
         tuiState.cmdSuggestIdx = 0;
+        tuiState.cmdSuggestDismissedFor = null;
+        tuiState.pushPromptHistory(item.name);
         tuiState.setStatus("");
         renderAll();
-        sendMessage(selected);
+        sendMessage(item.name);
         return;
       }
     }
 
-    // 8G. Escape — close palette and clear slash input
+    // 8G. Escape — namespace picker: close the popup but PRESERVE the typed
+    // command (so `/mcp` stays editable). Top-level palette keeps its existing
+    // clear-on-Esc behavior.
     if (hex === "1b") {
+      if (suggests.some((c) => c.complete)) {
+        tuiState.cmdSuggestDismissedFor = inputBufferManager.getText();
+        tuiState.cmdSuggestIdx = 0;
+        renderAll();
+        return;
+      }
       inputBufferManager.clear();
       tuiState.inputBuffer = "";
       tuiState.cursorPos = 0;
       tuiState.cmdSuggestIdx = 0;
+      tuiState.cmdSuggestDismissedFor = null;
       tuiState.setStatus("");
       renderAll();
       return;
@@ -1179,10 +1246,14 @@ function _handleKeyInternal(
     return;
   }
 
-  // 11. Tab — toggle mode (if not autocompleting)
+  // 11. Tab — toggle mode (if not autocompleting). While a provider request is
+  // active the toggle only selects the NEXT turn's mode: the active run keeps
+  // its real execution mode, and the UI says so.
   if (hex === "09") {
+    const wasBusy = tuiState.isStreaming || Boolean(tuiState.abortController);
     tuiState.agentMode = tuiState.agentMode === "Build" ? "Plan" : "Build";
-    tuiState.setStatus("");
+    tuiState.setStatus(wasBusy ? `Next turn: ${tuiState.agentMode} (current run unaffected)` : "");
+    if (wasBusy) tuiState.showToast(`Next turn: ${tuiState.agentMode}`);
     renderAll();
     return;
   }
@@ -1312,18 +1383,35 @@ function _handleKeyInternal(
     if (!dispatchText) return;
     if (tuiState.appState !== "ready" && dispatchText !== "/exit") return;
 
-    inputBufferManager.clear();
-    tuiState.inputBuffer = "";
-    tuiState.cursorPos = 0;
-    tuiState.cmdSuggestIdx = 0;
-
-    // Slash command -> run immediately (a single-line directive: trim to route)
+    // Slash command -> local dispatch. Enforce the canonical busy policy BEFORE
+    // clearing, so a refused command leaves the composer intact; and record the
+    // executed command in history so Up recalls it.
     if (dispatchText.startsWith("/")) {
+      const name = commandNameOf(dispatchText);
+      const busy = tuiState.isStreaming || messageQueue.getIsProcessing();
+      if (busy && !isAllowedWhileBusy(name) && name !== "exit" && name !== "quit") {
+        tuiState.setStatus(`/${name} is unavailable while the agent is running`);
+        tuiState.showToast(`⚠️ /${name} not available while busy`, 2500);
+        renderAll();
+        return;
+      }
+      inputBufferManager.clear();
+      tuiState.inputBuffer = "";
+      tuiState.cursorPos = 0;
+      tuiState.cmdSuggestIdx = 0;
+      tuiState.cmdSuggestDismissedFor = null;
+      tuiState.pushPromptHistory(dispatchText);
       tuiState.setStatus("");
       renderAll();
       sendMessage(dispatchText);
       return;
     }
+
+    inputBufferManager.clear();
+    tuiState.inputBuffer = "";
+    tuiState.cursorPos = 0;
+    tuiState.cmdSuggestIdx = 0;
+    tuiState.cmdSuggestDismissedFor = null;
 
     tuiState.pushPromptHistory(content);
 

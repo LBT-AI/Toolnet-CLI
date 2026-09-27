@@ -10,6 +10,8 @@ import {
 import { isBuiltinSkillsMcp } from "../core/mcp/builtin";
 import { mcpManager } from "../core/mcp/manager";
 import { runMcpCli } from "./mcpCli";
+import { MCP_SUBCOMMANDS, mcpSubcommandHelpLines, mcpSubcommandUsageTokens } from "../lib/mcpSubcommands";
+import { A, theme } from "../term";
 
 /**
  * the TUI is a CONSUMER of the canonical MCP manager. These
@@ -26,6 +28,32 @@ async function delegateToCli(subArgs: string[], ctx: CommandContext) {
   });
   if (lines.length === 0) lines.push(code === 0 ? "Done." : "Command failed.");
   ctx.addMessage("assistant", lines.join("\n"));
+}
+
+/**
+ * Resolve a picker-selected server ARGUMENT (stable serverId) to the canonical
+ * display NAME the headless CLI's diagnostics filter expects. Unknown values
+ * pass through unchanged so explicit user input keeps working.
+ */
+function resolveServerName(arg: string | undefined): string | undefined {
+  if (!arg || arg.startsWith("--")) return arg;
+  const hit = getEffectiveMcpServers().find(
+    (s) =>
+      s.serverId === arg ||
+      s.name === arg ||
+      s.serverId.toLowerCase() === arg.toLowerCase() ||
+      s.name.toLowerCase() === arg.toLowerCase()
+  );
+  return hit?.name ?? arg;
+}
+
+/** Map the first non-flag token of a delegated invocation through the resolver. */
+function resolveDelegateArgs(subArgs: string[]): string[] {
+  const idx = subArgs.findIndex((a) => !a.startsWith("--"));
+  if (idx === -1) return subArgs;
+  const copy = [...subArgs];
+  copy[idx] = resolveServerName(copy[idx]) ?? copy[idx];
+  return copy;
 }
 
 async function showMcpStatus(ctx: CommandContext) {
@@ -53,7 +81,7 @@ async function showMcpStatus(ctx: CommandContext) {
   const localMcpNames = Object.keys(localMcpConfig);
   const combinedLocal = Array.from(new Set([...localPlugins, ...localMcpNames]));
 
-  // Discovered and built-in servers with trust and connection status
+  // One card per server: name, status, kind, tools, auth, url — semantic colors.
   const trustLines: string[] = [];
   for (const server of getEffectiveMcpServers()) {
     const trust = mcpTrustManager.getTrustState(
@@ -62,23 +90,27 @@ async function showMcpStatus(ctx: CommandContext) {
     const managedStatus = mcpManager.status(server.serverId);
     const toolCount = mcpManager.listTools(server.serverId).length;
     const isBuiltin = server.sourceKind === "BUILTIN" || isBuiltinSkillsMcp(server);
-    const icon = trust === "disabled"
-      ? "\u001b[90m○\u001b[0m"
-      : managedStatus === "connected"
-        ? "\u001b[32m●\u001b[0m"
-        : "\u001b[33m●\u001b[0m";
 
-    const builtinBadge = isBuiltin ? " [builtin]" : "";
-    const statusLabel = trust === "disabled" ? "disabled" : managedStatus;
-    const toolsDetail = managedStatus === "connected" ? ` · ${toolCount} tools` : "";
-    const urlDetail = server.config.url ? `\n      url: ${server.config.url}` : "";
+    const disabled = trust === "disabled";
+    const connected = !disabled && managedStatus === "connected";
+    const statusColor = disabled ? A.fgMuted : connected ? A.fgGreen : A.fgWarning;
+    const dot = disabled ? `${A.fgMuted}○${A.reset}` : `${statusColor}●${A.reset}`;
 
-    trustLines.push(`    ${icon} ${server.name}${builtinBadge} [${statusLabel}]${toolsDetail}${urlDetail}`);
+    const kind = isBuiltin
+      ? `${A.fgViolet}[builtin]${A.reset}`
+      : `${A.fgSubtext}[${server.config.type === "remote" ? "remote" : "local"}]${A.reset}`;
+    const statusLabel = disabled ? "disabled" : managedStatus;
+    const toolsDetail = connected ? ` ${A.fgMuted}· ${toolCount} tools${A.reset}` : "";
+
+    trustLines.push(`  ${dot} ${A.fgText}${A.bold}${server.name}${A.reset} ${kind} ${statusColor}${statusLabel}${A.reset}${toolsDetail}`);
+    if (server.config.url) {
+      trustLines.push(`      ${A.fgMuted}url${A.reset} ${A.fgSubtext}${server.config.url}${A.reset}`);
+    }
   }
 
   const lines: string[] = [];
-  lines.push("MCP — Status");
-  lines.push("───".repeat(10));
+  lines.push(A.fgAccent + A.bold + "MCP — Status" + A.reset);
+  lines.push(A.fgBorder + "─".repeat(28) + A.reset);
 
   if (gateway) {
     lines.push(`  Claude Desktop: ${installed ? "\u001b[32minstalled\u001b[0m" : "\u001b[33mnot detected\u001b[0m"}`);
@@ -120,18 +152,11 @@ async function showMcpStatus(ctx: CommandContext) {
 
   lines.push("");
   lines.push("Commands:");
-  lines.push("  /mcp list               List configured servers and status");
-  lines.push("  /mcp show [name]        Diagnostics (transport, tools, auth)");
-  lines.push("  /mcp connect <name>     Connect a server and register its tools");
-  lines.push("  /mcp disconnect <name>  Disconnect and withdraw its tools");
-  lines.push("  /mcp enable <name>      Trust + enable a server");
-  lines.push("  /mcp disable <name>     Revoke trust / disable a server");
-  lines.push("  /mcp add <name> <cmd>   Add a local MCP server");
-  lines.push("  /mcp remove <name>      Remove or disable an MCP server");
-  lines.push("  /mcp registry           Browse MCP registry");
-  lines.push("  /mcp tools <url>        Probe MCP server tools");
-  lines.push("  /mcp auth <name>        OAuth flow for a remote server");
-  lines.push("  /mcp logout <name>      Remove stored credentials");
+  // Driven by the ONE canonical subcommand definition (src/lib/mcpSubcommands),
+  // the same source the interactive picker uses.
+  lines.push(...mcpSubcommandHelpLines());
+  lines.push("  /mcp status             Show MCP status (alias of show)");
+  lines.push("  /mcp help               Show this help");
 
   addMessage("assistant", lines.join("\n"));
 }
@@ -311,7 +336,8 @@ export const mcpCommand: Command = {
   name: "mcp",
   aliases: [],
   description: "Manage MCP (Model Context Protocol) plugins and registry",
-  usage: "/mcp [list|show|connect|disconnect|auth|logout|registry|tools|add|remove|enable|disable|status] ...",
+  usage: `/mcp [${mcpSubcommandUsageTokens()}|status|help] ...`,
+  subcommands: MCP_SUBCOMMANDS.map((s) => ({ name: s.name, usage: s.usage, description: s.description })),
   async handler(args: string[], ctx: CommandContext) {
     if (args.length === 0) {
       await showMcpStatus(ctx);
@@ -320,6 +346,7 @@ export const mcpCommand: Command = {
     const sub = args[0].toLowerCase();
     const subArgs = args.slice(1);
     switch (sub) {
+      case "help":      await showMcpStatus(ctx); break;
       case "registry":  await browseRegistry(ctx); break;
       case "tools":     await probeTools(subArgs, ctx); break;
       case "status":    await showMcpStatus(ctx); break;
@@ -328,12 +355,12 @@ export const mcpCommand: Command = {
       case "enable":    await enableMcp(subArgs, ctx); break;
       case "disable":   await disableMcp(subArgs, ctx); break;
  // remote MCP + auth, delegated to the one manager via the CLI.
-      case "list":      await delegateToCli(["list", ...subArgs], ctx); break;
-      case "show":      await delegateToCli(["status", ...subArgs], ctx); break;
-      case "connect":   await delegateToCli(["connect", ...subArgs], ctx); break;
-      case "disconnect":await delegateToCli(["disconnect", ...subArgs], ctx); break;
-      case "auth":      await delegateToCli(["auth", ...subArgs], ctx); break;
-      case "logout":    await delegateToCli(["logout", ...subArgs], ctx); break;
+      case "list":      await delegateToCli(["list", ...resolveDelegateArgs(subArgs)], ctx); break;
+      case "show":      await delegateToCli(["status", ...resolveDelegateArgs(subArgs)], ctx); break;
+      case "connect":   await delegateToCli(["connect", ...resolveDelegateArgs(subArgs)], ctx); break;
+      case "disconnect":await delegateToCli(["disconnect", ...resolveDelegateArgs(subArgs)], ctx); break;
+      case "auth":      await delegateToCli(["auth", ...resolveDelegateArgs(subArgs)], ctx); break;
+      case "logout":    await delegateToCli(["logout", ...resolveDelegateArgs(subArgs)], ctx); break;
       default:          ctx.addMessage("assistant", `Unknown: ${sub}\nTry: /mcp, /mcp list, /mcp show, /mcp connect <name>, /mcp auth <name>, /mcp logout <name>, /mcp enable <name>`); break;
     }
   },

@@ -516,10 +516,14 @@ describe("PHASE1 call graph assertions", () => {
     expect(src).not.toMatch(/evaluatePermission\(/);
   });
 
-  test("TUI save_plan does not bypass with raw fs.writeFileSync", () => {
+  test("plan file mutation goes through the canonical security-evaluated writer", () => {
+    // Plan writes moved to the canonical `plan_write` registry tool; the TUI
+    // keeps no save_plan special case at all. The writer invariant now lives
+    // with the tool, which routes through toolWrite (workspace + history).
     const src = read("../../tui/events/agentWiring.ts");
     expect(src).not.toMatch(/fs\.writeFileSync\(planPath/);
-    expect(src).toMatch(/toolWrite\(planPath/);
+    const tool = read("../../core/agent/agents/planWriteTool.ts");
+    expect(tool).toMatch(/toolWrite\(planPath/);
   });
 
   test("vision reads go through SecurityEngine policy", () => {
@@ -529,8 +533,9 @@ describe("PHASE1 call graph assertions", () => {
 
   test("bypassPolicy no longer weakens file tool invariants", () => {
     const src = read("../../lib/codingAgent.ts");
-    // The only bypassPolicy short-circuit must be redundant with full-access mode
-    expect(src).toMatch(/bypassPolicy && getSandboxMode\(\) === "full-access"/);
+    // The short-circuit is fully removed: sandbox mode is the ONLY access key,
+    // so no UI flag can ever skip the workspace boundary check.
+    expect(src).not.toMatch(/bypassPolicy && getSandboxMode/);
     const getCwdInfoSrc = src.slice(src.indexOf("export function getCwdInfo"));
     expect(getCwdInfoSrc).toMatch(/bypassPolicy: isFullAccess/);
   });

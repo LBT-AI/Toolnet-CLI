@@ -15,7 +15,9 @@ export function renderSuggestionsPopup(
   popupRows: number,
   suggests: Array<{ name: string; desc: string }>,
   cmdSuggestIdx: number,
-  _primaryColor: string
+  _primaryColor: string,
+  /** Namespace mode (MCP subcommands/servers): Enter selects, not runs. */
+  completeMode = false
 ): string[] {
   const out: string[] = [];
   if (suggests.length === 0 || popupRows <= 0) return out;
@@ -68,21 +70,24 @@ export function renderSuggestionsPopup(
   for (let i = start; i < end; i++) {
     const cmd = suggests[i];
     const selected = i === idx;
-    const bg = selected ? A.bgOverlay : "";
+    const bg = selected ? A.bgSelected : "";
     const nameCell = Math.max(6, Math.floor(innerWidth * 0.42));
     const name = truncate(cmd.name, nameCell);
     const descMax = Math.max(0, innerWidth - nameCell - 2);
     const desc = cols < 44 ? "" : truncate(cmd.desc, descMax);
 
-    const marker = selected ? A.fgCyan + A.bold + "● " + A.reset : "  ";
-    const nameFmt = (selected ? A.fgCyan + A.bold : A.fgText) + name + A.reset;
+    const marker = selected ? A.fgAccent + A.bold + "● " + A.reset : "  ";
+    const nameFmt = (selected ? A.fgAccent + A.bold : A.fgText) + name + A.reset;
     const descFmt = desc
       ? "  " + (selected ? A.fgText : A.fgSubtext) + desc + A.reset
       : "";
     out.push(highlightedRow(marker + nameFmt + descFmt, bg));
   }
 
-  const hint = A.fgMuted + "↑↓ navigate · Tab complete · Enter run" + A.reset;
+  const hintText = completeMode
+    ? "↑↓ navigate · Enter select · Esc close"
+    : "↑↓ navigate · Tab complete · Enter run";
+  const hint = A.fgMuted + hintText + A.reset;
   const counter = A.fgSubtext + `${idx + 1} / ${suggests.length}` + A.reset;
   const hintPad = Math.max(2, innerWidth - visibleWidth(hint) - visibleWidth(counter));
   out.push(plainRow(hint + " ".repeat(hintPad) + counter));

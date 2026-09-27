@@ -41,9 +41,10 @@ export function mapToolToAction(toolName: string, args?: any): string {
     name === "create_file" ||
     name === "save_file" ||
     name === "write" ||
-    name === "save_plan"
+    name === "save_plan" ||
+    name === "plan_write"
   ) {
-    return "Writing file…";
+    return name === "plan_write" ? "Saving plan…" : "Writing file…";
   }
 
   // Guard 5: File editing / patching

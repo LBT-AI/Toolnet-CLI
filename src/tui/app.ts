@@ -5,6 +5,7 @@ import { renderHeader } from "./renderers/headerRenderer";
 import { renderChatFrame, renderToolActivities } from "./renderers/chatRenderer";
 import { renderSidebar } from "./renderers/sidebarRenderer";
 import { renderWorkingStatus, renderInputArea, renderFooter } from "./renderers/statusRenderer";
+import { isActivePhase } from "./sessionStatus";
 import { renderConfirmationModal, renderToast, renderSecretInputModal, renderDeviceCodeModal } from "./renderers/modalRenderer";
 import { renderModelPickerBox, renderProviderStageBox } from "./renderers/modelPickerRenderer";
 import { renderKeyManagerBox } from "./renderers/keyManagerRenderer";
@@ -14,9 +15,11 @@ import { renderSessionPickerBox } from "./renderers/sessionPickerRenderer";
 import { renderRunOutputViewerBox } from "./renderers/runOutputViewerRenderer";
 import { renderSuggestionsPopup } from "./renderers/suggestRenderer";
 import { renderReasoningPanel } from "./renderers/reasoningPanel";
+import { renderStartupEmptyState } from "./renderers/startupRenderer";
 import { renderToolsPanelBox } from "./renderers/toolsPanelRenderer";
 import { renderHarnessPanelBox } from "./renderers/harnessPanelRenderer";
-import { handleKey, handlePaste, getSuggestions, getInputState, setInputState, resetInputState } from "./input/inputHandler";
+import { finalizeFrameText } from "./frameOutput";
+import { handleKey, handlePaste, getActiveSuggestions, getInputState, setInputState, resetInputState } from "./input/inputHandler";
 import { sendMessage } from "./events/agentWiring";
 import { A, T, getSize } from "../term";
 import { renderFallbackFrame } from "./renderers/errorBoundary";
@@ -25,7 +28,7 @@ import { TerminalKeyDecoder, ESC_FLUSH_TIMEOUT_MS, decodedKeyBytes, type Decoded
 import { setupTerminalLifecycle, restoreTerminal, wrapErrorBoundary, onTerminalResize } from "../lib/terminalLifecycle";
 import { setResponseLanguage } from "../lib/language";
 import { reasoningEffortLabel } from "../lib/reasoning";
-import { initWorkspace } from "../lib/codingAgent";
+import { initWorkspace, getCwdInfo } from "../lib/codingAgent";
 import { loadConfig } from "../lib/config";
 import { parseSessionArgs, loadSession, getLastSessionId, formatExitMessage, sessionDisplayTitle } from "../lib/sessionPersistence";
 import { providerPicker } from "./providerPicker";
@@ -96,10 +99,11 @@ let pendingRerender = false;
  * receives can be asserted in regression tests (see viewportRender.integration).
  */
 export function buildFrame(): string {
-  const activeSuggests = getSuggestions(tuiState.inputBuffer);
+  const activeSuggests = getActiveSuggestions(tuiState.inputBuffer);
   const pendingSteerCount = pendingInputs.count(tuiState.currentSessionId);
   const statusActive =
     tuiState.showHelp ||
+    isActivePhase(tuiState.agentPhase) ||
     tuiState.isStreaming ||
     Boolean(tuiState.statusText) ||
     messageQueue.size() > 0 ||
@@ -125,14 +129,27 @@ export function buildFrame(): string {
     isStreaming: tuiState.isStreaming,
     spinnerIdx: tuiState.spinnerIdx,
     statusText: tuiState.statusText,
+    agentPhase: tuiState.agentPhase,
+    statusDelegated: statusActive,
   }));
 
   // 2. Chat Lines
   const verbose = process.env.TOOLNET_DEBUG === "1" || process.argv.includes("--verbose");
   const renderedChat = renderChatFrame(tuiState.messages, chatCols, primaryColor, verbose);
-  const chatLines = renderedChat.chat.lines;
+  let chatLines = renderedChat.chat.lines;
   tuiState.chatRows = chatRows;
   tuiState.chatLineMessageIds = renderedChat.chat.messageIds;
+
+  // Startup empty state — transient chrome while the conversation is empty.
+  // Never appended to messages/session; disappears on the first turn.
+  if (tuiState.messages.length === 0 && !tuiState.isStreaming && !isActivePhase(tuiState.agentPhase)) {
+    const welcome = renderStartupEmptyState(chatCols, {
+      model: tuiState.currentModel,
+      workspace: getCwdInfo().workspaceRoot,
+    });
+    chatLines = [...welcome, ...chatLines];
+    tuiState.chatLineMessageIds = [...welcome.map(() => null), ...renderedChat.chat.messageIds];
+  }
 
   // 2A. Thinking panel — only when the upstream API actually streamed
   //     reasoning content (or a collapsed summary exists); never fabricated.
@@ -184,7 +201,14 @@ export function buildFrame(): string {
 
   // 5. Suggestions Popup (Command palette) — part of the frame
   if (activeSuggests.length > 0) {
-    const popup = renderSuggestionsPopup(cols, popupRows, activeSuggests, tuiState.cmdSuggestIdx, primaryColor);
+    const popup = renderSuggestionsPopup(
+      cols,
+      popupRows,
+      activeSuggests,
+      tuiState.cmdSuggestIdx,
+      primaryColor,
+      activeSuggests.some((s) => s.complete),
+    );
     out.push(...popup);
   }
 
@@ -197,9 +221,12 @@ export function buildFrame(): string {
     statusText: tuiState.statusText,
     elapsedDisplay: tuiState.elapsedDisplay,
     primaryColor,
+    agentPhase: tuiState.agentPhase,
     queuedCount: messageQueue.size(),
     nextQueuedText: messageQueue.peek()?.text,
     pendingInputs: pendingSteerCount,
+    modelName: tuiState.currentModel || undefined,
+    workspacePath: getCwdInfo().workspaceRoot || undefined,
   }));
 
   // 9. Input Area — drawn exactly once (divider + prompt line)
@@ -381,7 +408,9 @@ export function buildFrame(): string {
     out.push(...renderToast(cols, tuiState.toastMsg));
   }
 
-  return out.join("");
+  // Final gate: the composed frame is guaranteed well-formed and, on a
+  // terminal without Unicode glyph support, transliterated to clean ASCII.
+  return finalizeFrameText(out.join(""));
 }
 
 /**
@@ -403,7 +432,7 @@ function commitFrame(): void {
       const error = err instanceof Error ? err : new Error(String(err));
       // Paint an actionable fallback frame (session state is untouched) so
       // the user can redraw or exit instead of staring at a corrupted screen.
-      process.stdout.write(renderFallbackFrame(error, getSize().cols, getSize().rows));
+      process.stdout.write(finalizeFrameText(renderFallbackFrame(error, getSize().cols, getSize().rows)));
       // UI-level error recovery: close popups and update status
       tuiState.showModelPicker = false;
       tuiState.showKeyManager = false;

@@ -65,6 +65,15 @@ export interface AgentModelRequest {
   maxTokens?: number;
  /** session id for hook metadata (observability only). */
   sessionId?: string;
+  /**
+   * Per-turn structured-call allowlist — the EXACT tool names this turn
+   * exposed (derived from toolsOverride). When set, the structured JSON
+   * fallback parses ONLY these names: a model emitting a tool call for a tool
+   * it cannot see (e.g. write_file in Plan) is rejected at the adapter layer
+   * and never reaches a dispatcher. The harness permission gate stays behind
+   * this as the second, independent layer.
+   */
+  allowedToolNames?: ReadonlySet<string>;
 }
 
 // ── model lifecycle hooks ──────────────────────────────────────
@@ -97,6 +106,8 @@ interface PreparedModelRequest {
   caps: ModelCapabilities | undefined;
   chatReq: ChatRequest;
   hookPayload: ModelRequestPayload;
+  /** per-turn structured-call allowlist (undefined = legacy static set). */
+  allowedToolNames?: ReadonlySet<string>;
 }
 
 function describeError(error: unknown): string {
@@ -179,18 +190,31 @@ const KNOWN_TOOLS = new Set([
   "audit_url",
   "spawn_subagent",
   "save_plan",
+  "plan_write",
 ]);
 
-function isStructuredToolCall(v: unknown): v is StructuredToolCall {
+function isStructuredToolCall(v: unknown, allowedToolNames?: ReadonlySet<string>): v is StructuredToolCall {
   if (!v || typeof v !== "object") return false;
   const o = v as Record<string, unknown>;
   if (o.type !== "tool_call") return false;
-  if (typeof o.tool !== "string" || !KNOWN_TOOLS.has(o.tool)) return false;
+  if (typeof o.tool !== "string") return false;
+  // Per-turn allowlist FIRST: the exact tools this turn exposed. A model in a
+  // scoped turn (Plan) emitting a hidden tool (`write_file`) is rejected HERE —
+  // it never becomes a tool call at all. Falls back to the static known-tool
+  // set only for unscoped legacy callers.
+  if (allowedToolNames) {
+    if (!allowedToolNames.has(o.tool)) return false;
+  } else if (!KNOWN_TOOLS.has(o.tool)) {
+    return false;
+  }
   if (!o.arguments || typeof o.arguments !== "object") return false;
   return true;
 }
 
-export function parseStructuredToolCalls(content: string): AgentToolCall[] | null {
+export function parseStructuredToolCalls(
+  content: string,
+  allowedToolNames?: ReadonlySet<string>,
+): AgentToolCall[] | null {
   if (!content || typeof content !== "string") return null;
 
   const candidates: string[] = [];
@@ -215,7 +239,7 @@ export function parseStructuredToolCalls(content: string): AgentToolCall[] | nul
       const parsed: unknown = JSON.parse(c);
       if (Array.isArray(parsed)) {
         for (const item of parsed) {
-          if (isStructuredToolCall(item)) {
+          if (isStructuredToolCall(item, allowedToolNames)) {
             calls.push({
               id: `structured_${Date.now()}_${seq++}`,
               name: item.tool,
@@ -223,7 +247,7 @@ export function parseStructuredToolCalls(content: string): AgentToolCall[] | nul
             });
           }
         }
-      } else if (isStructuredToolCall(parsed)) {
+      } else if (isStructuredToolCall(parsed, allowedToolNames)) {
         calls.push({
           id: `structured_${Date.now()}_${seq++}`,
           name: parsed.tool,
@@ -379,6 +403,7 @@ export class ModelAdapter {
       caps,
       chatReq,
       hookPayload: { ...payload, temperature, reasoningEffort },
+      allowedToolNames: req.allowedToolNames,
     };
   }
 
@@ -454,7 +479,7 @@ export class ModelAdapter {
       caps?.nativeToolCalls === false;
 
     if (needsStructuredFallback) {
-      const structured = parseStructuredToolCalls(content);
+      const structured = parseStructuredToolCalls(content, prepared.allowedToolNames);
       if (structured && structured.length > 0) {
         toolCalls = structured;
         content = "";
@@ -562,7 +587,11 @@ export class ModelAdapter {
   }
 }
 
-export function normalizeChatResponse(res: ChatResponse, modelId?: string): AgentModelResponse {
+export function normalizeChatResponse(
+  res: ChatResponse,
+  modelId?: string,
+  allowedToolNames?: ReadonlySet<string>,
+): AgentModelResponse {
   const choice = res.choices?.[0];
   const msg = choice?.message;
   if (!msg) {
@@ -582,7 +611,7 @@ export function normalizeChatResponse(res: ChatResponse, modelId?: string): Agen
     const needsFallback =
       toolCalls.length === 0 && Boolean(content) && caps?.nativeToolCalls === false;
     if (needsFallback) {
-      const structured = parseStructuredToolCalls(content);
+      const structured = parseStructuredToolCalls(content, allowedToolNames);
       if (structured) {
         toolCalls = structured;
         content = "";

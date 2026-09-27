@@ -65,6 +65,29 @@ const PROCESS_TOOLS = ["shell", "bash", "run_command"] as const;
  *   plan     → primary, read-only: cannot mutate or execute, and cannot launder
  * a write through a subagent (see )
  */
+/**
+ * Canonical Plan-mode instructions. COMPOSED with the base system prompt by
+ * the harness (callerOverride slot) — Plan never replaces workspace context,
+ * memory, security context or ToolNet behavior, it only adds its role.
+ */
+const PLAN_AGENT_PROMPT = [
+  "You are ToolNet Plan, the planning agent. You design implementation plans; you never execute them.",
+  "",
+  "WORK IN PHASES (summarize progress briefly as you go — do not narrate every step):",
+  "1. Understand — restate the goal in one or two sentences.",
+  "2. Explore — read and search the codebase (read-only) until you know the current state.",
+  "3. Clarify — ask the user ONLY about ambiguity that materially changes the design; never ask permission to continue.",
+  "4. Design — choose an approach and note the alternatives you rejected.",
+  "5. Review — check your assumptions against the code you actually read.",
+  "6. Produce the plan and save it with plan_write (status: ready).",
+  "",
+  "THE PLAN must contain, concisely: Goal; Current state / findings; Implementation steps (ordered, each with its target files/components); Files likely involved; Risks; Verification (tests/commands). Keep it actionable — a focused plan beats a long essay.",
+  "",
+  "HARD LIMITS: do not execute implementation; do not mutate source files; do not run shell commands; your only write is plan_write for this session's plan. Delegating via `task` is allowed, but children cannot do anything you cannot — writes and shell stay denied for them too.",
+  "",
+  "After the final plan_write, stop: the user reviews the saved plan and decides whether to approve Build execution.",
+].join("\n");
+
 export const BUILTIN_AGENTS: AgentDefinition[] = [
   {
     id: "general",
@@ -122,9 +145,13 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
     id: "plan",
     name: "Plan",
     description:
-      "Planning agent. Analyses and proposes changes but never edits files or runs commands. `task` stays available — but any subagent it spawns inherits the same write/execute denial, so delegation cannot launder a mutation.",
+      "Planning agent. Analyses and proposes changes but never edits files or runs commands. Its ONLY mutation is `plan_write` — the session's own plan file. `task` stays available, but any subagent it spawns inherits the same write/execute denial, so delegation cannot launder a mutation.",
     mode: "primary",
     builtIn: true,
+    // Scope allowlist: read/navigation + network research + `task` (child
+    // derivation keeps children read-only) + the dedicated plan_write. This
+    // list — not a TUI copy — is the single source of Plan capabilities.
+    allowedTools: [...INTELLIGENCE_TOOLS, "web_fetch", "audit_url", "git_status", "git_diff", "task", "plan_write"],
     // Mutations and process execution are denied; `task` is deliberately left
     // available so the runtime (not the prompt) proves the bypass is blocked.
     deniedTools: [...MUTATION_TOOLS, ...PROCESS_TOOLS],
@@ -134,7 +161,16 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
       { tool: "apply_patch", decision: "deny" },
       { tool: "replace_all", decision: "deny" },
       { tool: "shell", decision: "deny" },
+      { tool: "bash", decision: "deny" },
+      { tool: "run_command", decision: "deny" },
+      { tool: "create_artifact", decision: "deny" },
+      { tool: "update_artifact", decision: "deny" },
+      { tool: "spawn_subagent", decision: "deny" },
+      // The ONE sanctioned write class: the session plan file (path derived
+      // server-side; the tool cannot target anything else).
+      { tool: "plan_write", decision: "allow" },
     ],
+    systemPrompt: PLAN_AGENT_PROMPT,
   },
 ];
 

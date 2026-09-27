@@ -126,12 +126,19 @@ export function renderFileMutationHeading(
   // Mutations are writes: create/delete use the write color, edits the edit
   // color — both owned by the theme.
   const color = mutation.operation === "update" ? theme.edit : theme.write;
+  // A create/delete badge makes the operation obvious at a glance.
+  const badge =
+    mutation.operation === "create"
+      ? ` ${A.fgGreen}${A.bold}NEW${A.reset}`
+      : mutation.operation === "delete"
+        ? ` ${A.fgRed}${A.bold}DEL${A.reset}`
+        : "";
   const elapsed = durationMs !== undefined ? ` ${A.dim}${A.fgMuted}· ${formatDuration(durationMs)}${A.reset}` : "";
   const hasDiff = mutation.hunks.length > 0;
   const stats = hasDiff
     ? ` ${A.dim}(${A.reset}${A.fgGreen}+${mutation.additions}${A.reset} ${A.fgRed}-${mutation.deletions}${A.reset}${A.dim})${A.reset}`
     : "";
-  return truncate(`${color}${icon} ${mutationVerb(mutation.operation)} ${mutation.path}${A.reset}${stats}${elapsed}`, cols) + A.reset;
+  return truncate(`${color}${icon} ${mutationVerb(mutation.operation)} ${mutation.path}${badge}${A.reset}${stats}${elapsed}`, cols) + A.reset;
 }
 
 /** One diff row: dim line number, semantic sign, normal/ivory context. */

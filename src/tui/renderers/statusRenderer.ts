@@ -2,7 +2,8 @@ import { A, T } from "../../term";
 import { stripAnsi, truncate, visibleWidth, tailByCells, COMPOSER_MAX_BUFFER_LINES } from "../layout";
 import { getCwdInfo } from "../../lib/codingAgent";
 import { SPINNER, tuiState } from "../state";
-import { supportsReasoning, reasoningEffortLabel } from "../../lib/reasoning";
+import { supportsReasoning, reasoningEffortLabel, type AgentPhase } from "../../lib/reasoning";
+import { describeAgentPhase, isActivePhase } from "../sessionStatus";
 
 export interface WorkingStatusState {
   showHelp: boolean;
@@ -11,8 +12,23 @@ export interface WorkingStatusState {
   statusText: string;
   elapsedDisplay: string;
   primaryColor: string;
+  /**
+   * Canonical lifecycle phase. When supplied, the line renders from it instead
+   * of guessing from `statusText` — this is the production path (app.ts always
+   * passes `tuiState.agentPhase`). Omitted callers keep the legacy behavior so
+   * the renderer stays usable in isolation and in unit tests.
+   */
+  agentPhase?: AgentPhase;
   queuedCount?: number;
   nextQueuedText?: string;
+  /**
+   * Model / workspace echoed onto the ACTIVE line so the user reads one status
+   * (`Working · model · /root · 13s`) instead of a header badge + a second bar
+   * saying the same thing. The header suppresses its badge while this line is
+   * drawn (see `statusLineActive` / `renderHeader` `statusDelegated`).
+   */
+  modelName?: string;
+  workspacePath?: string;
   /**
    * Follow-ups admitted while the agent is BUSY (delivery = steer) that are not
    * yet promoted into the conversation. Shown so the user sees their prompt was
@@ -40,6 +56,7 @@ export interface FooterState {
 export function statusLineActive(state: WorkingStatusState): boolean {
   return Boolean(
     state.showHelp ||
+    (state.agentPhase && isActivePhase(state.agentPhase)) ||
     state.isStreaming ||
     state.statusText ||
     (state.queuedCount && state.queuedCount > 0) ||
@@ -64,10 +81,27 @@ export function renderWorkingStatus(
   let content = "";
   let fg = state.primaryColor;
 
+  // Canonical presentation (production path): the phase decides the label and
+  // color. No substring matching on the rendered text.
+  const canonical = state.agentPhase ? describeAgentPhase(state.agentPhase) : null;
+
   if (state.showHelp) {
     content = "Shortcuts: Tab mode · Ctrl+N models · / commands · Esc cancel";
     fg = A.fgYellow;
+  } else if (canonical && canonical.animated) {
+    const sp = SPINNER[state.spinnerIdx % SPINNER.length];
+    const elapsed = state.elapsedDisplay ? ` ${state.elapsedDisplay.trim()}` : "";
+    // ONE status system: phase · model · workspace · elapsed. The header badge
+    // is suppressed for the duration (statusDelegated), so this is the only
+    // place the live state is painted.
+    const context = [state.modelName, state.workspacePath]
+      .filter((part): part is string => Boolean(part))
+      .join(" · ");
+    content = `${sp} ${canonical.label}${context ? " · " + context : ""}${elapsed}`;
+    fg = canonical.color;
   } else if (state.isStreaming) {
+    // Legacy fallback: no canonical phase supplied (unit tests / non-TUI
+    // callers). Preserves the historical text-based presentation.
     const sp = SPINNER[state.spinnerIdx % SPINNER.length];
     const text = state.statusText || "Working…";
     const elapsed = state.elapsedDisplay ? ` ${state.elapsedDisplay.trim()}` : "";
@@ -124,9 +158,10 @@ export function renderInputArea(
   inputBuffer: string,
   primaryColor: string
 ): string {
-  const isTyping = inputBuffer.length > 0;
-  const dividerCol = isTyping ? primaryColor : A.fgBorder;
-  const divider = T.clearLine + dividerCol + "─".repeat(cols - 1) + A.reset + "\r\n";
+  // Color-density trim: the divider stays at the quiet border tone even while
+  // typing — the bright `>` prompt is the focus cue, a full-width bright rule
+  // competed with the transcript for attention on small terminals.
+  const divider = T.clearLine + A.fgBorder + "─".repeat(cols - 1) + A.reset + "\r\n";
 
   if (!inputBuffer) {
     const prompt = A.reset + A.fgCyan + A.bold + "> " + A.reset;
@@ -202,6 +237,18 @@ export function renderFooter(
   const item = (fg: string, text: string, max: number) => fg + truncate(text, max) + A.reset;
   const sep = A.fgMuted + " · " + A.reset;
 
+  // ONE canonical footer: segments are added by priority while they fit, so a
+  // wide terminal shows the full metadata line and a 52-col phone keeps only
+  // the identity core. Truncation never splits the line into two rows.
+  const fits = (candidate: string[]): boolean => {
+    const projected = visibleWidth(" " + [...segmentsSoFar, ...candidate].join(sep));
+    return projected <= Math.max(10, cols - 2);
+  };
+  const segmentsSoFar: string[] = [];
+  const addSegment = (candidate: string[], needed: boolean): void => {
+    if (needed || fits(candidate)) segmentsSoFar.push(...candidate);
+  };
+
   // Mode tag — only when non-default (Bypass or Plan); plain Build shows nothing.
   let modeTag = "";
   if (bypassMode) {
@@ -210,9 +257,11 @@ export function renderFooter(
     modeTag = A.reset + A.fgYellow + A.bold + "Plan" + A.reset;
   }
 
-  const segments: string[] = [item(providerFg, provVisible, 24)];
-  segments.push(item(modelFg, modelVisible, 24));
-  if (modeTag) segments.push(modeTag);
+  // Priority order: identity core → mode → tokens → workspace → extras.
+  // `needed` segments (provider/model) always render; the rest must fit whole.
+  addSegment([item(providerFg, provVisible, 24)], true);
+  addSegment([item(modelFg, modelVisible, 24)], true);
+  if (modeTag) addSegment([modeTag], false);
   // Reasoning tag — capability-aware: only for models that actually reason,
   // and only while reasoning is enabled. Never guessed from the model name.
   if (
@@ -222,19 +271,24 @@ export function renderFooter(
     tuiState.reasoningSettings.enabled
   ) {
     const rLabel = reasoningEffortLabel(tuiState.reasoningSettings);
-    segments.push(A.reset + A.fgCyan + "reasoning: " + rLabel + A.reset);
+    addSegment([A.reset + A.fgCyan + "reasoning: " + rLabel + A.reset], false);
   }
-  if (lastTokens) segments.push(A.reset + A.fgSubtext + lastTokens + A.reset);
-  segments.push(item(wsFg, wsPath || process.cwd(), 28));
-  // Session title — only when the session actually has one, so an untitled
-  // session shows `model · workspace` with no dangling separator.
+  if (lastTokens) addSegment([A.reset + A.fgSubtext + lastTokens + A.reset], false);
+  addSegment([item(wsFg, wsPath || process.cwd(), 28)], false);
+  // Session title last — truncated to the remaining width (never below a
+  // 12-cell stub, and dropped entirely only when even that stub would not
+  // fit), so an untitled or very narrow session shows `model · workspace`
+  // with no dangling separator and no second metadata row.
   const sessionTitle = state?.sessionTitle ?? tuiState.sessionTitle;
   if (sessionTitle) {
-    // The title takes whatever width is left after model/mode/workspace, so a
-    // wide terminal shows the whole label instead of a fixed stub.
-    const used = visibleWidth(" " + segments.join(sep));
-    segments.push(item(A.fgSubtext, sessionTitle, Math.max(12, cols - 2 - used)));
+    const used = visibleWidth(" " + segmentsSoFar.join(sep));
+    const budget = cols - 2 - used - visibleWidth(sep);
+    if (budget >= 12) {
+      segmentsSoFar.push(item(A.fgSubtext, sessionTitle, budget));
+    }
   }
+
+  const segments: string[] = segmentsSoFar;
 
   const content = " " + segments.join(sep);
 

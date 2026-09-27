@@ -30,79 +30,37 @@ import { assertPrimarySystemMessageInvariant } from "../../lib/context";
 import { getToolById } from "../../lib/toolsCatalog";
 import { normalizeSectionId } from "../../lib/harnessCatalog";
 import { matchGreetingFastPath } from "../../lib/greeting";
+import { suggestClosestCommand } from "../../commands/commandMeta";
 import { requestAutoTitle } from "../../lib/autoTitle";
 import { makeTitleGenerator } from "../../lib/harness/titleGenerator";
-
-const PLANNER_SYSTEM_PROMPT = `You are ToolNet Planner. Your goal is to analyze the user request, explore the codebase using read-only tools, and create a step-by-step plan. Do not execute the plan yourself. Use the save_plan tool to save the plan.`;
-
-async function handleSavePlan(parsedArgs: any): Promise<string> {
-  const cwd = getCwdInfo().currentCwd;
-  const toolnetDir = path.join(cwd, ".toolnet");
-  if (!fs.existsSync(toolnetDir)) fs.mkdirSync(toolnetDir);
-  const planPath = path.join(toolnetDir, "plan.md");
-
- // Layer 4 : save_plan is a model-callable MUTATING tool — its file
-  // write goes through the security-evaluated toolWrite (workspace invariant,
-  // history snapshot) instead of a raw fs.writeFileSync bypass.
-  const { toolWrite } = await import("../../lib/codingAgent");
-  const writeRes = toolWrite(planPath, parsedArgs?.content || "");
-  if (!writeRes.success) {
-    return JSON.stringify({ stdout: "", stderr: writeRes.error || "Failed to save plan", exitCode: 1 });
-  }
-
-  const confirmed = await requestConfirmation("Plan generated. Approve and switch to Build mode?");
-  if (confirmed) {
-    tuiState.agentMode = "Build";
-    return JSON.stringify({ stdout: "Plan saved to .toolnet/plan.md. Switched to Build mode.", exitCode: 0 });
-  }
-  return JSON.stringify({ error: "User denied the plan." });
-}
+import { agentRegistry } from "../../core/agent/agents/registry";
+import { permissionScopeFromAgent } from "../../core/agent/agents/permissions";
+import { planPathForSession } from "../../core/agent/agents/planWriteTool";
 
 /**
- * Build the tool schema list for the current agent mode from the ONE canonical
- * registry. Plan mode is restricted to read-only tools plus save_plan; Build
- * mode exposes the full registry plus any plugin-registered tools.
+ * Plan turn configuration — derived, never re-declared.
  *
- * The engine passes this straight to the harness — the TUI never assembles a
- * second, divergent schema set.
+ * The canonical `plan` agent in AgentRegistry is the SINGLE source of Plan
+ * capabilities. The TUI contributes nothing security-relevant: it resolves the
+ * agent, converts its declared scope to a runtime permission scope, and
+ * filters the canonical tool schemas to exactly what that scope admits.
+ *
+ * Two layers protect the turn (both required):
+ *   - `toolSchemas`  — the model never SEES a denied tool (schema layer);
+ *   - `permissionSet` — even a hallucinated/injected call for a hidden tool
+ *     is refused by the harness gate BEFORE any executor (runtime layer).
  */
-function buildToolsForMode(mode: "Build" | "Plan"): any[] | undefined {
- // : plugin and MCP tools are registered INTO the canonical registry,
-  // so `schemas()` already contains them. The TUI must not concatenate a second
-  // tool source — doing so previously exposed plugin tools that no dispatcher
-  // could execute.
-  const base = toolRegistry.schemas();
-
-  if (mode !== "Plan") return base;
-
-  const readOnly = new Set([
-    "read_file",
-    "grep",
-    "grep_search",
-    "glob",
-    "glob_search",
-    "find_path",
-    "list_dir",
-    "tree",
-    "file_exists",
-    "get_cwd",
-    "web_fetch",
-  ]);
-
-  const planTools = base.filter((t: any) => readOnly.has(t?.function?.name));
-  planTools.push({
-    type: "function",
-    function: {
-      name: "save_plan",
-      description: "Save the generated plan and request user approval to switch to Build mode.",
-      parameters: {
-        type: "object",
-        properties: { content: { type: "string", description: "The plan content" } },
-        required: ["content"],
-      },
-    },
-  });
-  return planTools;
+function planTurnConfig(): { toolSchemas: any[]; permissionSet: ReturnType<typeof permissionScopeFromAgent>; systemPromptAddendum: string } {
+  const planAgent = agentRegistry.resolve("plan");
+  const permissionSet = permissionScopeFromAgent(planAgent);
+  const toolSchemas = toolRegistry.schemasFiltered((t) =>
+    t.name === "plan_write" || permissionSet.tools?.[t.name] !== "deny"
+  );
+  return {
+    toolSchemas,
+    permissionSet,
+    systemPromptAddendum: planAgent.systemPrompt || "",
+  };
 }
 
 function toolCallIds(message: any): string[] {
@@ -246,7 +204,12 @@ export function buildTuiAgentCallbacks(runId: string): {
     onTextDelta: (delta) => {
       // Content arrived -> finalize any active reasoning block for this turn
       tuiState.finalizeActiveReasoning("text-delta");
-      if (tuiState.agentPhase === "thinking") tuiState.agentPhase = "streaming";
+      // First visible token after thinking (or straight from idle on a
+      // non-reasoning model) enters the canonical "responding" phase, so the
+      // status line renders from state for every model, not only reasoners.
+      if (tuiState.agentPhase === "thinking" || tuiState.agentPhase === "idle") {
+        tuiState.agentPhase = "streaming";
+      }
       tuiState.appendAssistantDelta(delta, tuiState.currentTurnId);
     },
     onEvent: (event) => {
@@ -294,11 +257,28 @@ export function buildTuiAgentCallbacks(runId: string): {
           );
           tuiState.requestChromeRender();
           break;
+        case "tool-running":
+          // Approval was granted (or no approval was needed): the tool is
+          // actually executing, so drop the blocked state.
+          if (tuiState.agentPhase === "waiting_approval") tuiState.agentPhase = "working";
+          break;
         case "tool-progress":
           tuiState.updateActiveToolProgress(event.callId, {
             elapsedMs: event.elapsedMs,
             tail: event.tail,
           });
+          break;
+        case "permission-required":
+          // Canonical "blocked on the user" state: the tool is NOT running, so
+          // the status must not imply progress. requestApprovalModal owns the
+          // decision; this only reflects it in the single status line.
+          if (tuiState.agentPhase !== "thinking") tuiState.agentPhase = "waiting_approval";
+          statusManager.update("Waiting for approval…");
+          break;
+        case "compaction":
+          // History pruning is real work, not a hang: name it explicitly.
+          tuiState.agentPhase = "compacting";
+          statusManager.update("Compacting context…");
           break;
         case "tool-result": {
           const wasCancelled = tuiState.messages.some(
@@ -471,12 +451,20 @@ export async function sendMessage(text: string): Promise<void> {
         return out;
       });
 
-    // The engine resumes this transcript as-is, so the system prompt must be
-    // first — assertPrimarySystemMessageInvariant enforces that invariant.
-    apiMessages.unshift({ role: "system", content: tuiState.agentMode === "Plan" ? PLANNER_SYSTEM_PROMPT : getAgentSystemPrompt(tuiState.currentSessionId) });
+    // System prompt COMPOSITION: the full base prompt (workspace context,
+    // memory, language, security, skills/MCP) is always present. Plan only
+    // ADDS its canonical role instructions — it never replaces the base.
+    const isPlanTurn = tuiState.agentMode === "Plan";
+    const plan = isPlanTurn ? planTurnConfig() : null;
+    const basePrompt = getAgentSystemPrompt(tuiState.currentSessionId);
+    apiMessages.unshift({
+      role: "system",
+      content: plan ? `${basePrompt}\n\n${plan.systemPromptAddendum}` : basePrompt,
+    });
     assertPrimarySystemMessageInvariant(apiMessages as any);
 
-    const toolsOverride = buildToolsForMode(tuiState.agentMode);
+    const toolsOverride = plan ? plan.toolSchemas : undefined;
+    const toolPermissionSet = plan ? plan.permissionSet : undefined;
 
     // ── Session title (background, never awaited) ────────────────
     // The turn below starts immediately; the title is only a label. A session
@@ -507,6 +495,9 @@ export async function sendMessage(text: string): Promise<void> {
       stream: true,
       signal: tuiState.abortController.signal,
       toolsOverride,
+      // HARD runtime scope: even a hidden/injected tool call for a schema-
+      // invisible tool is refused by the harness gate before any executor.
+      toolPermissionSet,
       reasoningSettings: tuiState.reasoningSettings,
       // ONE canonical reasoning path: onEvent → reasoning-start/delta/end.
       // (No onReasoningDelta — wiring both duplicated every chunk.)
@@ -520,12 +511,9 @@ export async function sendMessage(text: string): Promise<void> {
         });
         return decision;
       },
-      onCustomTool: async (name, args) => {
-        // TUI-only tool: save_plan is handled here, not in the core registry.
-        if (name !== "save_plan") return null;
-        const toolResult = await handleSavePlan(args);
-        return { result: toolResult, allowed: true };
-      },
+      // Legacy TUI-only save_plan hook removed: plan_write is a canonical
+      // registry tool now (dispatch → permission → security → executor), so
+      // Plan mutations no longer bypass the core tool infrastructure.
     });
 
     tuiState.finalizeActiveReasoning("run-settled");
@@ -827,6 +815,38 @@ export function buildTuiCommandContext(): any {
   };
 }
 
+/**
+ * The ONE canonical Plan → Build approval action.
+ *
+ * Both the plan-ready confirmation and `/approve` land here. Contract:
+ *  - the ACTIVE Plan turn must already have ended (never mid-stream);
+ *  - execution is a NEW Build provider turn — the Plan request is never
+ *    mutated into Build mid-flight;
+ *  - Build receives the plan path + approved state through a synthetic user
+ *    turn at a safe boundary, so it can read the file from canonical context.
+ */
+export async function approvePlanAndBuild(): Promise<void> {
+  const sessionId = tuiState.currentSessionId;
+  const workspaceRoot = getCwdInfo().workspaceRoot || getCwdInfo().currentCwd;
+  const planPath = planPathForSession(workspaceRoot, sessionId || "session");
+  const fsmod = await import("node:fs");
+  if (!fsmod.existsSync(planPath)) {
+    tuiState.showToast("No plan file to approve — run a Plan turn first", 3000);
+    return;
+  }
+  if (tuiState.isStreaming || tuiState.abortController) {
+    tuiState.showToast("Plan turn still running — approve when it finishes", 3000);
+    return;
+  }
+  tuiState.agentMode = "Build";
+  tuiState.setStatus("Mode: Build · executing approved plan");
+  tuiState.appendMessage({ role: "system", content: "→ Plan approved. Starting Build execution." });
+  tuiState.requestRender();
+  await sendMessage(
+    `The plan at ${planPath} has been approved. Read it and execute the approved plan.`,
+  );
+}
+
 export async function handleSlashCommand(cmd: string): Promise<void> {
   const parts = cmd.split(" ");
   const name = parts[0].toLowerCase();
@@ -871,7 +891,9 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
 
       case "/help":
       case "/?":
-        await dispatchCommand("/help", ctx);
+        // Pass the FULL input so `/help mcp` shows that command's details
+        // (including its subcommands) instead of the generic list.
+        await dispatchCommand(cmd, ctx);
         tuiState.showHelp = !tuiState.showHelp;
         break;
 
@@ -883,30 +905,48 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
         break;
 
       case "/agent": {
-        tuiState.agentMode = tuiState.agentMode === "Build" ? "Plan" : "Build";
-        const modeName = tuiState.agentMode === "Plan" ? "Planner" : "Builder";
-        tuiState.showToast("Switched to " + modeName + " Mode");
-        tuiState.setStatus("Mode: " + modeName);
+        // Same busy policy as Tab: switching is next-turn selection. While a
+        // provider request is active the toggle only records the NEXT mode.
+        if (tuiState.isStreaming || tuiState.abortController) {
+          tuiState.agentMode = tuiState.agentMode === "Build" ? "Plan" : "Build";
+          tuiState.showToast(`Next turn: ${tuiState.agentMode} (after current run)`);
+          tuiState.setStatus("Next: " + tuiState.agentMode);
+        } else {
+          tuiState.agentMode = tuiState.agentMode === "Build" ? "Plan" : "Build";
+          const modeName = tuiState.agentMode === "Plan" ? "Planner" : "Builder";
+          tuiState.showToast("Switched to " + modeName + " Mode");
+          tuiState.setStatus("Mode: " + modeName);
+        }
         break;
       }
 
       case "/plan": {
+        // ONE provider request per session: while busy, `/plan` never starts a
+        // second run — the task text (if any) is queued and the Plan turn is
+        // admitted at the next safe turn boundary.
+        const taskText = parts.slice(1).join(" ").trim();
+        if (tuiState.isStreaming || tuiState.abortController) {
+          tuiState.agentMode = "Plan";
+          tuiState.appendMessage({ role: "system", content: "→ Plan requested. It starts after the current run finishes." });
+          if (taskText) messageQueue.enqueue(taskText);
+          tuiState.requestRender();
+          return;
+        }
         tuiState.agentMode = "Plan";
-        tuiState.showToast("Switched to Planner Mode");
-        tuiState.setStatus("Mode: Planner");
-        tuiState.appendMessage({ role: "system", content: "→ Switched to Plan Mode. Generating plan..." });
-        tuiState.requestRender();
-        setTimeout(() => sendMessage("Please create a detailed checklist for the task in .toolnet/plan.md and wait for my /approve command before executing anything."), 50);
+        tuiState.setStatus("Mode: Plan");
+        if (taskText) {
+          await sendMessage(taskText);
+        } else {
+          tuiState.appendMessage({ role: "system", content: "→ Plan mode. Send a task to plan, e.g. `/plan audit the auth flow`." });
+          tuiState.requestRender();
+        }
         return;
       }
 
       case "/approve": {
-        tuiState.agentMode = "Build";
-        tuiState.showToast("Plan Approved - Switched to Builder Mode");
-        tuiState.setStatus("Mode: Builder");
-        tuiState.appendMessage({ role: "system", content: "→ Plan approved. Switched to execution mode." });
-        tuiState.requestRender();
-        setTimeout(() => sendMessage("I approve the plan. You may now shift into execution mode and execute the checklist."), 50);
+        // Alias of the ONE canonical approval action (same state transition as
+        // the plan-ready approval, no second protocol).
+        await approvePlanAndBuild();
         return;
       }
 
@@ -1024,7 +1064,11 @@ export async function handleSlashCommand(cmd: string): Promise<void> {
       default: {
         const handled = await dispatchCommand(cmd, ctx);
         if (!handled) {
-          tuiState.appendMessage({ role: "system", content: "Unknown command: " + name + "  (type /help)" });
+          // One append per submit — the closest command is offered as a hint on
+          // the SAME row-group, never auto-executed.
+          const suggestion = suggestClosestCommand(name);
+          const hint = suggestion ? `\nDid you mean /${suggestion}?` : "";
+          tuiState.appendMessage({ role: "system", content: "Unknown command: " + name + "  (type /help)" + hint });
         }
         break;
       }

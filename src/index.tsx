@@ -624,13 +624,8 @@ if (subCmd === "version") {
 
 // ---- --bypass flag ----
 if (args.includes("--bypass") || args.includes("-b")) {
-  const { bypassEngine, ALL_BYPASS_LEVELS } = await import("./lib/bypass");
-  const bpIdx = args.findIndex((a) => a === "--bypass" || a === "-b");
-  let level: any = undefined;
-  if (bpIdx >= 0 && args[bpIdx + 1] && !args[bpIdx + 1].startsWith("-") && ALL_BYPASS_LEVELS.includes(args[bpIdx + 1] as any)) {
-    level = args[bpIdx + 1];
-  }
-  bypassEngine.setBypass(true, level || "godmode");
+  const { bypassEngine } = await import("./lib/bypass");
+  bypassEngine.setBypass(true);
 }
 
 // ---- Mode detection (early, before any mode-dependent logic) ----

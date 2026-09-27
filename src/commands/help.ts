@@ -33,6 +33,13 @@ function buildCommandHelp(cmd: Command): string {
   if (cmd.aliases && cmd.aliases.length > 0) {
     lines.push(`Aliases:     ${cmd.aliases.map((a) => `/${a}`).join(", ")}`);
   }
+  if (cmd.subcommands && cmd.subcommands.length > 0) {
+    lines.push("");
+    lines.push("Subcommands:");
+    for (const sub of cmd.subcommands) {
+      lines.push(`  ${sub.usage.padEnd(24)}${sub.description}`);
+    }
+  }
   return lines.join("\n");
 }
 

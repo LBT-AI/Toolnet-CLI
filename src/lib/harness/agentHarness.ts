@@ -371,6 +371,8 @@ export class AgentHarness {
       sessionId?: string;
       turn?: number;
       runId?: string;
+      /** per-turn structured-call allowlist (see AgentModelRequest). */
+      allowedToolNames?: ReadonlySet<string>;
     },
     mode: ExecutionMode,
     wantStream: boolean,
@@ -490,6 +492,8 @@ export class AgentHarness {
       sessionId?: string;
       turn?: number;
       runId?: string;
+      /** per-turn structured-call allowlist (see AgentModelRequest). */
+      allowedToolNames?: ReadonlySet<string>;
     },
     mode: ExecutionMode,
     wantStream: boolean
@@ -515,6 +519,7 @@ export class AgentHarness {
         signal: req.signal,
         reasoningEffort: req.reasoningEffort,
         sessionId: req.sessionId,
+        allowedToolNames: req.allowedToolNames,
       });
       return {
         response,
@@ -553,6 +558,7 @@ export class AgentHarness {
         signal: combinedStallSignal,
         reasoningEffort: req.reasoningEffort,
         sessionId: req.sessionId,
+        allowedToolNames: req.allowedToolNames,
       })) {
         stallWatch.noteChunk();
         sawChunk = true;
@@ -1160,7 +1166,6 @@ export class AgentHarness {
     const extraHeaders: Record<string, string> = {};
     if (bypassEngine.isEnabled()) {
       extraHeaders["x-bypass-toolnet"] = "true";
-      extraHeaders["x-bypass-level"] = bypassEngine.getLevel();
     }
 
     this.emitEvent("agent:start", mode, { model, totalMessages: messages.length });
@@ -1281,6 +1286,13 @@ export class AgentHarness {
             options.toolsOverride || this.toolsForProfile();
 
       let modelRes: { response: AgentModelResponse; hadMessage: boolean };
+      // Per-turn structured-call allowlist: derived from the EXACT schemas this
+      // turn exposes. The adapter parses structured JSON tool calls against
+      // this set, so a model cannot summon a tool it was never shown (Plan
+      // emitting write_file is rejected before any dispatcher sees it).
+      const allowedToolNames = toolsForRequest
+        ? new Set<string>(toolsForRequest.map((t: any) => String(t?.function?.name || "")))
+        : undefined;
       // A provider reporting context overflow is the ONE failure compaction can
       // actually fix: compact the model-facing context and retry this same turn.
       // `overflowRetried` bounds that to a single attempt, so a request that is
@@ -1301,6 +1313,7 @@ export class AgentHarness {
             reasoningEffort: resolveReasoningEffort(model, options.reasoningSettings),
             sessionId,
             turn: turnsUsed,
+            allowedToolNames,
           },
           mode,
           options.stream === true,
@@ -1470,21 +1483,16 @@ export class AgentHarness {
       }
 
       if (!toolCalls || toolCalls.length === 0) {
-        if (bypassEngine.isEnabled() && bypassEngine.getConfig().autoEscalate && turnsUsed < maxTurns) {
+        if (bypassEngine.isEnabled() && turnsUsed < maxTurns) {
           const refusal = bypassEngine.checkRefusal(assistantContent);
           if (refusal.isRefusal) {
             const lastUserMsg = [...messages].reverse().find((m) => m.role === "user")?.content || "";
-            const escalation = bypassEngine.escalate(lastUserMsg);
-            if (escalation) {
-              this.emitEvent("agent:start", mode, {
-                model,
-                totalMessages: messages.length,
-                escalatedLevel: escalation.newLevel,
-              });
-              messages.push({
-                role: "user",
-                content: escalation.overridePrompt,
-              });
+            // ONE honest retry: restate the task and ask the model to answer
+            // what it can. No forged clearances, no level escalation.
+            const retry = bypassEngine.retryPrompt(lastUserMsg);
+            if (retry) {
+              this.emitEvent("agent:refusal_retry", mode, { model, reason: refusal.reason });
+              messages.push({ role: "user", content: retry });
               continue;
             }
           }

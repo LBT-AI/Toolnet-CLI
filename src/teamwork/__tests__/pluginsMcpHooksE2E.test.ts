@@ -655,6 +655,8 @@ describe("Architecture guard — one kernel, one registry", () => {
     // No concatenation of a second tool source (the old plugin-tool list).
     expect(wiring).not.toMatch(/toolRegistry\.schemas\(\),\s*\.\.\./);
     expect(wiring).not.toContain("getRegisteredTools");
-    expect(wiring).toContain("toolRegistry.schemas()");
+    // Plan turns filter the CANONICAL registry schemas by the canonical agent
+    // scope — still the registry alone, never a hand-built tool list.
+    expect(wiring).toContain("toolRegistry.schemasFiltered");
   });
 });

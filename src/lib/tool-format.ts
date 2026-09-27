@@ -175,7 +175,8 @@ export function renderToolLine(
 
   if (status === "running") {
     const durFormatted = durStr ? ` ${A.dim}${A.fgMuted}· ${durStr}${A.reset}` : "";
-    return `  ${A.fgAmber}●${A.reset} ${A.bold}${A.fgAmber}${action}${A.reset}${targetFormatted}${durFormatted}`;
+    // Running uses the info accent; success/error swap to green/red.
+    return `  ${A.fgInfo}●${A.reset} ${A.bold}${A.fgInfo}${action}${A.reset}${targetFormatted}${durFormatted}`;
   }
 
   if (status === "cancelled") {

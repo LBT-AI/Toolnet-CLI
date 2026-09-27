@@ -29,6 +29,10 @@ export type AgentPhase =
   | "thinking"
   | "working"
   | "streaming"
+  /** Blocked on a user/security decision — the tool is not running yet. */
+  | "waiting_approval"
+  /** History is being compacted; real work, not a hang. */
+  | "compacting"
   | "done"
   | "cancelled"
   | "error";
