@@ -1203,6 +1203,7 @@ export class AgentHarness {
             inputId: input.id,
             delivery: input.delivery,
             admittedSequence: input.admittedSequence,
+            content: input.content,
           });
         }
       }
@@ -1567,6 +1568,7 @@ export class AgentHarness {
               inputId: input.id,
               delivery: input.delivery,
               admittedSequence: input.admittedSequence,
+              content: input.content,
             });
           }
           this.agentState.transition("thinking", "pending-input");

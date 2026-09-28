@@ -247,6 +247,13 @@ export function toAgentEvents(ev: HarnessEvent): AgentEvent[] {
         newCount: typeof payload.newCount === "number" ? payload.newCount : undefined,
       }];
 
+    case "agent:steer_promoted":
+      return [{
+        type: "steer_promoted",
+        inputId: String(payload.inputId ?? ""),
+        content: String(payload.content ?? ""),
+      }];
+
     case "agent:complete":
       return [{ type: "agent-complete" }];
 

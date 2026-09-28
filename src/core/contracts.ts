@@ -156,6 +156,7 @@ export type AgentEvent =
   | { type: "agent-complete" }
   | { type: "cancelled" }
   | { type: "error"; error: string }
+  | { type: "steer_promoted"; inputId: string; content: string }
   // ── background job lifecycle. UIs render these; they never
   // drive the scheduler. `parentSessionId` lets a front-end filter to its own
   // session without knowing the job internals.

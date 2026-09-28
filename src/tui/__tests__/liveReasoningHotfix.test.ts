@@ -1,13 +1,15 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { tuiState } from "../state";
 import { renderReasoningPanel } from "../renderers/reasoningPanel";
 import { renderChatMessages } from "../renderers/chatRenderer";
 import { renderWorkingStatus } from "../renderers/statusRenderer";
 import { syncTranscriptPreservingReasoning } from "../events/agentWiring";
 import { stripAnsi, visibleWidth } from "../layout";
+import { setUnicodeCapable } from "../../term";
 
 describe("Live Reasoning Hotfix — UX and Stream Lifecycle", () => {
   beforeEach(() => {
+    setUnicodeCapable(true);
     tuiState.messages = [];
     tuiState.activeReasoningDraft = null;
     tuiState.reasoningText = "";
@@ -21,6 +23,10 @@ describe("Live Reasoning Hotfix — UX and Stream Lifecycle", () => {
     // outlives this file in the suite's shared module cache.
     tuiState.isStreaming = false;
     tuiState.startNewRun("sess_test_123");
+  });
+
+  afterEach(() => {
+    setUnicodeCapable(null);
   });
 
   it("1. first reasoning chunk becomes visible before tool call", () => {

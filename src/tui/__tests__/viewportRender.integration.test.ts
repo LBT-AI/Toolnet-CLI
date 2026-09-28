@@ -5,6 +5,7 @@ import { createChatViewport, pinToTail, resolveViewport, scrollUp, type LineMess
 import { computeLayoutGeometry } from "../layout";
 import { handleKey, resetInputState } from "../input/inputHandler";
 import { messageQueue } from "../../lib/messageQueue";
+import { setUnicodeCapable } from "../../term";
 import type { Msg } from "../types";
 
 /**
@@ -145,6 +146,7 @@ function safeChatRange(composerRow: number, activityLines: number): [number, num
 
 describe("TUI frame viewport — scroll & chrome stability", () => {
   beforeEach(() => {
+    setUnicodeCapable(true);
     resetInputState();
     tuiState.clearMessages();
     tuiState.chatViewport = createChatViewport();
@@ -163,6 +165,7 @@ describe("TUI frame viewport — scroll & chrome stability", () => {
   });
 
   afterEach(() => {
+    setUnicodeCapable(null);
     tuiState.activeToolActivity = null;
     tuiState.isStreaming = false;
     tuiState.statusText = "";

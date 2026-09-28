@@ -26,7 +26,7 @@ import {
 import type { Msg } from "../../tui/types";
 
 describe("canonical markdown renderer (Task 6)", () => {
-  beforeEach(() => setUnicodeCapable(null));
+  beforeEach(() => setUnicodeCapable(true));
   afterEach(() => setUnicodeCapable(null));
 
   describe("inline markers", () => {

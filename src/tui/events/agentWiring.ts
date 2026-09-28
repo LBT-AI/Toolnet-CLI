@@ -280,6 +280,11 @@ export function buildTuiAgentCallbacks(runId: string): {
           tuiState.agentPhase = "compacting";
           statusManager.update("Compacting context…");
           break;
+        case "steer_promoted":
+          tuiState.appendMessage({ role: "user", content: event.content });
+          tuiState.saveCurrentSession();
+          tuiState.requestRender();
+          break;
         case "tool-result": {
           const wasCancelled = tuiState.messages.some(
             (m) => m.role === "tool" && m.tool_call_id === event.callId && (m as any).cancelled
@@ -355,6 +360,12 @@ export function buildTuiAgentCallbacks(runId: string): {
           tuiState.finalizeAssistantDraft("agent-complete");
           tuiState.agentPhase = "done";
           break;
+        case "error":
+          tuiState.finalizeActiveReasoning("error");
+          tuiState.finalizeAssistantDraft("error");
+          tuiState.agentPhase = "error";
+          statusManager.failed(event.error);
+          break;
         default:
           break;
       }
@@ -362,8 +373,8 @@ export function buildTuiAgentCallbacks(runId: string): {
   };
 }
 
-export async function sendMessage(text: string): Promise<void> {
-  if (!text.trim()) return;
+export async function sendMessage(text: string, isContinuation = false): Promise<void> {
+  if (!text.trim() && !isContinuation) return;
 
   if (text.startsWith("/")) {
     await handleSlashCommand(text.trim());
@@ -386,7 +397,9 @@ export async function sendMessage(text: string): Promise<void> {
   // Initialize fresh run with isolated runId and reset reasoning draft
   const runId = tuiState.startNewRun(tuiState.currentSessionId);
 
-  tuiState.appendMessage({ role: "user", content: text });
+  if (text.trim()) {
+    tuiState.appendMessage({ role: "user", content: text });
+  }
 
   // Explicit language request ("trả lời bằng tiếng Việt", "用中文", ...)
   // locks the response language for the session; otherwise it stays "auto"
@@ -538,24 +551,22 @@ export async function sendMessage(text: string): Promise<void> {
 
     if (!result.success) {
       statusManager.failed(result.error || "Execution failed");
+      tuiState.agentPhase = "error";
+    } else {
+      tuiState.agentPhase = "done";
+      const reasoningDoneMsg =
+        tuiState.reasoningTokens > 0
+          ? `Done · ${tuiState.reasoningTokens.toLocaleString()} reasoning tokens`
+          : undefined;
+      if (reasoningDoneMsg && (tuiState.reasoningText || tuiState.messages.some((m) => m.role === "reasoning"))) {
+        statusManager.done(`✔ ${reasoningDoneMsg}`);
+      } else {
+        statusManager.done();
+      }
     }
+    
     tuiState.saveCurrentSession();
     tuiState.requestRender();
-
-    // Do NOT pin to the tail here. Finishing a turn is a BACKGROUND event: if
-    // the user scrolled up to read history, snapping the viewport to the bottom
-    // yanks them away from the row they were reading. Follow-tail is re-armed
-    // only when the user scrolls to the bottom edge or submits a new prompt.
-    tuiState.agentPhase = "done";
-    const reasoningDoneMsg =
-      tuiState.reasoningTokens > 0
-        ? `Done · ${tuiState.reasoningTokens.toLocaleString()} reasoning tokens`
-        : undefined;
-    if (reasoningDoneMsg && (tuiState.reasoningText || tuiState.messages.some((m) => m.role === "reasoning"))) {
-      statusManager.done(`✔ ${reasoningDoneMsg}`);
-    } else {
-      statusManager.done();
-    }
   } catch (err: any) {
     tuiState.finalizeActiveReasoning("error");
     if (err?.name === "AbortError") {
@@ -600,6 +611,19 @@ export async function sendMessage(text: string): Promise<void> {
     // NOTE: `agent.start` / `agent.end` are fired by AgentHarness.executeLoop,
     // the single loop entry every front-end uses — not here. Firing them in the
     // TUI would double-report the lifecycle.
+
+    // ── Completion Boundary: Re-check pending steers ──
+    // A steer might have arrived exactly while we were returning from the harness
+    // but before we reached this block. We must not drop into idle if work remains.
+    if (pendingInputs.count(tuiState.currentSessionId) > 0) {
+      tuiState.setStatus("Processing queued follow-up…");
+      tuiState.saveCurrentSession();
+      tuiState.requestRender();
+      setTimeout(() => {
+        sendMessage("", true).catch(() => {});
+      }, 0);
+      return;
+    }
 
     if (messageQueue.size() > 0) {
       const nextTask = messageQueue.dequeue();

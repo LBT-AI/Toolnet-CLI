@@ -118,11 +118,34 @@ export function tokenizeShell(command: string): string[] {
 
       // Delimiters
       if (parenDepth === 0) {
-        // Multi-char operators: &&, ||, >>, 2>, &>
+        // Check 3-char operators: 2>>, 1>>, &>>
+        if (
+          (ch === "2" && command[i + 1] === ">" && command[i + 2] === ">") ||
+          (ch === "1" && command[i + 1] === ">" && command[i + 2] === ">") ||
+          (ch === "&" && command[i + 1] === ">" && command[i + 2] === ">") ||
+          (ch === "2" && command[i + 1] === ">" && command[i + 2] === "&" && command[i + 3] === "1") // 2>&1
+        ) {
+          if (current.trim()) tokens.push(current.trim());
+          if (ch === "2" && command[i + 2] === "&") {
+            tokens.push("2>&1");
+            i += 3;
+          } else {
+            tokens.push(ch + command[i + 1] + command[i + 2]);
+            i += 2;
+          }
+          current = "";
+          continue;
+        }
+
+        // Multi-char operators: &&, ||, >>, 2>, 1>, &>, >&
         if (
           (ch === "&" && command[i + 1] === "&") ||
           (ch === "|" && command[i + 1] === "|") ||
-          (ch === ">" && command[i + 1] === ">")
+          (ch === ">" && command[i + 1] === ">") ||
+          (ch === "2" && command[i + 1] === ">") ||
+          (ch === "1" && command[i + 1] === ">") ||
+          (ch === "&" && command[i + 1] === ">") ||
+          (ch === ">" && command[i + 1] === "&")
         ) {
           if (current.trim()) tokens.push(current.trim());
           tokens.push(ch + command[i + 1]);
@@ -261,7 +284,17 @@ export function parseShellCommand(commandStr: string): ShellParseResult {
       }
 
       // Redirections: >, >>, <, 2>, etc.
-      if (tok === ">" || tok === ">>" || tok === "<" || tok === "2>" || tok === "2>>" || tok === "&>") {
+      if (
+        tok === ">" || tok === ">>" || tok === "<" || 
+        tok === "2>" || tok === "2>>" || tok === "&>" || 
+        tok === "1>" || tok === "1>>" || tok === ">&" ||
+        tok === "2>&1"
+      ) {
+        if (tok === "2>&1") {
+          redirections.push({ type: "2>&1", target: "1" });
+          idx++;
+          continue;
+        }
         const nextTok = seg[idx + 1];
         if (nextTok) {
           const targetClean = unquoteShellToken(nextTok);
