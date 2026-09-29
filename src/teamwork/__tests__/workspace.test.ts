@@ -1,6 +1,8 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { isPathInsideWorkspace } from "../../lib/permissions";
 import {
   initWorkspace,
   setWorkspaceRoot,
@@ -16,6 +18,19 @@ import { pwdCommand } from "../../commands/pwd";
 import { cdCommand } from "../../commands/cd";
 import { workspaceCommand } from "../../commands/workspace";
 import type { CommandContext } from "../../commands/index";
+
+/** Symlink support is a host privilege (unprivileged Windows cannot create
+ * them); where it is missing the containment case is reported as a skip. */
+const canSymlink = (() => {
+  const probe = path.join(os.tmpdir(), `toolnet-symlink-probe-${process.pid}`);
+  try {
+    fs.symlinkSync(process.cwd(), probe, "dir");
+    fs.rmSync(probe, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 describe("Workspace Management & Path Resolution", () => {
   const originalCwd = process.cwd();
@@ -92,6 +107,27 @@ describe("Workspace Management & Path Resolution", () => {
       }
     }
   });
+
+  test.skipIf(!canSymlink)(
+    "a workspace reached through a symlink still contains its relative paths",
+    () => {
+      // macOS temp dirs sit behind the /var → /private/var symlink, so the root
+      // and a target path can legitimately disagree on their canonical form.
+      // Regression: a second, weaker containment implementation denied every
+      // relative path in that case.
+      const real = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-symlink-ws-"));
+      const link = `${real}-link`;
+      fs.symlinkSync(real, link, "dir");
+      try {
+        expect(isPathInsideWorkspace("src/thing.ts", link, link).isInside).toBe(true);
+        expect(isPathInsideWorkspace(path.join(link, "src", "thing.ts"), link, link).isInside).toBe(true);
+        expect(isPathInsideWorkspace("../../escape.ts", link, link).isInside).toBe(false);
+      } finally {
+        fs.rmSync(real, { recursive: true, force: true });
+        fs.rmSync(link, { force: true });
+      }
+    },
+  );
 
   test("toolBash runs command with cwd = workspaceRoot", async () => {
     setWorkspaceRoot(subProj);

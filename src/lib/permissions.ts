@@ -39,76 +39,15 @@ export function setSandboxMode(mode: SandboxMode): void {
   } catch {}
 }
 
-export function getRealWorkspaceRoot(workspaceRoot?: string): string {
-  const root = workspaceRoot || process.cwd();
-  try {
-    return fs.realpathSync(root);
-  } catch {
-    return path.resolve(root);
-  }
-}
-
-export function resolveRealPath(targetPath: string, cwd?: string): string {
-  const baseCwd = cwd || process.cwd();
-  const absPath = path.isAbsolute(targetPath) ? path.normalize(targetPath) : path.resolve(baseCwd, targetPath);
-
-  try {
-    return fs.realpathSync(absPath);
-  } catch {
-    const parentDir = path.dirname(absPath);
-    const fileName = path.basename(absPath);
-    try {
-      const realParent = fs.realpathSync(parentDir);
-      return path.join(realParent, fileName);
-    } catch {
-      return absPath;
-    }
-  }
-}
-
-export function isPathInsideWorkspace(
-  targetPath: string,
-  workspaceRoot?: string,
-  cwd?: string
-): {
-  isInside: boolean;
-  resolvedPath: string;
-  realWorkspaceRoot: string;
-  relative: string;
-} {
-  const realRoot = getRealWorkspaceRoot(workspaceRoot);
-  const realTarget = resolveRealPath(targetPath, cwd);
-
-  let rel = path.relative(realRoot, realTarget);
-  let isInside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-
-  if (!isInside && !workspaceRoot) {
-    // Multi-root fallback: consult ALL registered workspace roots. This keeps
-    // tool-level boundary checks (codingAgent, vision, etc.) consistent with
-    // the workspace-roots model used elsewhere in the CLI.
-    // Only when no explicit root was passed — an explicit root is authoritative.
-    try {
-      const { getWorkspaceRoots } = require("./codingAgent");
-      const roots: string[] = getWorkspaceRoots();
-      for (const root of roots) {
-        const rootReal = getRealWorkspaceRoot(root);
-        const rootRel = path.relative(rootReal, realTarget);
-        if (rootRel === "" || (!rootRel.startsWith("..") && !path.isAbsolute(rootRel))) {
-          isInside = true;
-          rel = rootRel;
-          break;
-        }
-      }
-    } catch {}
-  }
-
-  return {
-    isInside,
-    resolvedPath: realTarget,
-    realWorkspaceRoot: realRoot,
-    relative: rel,
-  };
-}
+// Path containment lives in the security kernel. Re-exported here (rather than
+// re-implemented) so there is exactly ONE workspace-boundary rule: a second
+// copy drifted and denied every relative path when the workspace root was
+// reached through a symlink (e.g. macOS `/var` → `/private/var`).
+export {
+  getRealWorkspaceRoot,
+  isPathInsideWorkspace,
+  resolveRealPath,
+} from "./security/workspacePolicy";
 
 export function isDangerousShellCommand(
   command: string,
