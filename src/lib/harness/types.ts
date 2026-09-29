@@ -81,6 +81,13 @@ export interface HarnessConfig {
 export interface ExecutionOptions {
   prompt?: string;
   model?: string;
+  /**
+   * Phase 3: opt OUT of bounded adaptive continuation. Default (undefined /
+   * true): the resolved soft budget can earn bounded, progress-gated
+   * extensions. `false` keeps the EXACT legacy behavior — the budget is a
+   * hard stop (`Exceeded maximum turn count (N)`).
+   */
+  adaptiveContinuation?: boolean;
   gatewayUrl?: string;
   baseUrl?: string;
   maxTurns?: number;

@@ -19,6 +19,22 @@ export {
 } from "./paths";
 export { SessionStore, sessionStore, type SessionStoreOptions, type SaveSessionOptions } from "./store";
 export { replaySession, selectCheckpointHead, type ReplayResult } from "./resume";
+// Deterministic session lifecycle (one foreground run, atomic completion
+// boundary, FIFO steer promotion, idle gate).
+export {
+  canSettleIdle,
+  canonicalRunError,
+  idleBlockers,
+  SessionRunDriver,
+  type ForegroundRun,
+  type IdleGateInputs,
+  type RunKind,
+  type RunOutcome,
+  type SessionPhase,
+  type SessionRunDriverOptions,
+  type SettledRun,
+  type SubmitResult,
+} from "./lifecycle";
 export {
   normalizeWorkspaceIdentity,
   classifyWorkspace,

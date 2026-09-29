@@ -161,10 +161,21 @@ describe("74.8 golden E2E — rename getUser → findUser via LSP", () => {
 
     // 5. Run the workspace's real test suite as the final verification.
     // bun writes its report to stderr, so combine both streams before asserting.
+    // The fixture run is HERMETIC: agent/developer shell variables (notably
+    // CLAUDECODE, which makes bun print condensed test reports) must never
+    // leak in and change the report format this assertion depends on. Stripping
+    // them here is a test-isolation fix only — production behavior is untouched.
+    const fixtureEnv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value === undefined) continue;
+      if (/^CLAUDECODE$|^CLAUDE_CODE_/.test(key)) continue;
+      fixtureEnv[key] = value;
+    }
     const run = spawnSync(process.execPath, ["test", "src"], {
       cwd: workspace,
       timeout: 30000,
       encoding: "utf8",
+      env: fixtureEnv,
     });
     const report = `${run.stdout ?? ""}${run.stderr ?? ""}`;
     expect(run.status).toBe(0);

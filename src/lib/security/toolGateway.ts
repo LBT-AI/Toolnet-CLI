@@ -623,9 +623,11 @@ export class ToolGateway {
 
       const sanitizedJson = compressToolResult(redactSecrets(rawJson), name);
       let exitCode = 0;
+      let structuredError: any = undefined;
       try {
         const parsed = JSON.parse(rawJson);
         exitCode = parsed.exitCode !== undefined ? parsed.exitCode : (parsed.success === false ? 1 : 0);
+        structuredError = parsed.structuredError;
       } catch {}
 
       const requestSize = JSON.stringify(args).length;
@@ -714,6 +716,7 @@ export class ToolGateway {
         stdout: finalOutput,
         stderr: "",
         exitCode,
+        structuredError,
         allowed: true,
         decision: "ALLOW",
         riskLevel: decision.riskLevel,
@@ -764,6 +767,12 @@ export class ToolGateway {
         stdout: "",
         stderr: `Execution Error: ${errMsg}`,
         exitCode: 1,
+        // An executor throw is an internal failure, not a policy denial.
+        structuredError: {
+          code: "INTERNAL_ERROR",
+          message: `Internal tool execution error: ${errMsg}`,
+          retryable: false,
+        },
         allowed: false,
         decision: "DENY",
         reason: errMsg,

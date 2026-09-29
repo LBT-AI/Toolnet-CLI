@@ -133,10 +133,12 @@ describe("Abort: tool batch", () => {
     });
 
     expect(executed).toEqual(["a"]);
-    // Every original id still gets a message (model contract), but the
-    // unstarted ones carry the Cancelled marker.
+    // Every original id still gets a message (model contract), and all of them
+    // carry the Cancelled marker. The unstarted ones never ran. "a" was still
+    // in flight when the abort fired, so it settles CANCELLED and its late "ok"
+    // is ignored (Phase 1.5 exactly-once settlement).
     const cancelled = outcome.messages.filter((m) => m.content.includes("Cancelled"));
-    expect(cancelled.length).toBe(2);
+    expect(cancelled.length).toBe(3);
     expect(outcome.executedCount).toBe(1);
   });
 });

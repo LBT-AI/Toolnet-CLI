@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.4.0] - 2026-09-29
+### Added
+- **Adaptive turn budget**: long, genuinely progressing tasks now extend the soft turn budget in bounded chunks instead of dying at a fixed count, with a no-progress guard, an equivalent-failure loop guard and a hard safety cap.
+- **Structured error-driven recovery**: tool failures now carry machine-readable structured errors and a bounded, code-driven recovery policy (alternate tool, changed strategy, replan, or a deliberate stop) — never an unbounded retry loop.
+- **Durable session steer / continuation**: a follow-up submitted while a task is running is admitted as a session steer, promoted exactly once at the next turn boundary, and survives a crash via the session journal.
+- **Release hardening**: cross-platform CI, pinned Bun/Node toolchain, a tracked-file secret scan, reproducible binary builds with checksums, and a deterministic installer smoke test.
+
+### Fixed
+- **Tool-result correlation**: out-of-order and same-name tool results are matched by call id (never by position or name), including the streaming transcript reconciler.
+- **Browser capability**: the `browser` tool is only offered when a real Chromium/Playwright runtime is available; otherwise it returns a `TOOL_UNAVAILABLE` error that the recovery policy can route around.
+- **Web fetch resilience**: timeouts, transient network errors and HTTP status classes are classified deterministically; 4xx is never blindly retried and recovery is bounded.
+- **Read/file ergonomics**: `read_file` on a directory now suggests and recovers with `list_dir`.
+- **Security usability (false positives)**: safe `php -r` read-only inspection and `2>/dev/null` redirections are no longer blocked, while destructive inline payloads and protected-path writes stay denied.
+- **Session/steer lifecycle**: removed the empty-prompt continuation and the completion-boundary timers; one foreground request runs at a time, a failed run never settles as done, cancellation can no longer be resurrected by a late provider success, and a crashed run now resumes as `interrupted` with no destructive tool replay.
+- **Installer correctness**: a successful `install.sh` run no longer exits non-zero from an EXIT-trap unbound-variable error, and the Windows archive/member naming now matches `install.ps1` and the Scoop manifest.
+
+### Changed
+- Pinned the supported toolchain: Bun `1.4.0`, Node `22` (Node `>=20` supported). CI runs on Ubuntu, macOS and Windows and executes real CLI smoke tests.
+- `node-pty` is now a declared dev dependency so the PTY acceptance suites are reproducibly provisioned; they skip explicitly (never silently pass) when unavailable or off-POSIX.
+- Removed generated runtime/emulator state from version control and added `.gitignore` rules for `.wrangler/`, SQLite `-shm`/`-wal` files and release archives.
+
 ## [1.3.0] - 2026-09-27
 ### Added
 - Added ToolNet Skills as the default built-in MCP server for immediate usability without configuration.

@@ -10,6 +10,16 @@
  * Scripts use WAIT:<text> readiness markers instead of fixed cold-start
  * delays: keystrokes must never be assumed to land before the TUI has painted
  * its first frame and attached its stdin listener.
+ *
+ * Determinism / isolation:
+ *   - ROOT is resolved from this file, never process.cwd(), so the suite runs
+ *     identically from any working directory.
+ *   - The PTY is a POSIX pseudo-terminal; on Windows the tests SKIP explicitly
+ *     (never a silent pass) instead of depending on forkpty behaviour.
+ *   - When node-pty or the built entry is missing the tests SKIP explicitly, so
+ *     a green run can never hide an unexecuted acceptance.
+ *   - The child env strips agent/developer shell variables (notably CLAUDECODE)
+ *     so an ambient shell can never change the captured byte stream.
  */
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -31,22 +41,44 @@ try {
   pty = null;
 }
 
-const ROOT = process.cwd();
+const ROOT = join(import.meta.dir, "..", "..");
 const ENTRY = join(ROOT, "dist", "node", "index.js");
 const DRIVER = join(ROOT, "tests", "e2e", "pty", "driver.cjs");
 const hasEntry = existsSync(ENTRY);
+const posix = process.platform !== "win32";
+const ready = Boolean(pty) && hasEntry && posix;
+const cond = ready ? it : it.skip;
+
+const skipReason = !pty
+  ? "node-pty unavailable"
+  : !hasEntry
+    ? "run `bun run build` first"
+    : !posix
+      ? "PTY acceptance is POSIX-only"
+      : "";
 
 interface PtyResult {
   output: string;
   exitCode: number;
 }
 
+/** Child env with agent/developer shell state removed. */
+function isolatedEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (/^CLAUDECODE$|^CLAUDE_CODE_/.test(key)) continue;
+    env[key] = value;
+  }
+  return env;
+}
+
 function runDriver(cols: number, rows: number, script: Array<[string | number, string]>, timeoutMs = 40_000): PtyResult | null {
-  if (!pty || !hasEntry) return null;
+  if (!ready) return null;
   const res = spawnSync(
     "node",
     [DRIVER, "--cols", String(cols), "--rows", String(rows), "--entry", ENTRY, "--script", JSON.stringify(script)],
-    { cwd: ROOT, encoding: "utf8", timeout: timeoutMs },
+    { cwd: ROOT, encoding: "utf8", timeout: timeoutMs, env: isolatedEnv() },
   );
   if (res.status !== 0) throw new Error(`pty driver failed: ${res.stderr || res.stdout}`);
   const parsed = JSON.parse(res.stdout);
@@ -54,18 +86,13 @@ function runDriver(cols: number, rows: number, script: Array<[string | number, s
   return { output: parsed.output, exitCode: parsed.exitCode };
 }
 
-describe("PTY acceptance (small terminals, resize, restore)", () => {
-  it("node-pty is available", () => {
-    if (!pty || !hasEntry) {
-      console.log(
-        "PTY acceptance skipped — needs node-pty installed and `bun run build` output present",
-      );
-    }
-    expect(true).toBe(true);
+describe(`PTY acceptance (small terminals, resize, restore)${skipReason ? ` — skipped: ${skipReason}` : ""}`, () => {
+  cond("node-pty and the built entry are available", () => {
+    expect(ready).toBe(true);
   });
 
   for (const [cols, rows] of SIZES) {
-    it(
+    cond(
       `launches and renders at ${cols}x${rows}, prompt visible, clean teardown`,
       () => {
         const res = runDriver(cols, rows, [
@@ -75,7 +102,8 @@ describe("PTY acceptance (small terminals, resize, restore)", () => {
           [400, "\u0003"], // Ctrl+C again → exit
           [2500, ""], // let the TUI exit and tear down
         ]);
-        if (!res) return; // conditional skip
+        expect(res).not.toBeNull();
+        if (!res) return;
 
         // Alt screen was entered…
         expect(res.output).toContain("\u001b[?1049h");
@@ -92,7 +120,7 @@ describe("PTY acceptance (small terminals, resize, restore)", () => {
     );
   }
 
-  it(
+  cond(
     "survives a live resize during streaming render (80x24 → 120x40 → 60x20)",
     () => {
       const res = runDriver(80, 24, [
@@ -103,7 +131,8 @@ describe("PTY acceptance (small terminals, resize, restore)", () => {
         [400, "\u0003"],
         [2500, ""],
       ]);
-      if (!res) return; // conditional skip
+      expect(res).not.toBeNull();
+      if (!res) return;
 
       expect(res.output).toContain("\u001b[?1049h");
       expect(res.output).toContain("\u001b[?1049l");

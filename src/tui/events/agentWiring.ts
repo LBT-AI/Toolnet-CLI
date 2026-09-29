@@ -22,8 +22,26 @@ import { restoreTerminal } from "../../lib/terminalLifecycle";
 import { pinToTail } from "../viewport";
 import { pendingInputs } from "../../core/agent/pendingInput";
 import { readPendingInputs } from "../../core/session/pendingInputJournal";
+// Phase 6 — the ONE session lifecycle driver (foreground slot, atomic
+// completion boundary, FIFO steer promotion, idle gate).
+import {
+  SessionRunDriver,
+  type ForegroundRun,
+  type RunOutcome,
+  type SettledRun,
+} from "../../core/session";
+import { observabilityHub } from "../../lib/observability/hub";
 import { getActiveProvider, getActiveDefaultModel } from "../../providers";
 import { statusManager } from "../statusService";
+
+/**
+ * Phase 2.2 — keep the live-activity heartbeat alive whenever a tool is
+ * running. Safe to call from every tool lifecycle event: it is a no-op while
+ * the status timer already ticks or when nothing is running.
+ */
+function ensureActivityHeartbeat(): void {
+  statusManager.ensureActivityHeartbeat();
+}
 import { messageQueue } from "../../lib/messageQueue";
 import { providerPicker } from "../providerPicker";
 import { assertPrimarySystemMessageInvariant } from "../../lib/context";
@@ -77,6 +95,14 @@ function transcriptMessagesCompatible(currentMsg: any, engineMsg: any): boolean 
     return false;
   }
   if (currentMsg.role === "assistant") {
+    // Phase 2.1: a responseKey is a HARD semantic boundary. Two assistant
+    // messages may share a key ONLY when they are generation segments of the
+    // SAME response. A responseKey match joins them; different/missing keys
+    // fall through to the tool-call-id heuristic below so unrelated turns are
+    // never merged (requires test F — next-turn isolation).
+    const currentKey = typeof currentMsg.responseKey === "string" ? currentMsg.responseKey : "";
+    const engineKey = typeof engineMsg.responseKey === "string" ? engineMsg.responseKey : "";
+    if (currentKey && engineKey) return currentKey === engineKey;
     const currentIds = toolCallIds(currentMsg);
     const engineIds = toolCallIds(engineMsg);
     if (currentIds.length > 0 && engineIds.length > 0) {
@@ -124,14 +150,31 @@ function mergeAssistantContent(currentMsg: any, engineMsg: any): string {
   if (current === engine) return current;
   if (engine.endsWith(current)) return engine;
   if (current.endsWith(engine)) return current;
-  return current;
+  // Phase 2.1: the engine's synthesis (gen2) is APPENDED to the TUI's pre-tool
+  // text (gen1) — prefix containment is expected for two segments of one
+  // response, not duplication. Requires tests A/B.
+  return `${current}${engine}`;
 }
 
 function mergeTranscriptMessage(currentMsg: any, engineMsg: any): any {
-  const merged = { ...engineMsg };
+  const merged = { ...currentMsg, ...engineMsg };
   if (typeof currentMsg?.id === "string" && currentMsg.id) merged.id = currentMsg.id;
   if (currentMsg?.role === "assistant") {
+    // Phase 2.1: the engine emits assistant messages per provider turn (gen1:
+    // pre-tool text + tool_calls, gen2: synthesis). Within ONE responseKey,
+    // tool_calls merge across segments — this is view-level continuation only;
+    // `result.messages` (the wire transcript the engine returns) is untouched.
+    const sameResponse =
+      typeof currentMsg?.responseKey === "string" &&
+      currentMsg.responseKey !== "" &&
+      currentMsg.responseKey === engineMsg?.responseKey;
     merged.content = mergeAssistantContent(currentMsg, engineMsg);
+    if (!sameResponse && Array.isArray(engineMsg?.tool_calls) && !Array.isArray(currentMsg?.tool_calls)) {
+      delete merged.tool_calls;
+    }
+    if (!sameResponse && Array.isArray(currentMsg?.tool_calls) && !Array.isArray(engineMsg?.tool_calls)) {
+      merged.tool_calls = currentMsg.tool_calls;
+    }
   } else if (typeof currentMsg?.content === "string" && (!merged.content || !String(merged.content).trim())) {
     merged.content = currentMsg.content;
   }
@@ -164,9 +207,19 @@ function mergeTranscriptMessages(currentMsgs: any[], engineMsgs: any[]): any[] {
       for (; eIdx < matchIdx; eIdx++) merged.push(engineMsgs[eIdx]);
       merged.push(mergeTranscriptMessage(currentMsg, engineMsgs[matchIdx]));
       eIdx = matchIdx + 1;
-    } else if (eIdx < engineMsgs.length && engineMsgs[eIdx].role === currentMsg.role) {
+    } else if (eIdx < engineMsgs.length && engineMsgs[eIdx].role === currentMsg.role && currentMsg.role !== "tool") {
       merged.push(mergeTranscriptMessage(currentMsg, engineMsgs[eIdx++]));
     } else {
+      if (currentMsg.role === "tool" && currentMsg.tool_call_id) {
+        const alreadyInEngine = engineMsgs.some(m => m.role === "tool" && m.tool_call_id === currentMsg.tool_call_id);
+        if (alreadyInEngine) {
+           const existingIdx = merged.findIndex(m => m.role === "tool" && m.tool_call_id === currentMsg.tool_call_id);
+           if (existingIdx !== -1) {
+             merged[existingIdx] = mergeTranscriptMessage(currentMsg, merged[existingIdx]);
+           }
+           continue;
+        }
+      }
       merged.push(currentMsg);
     }
   }
@@ -192,6 +245,14 @@ export function syncTranscriptPreservingReasoning(currentMsgs: any[], engineMsgs
  *
  * Exported so the single-append contract is covered by a regression test that
  * drives the SAME handler the TUI uses.
+ *
+ * Phase 2.3: once the run reaches a TERMINAL event for this handler set
+ * (`cancelled` | `error` | `agent-complete`), the callbacks are "settled":
+ * any in-flight `onTextDelta` / `reasoning-start` / `reasoning-delta` that
+ * still arrives afterwards (a late async chunk racing the abort, a stray
+ * provider event after the engine already settled the run) is DROPPED. The
+ * transcript can never gain text after the terminal state was painted —
+ * no late delta after cancellation, no resurrection after an error.
  */
 export function buildTuiAgentCallbacks(runId: string): {
   onTextDelta: (delta: string) => void;
@@ -200,8 +261,15 @@ export function buildTuiAgentCallbacks(runId: string): {
   // Maps a tool callId to its name, shared by the tool-call/result/error cases.
   const toolNames = new Map<string, string>();
 
+  // Phase 2.3 terminal-state guard: set once a terminal event for THIS run
+  // has been processed. Terminal events also clear any staged tool calls so a
+  // double terminal event cannot leak stale tools into a later response.
+  let settled = false;
+  let terminalPhase: "done" | "error" | "cancelled" | null = null;
+
   return {
     onTextDelta: (delta) => {
+      if (settled) return;
       // Content arrived -> finalize any active reasoning block for this turn
       tuiState.finalizeActiveReasoning("text-delta");
       // First visible token after thinking (or straight from idle on a
@@ -215,6 +283,7 @@ export function buildTuiAgentCallbacks(runId: string): {
     onEvent: (event) => {
       switch (event.type) {
         case "reasoning-start":
+          if (settled) break;
           tuiState.appendReasoningDelta("", {
             sessionId: tuiState.currentSessionId,
             runId,
@@ -224,6 +293,7 @@ export function buildTuiAgentCallbacks(runId: string): {
           statusManager.update("Thinking");
           break;
         case "reasoning-delta":
+          if (settled) break;
           tuiState.appendReasoningDelta(event.text, {
             sessionId: tuiState.currentSessionId,
             runId,
@@ -244,6 +314,7 @@ export function buildTuiAgentCallbacks(runId: string): {
           toolNames.set(event.callId, event.name);
           statusManager.updateTool(event.name, event.input as any);
           tuiState.openActiveToolActivity(event.callId, event.name, event.input);
+          ensureActivityHeartbeat();
           tuiState.attachToolCall(
             {
               id: event.callId,
@@ -267,6 +338,7 @@ export function buildTuiAgentCallbacks(runId: string): {
             elapsedMs: event.elapsedMs,
             tail: event.tail,
           });
+          ensureActivityHeartbeat();
           break;
         case "permission-required":
           // Canonical "blocked on the user" state: the tool is NOT running, so
@@ -336,6 +408,14 @@ export function buildTuiAgentCallbacks(runId: string): {
           break;
         }
         case "cancelled": {
+          // Phase 2.3: first terminal event settles this handler set — every
+          // later text/reasoning delta for the run is dropped. Idempotent: a
+          // second terminal event re-runs nothing (no duplicated cancelled
+          // rows, no double finalize, terminal phase stays the FIRST one).
+          if (terminalPhase) break;
+          settled = true;
+          terminalPhase = "cancelled";
+          toolNames.clear();
           // Cancel EVERY running tool, not just the last-started one, and leave
           // one cancelled transcript row per tool so call/result pairs survive.
           const cancelledActivities = tuiState.cancelAllToolActivities();
@@ -356,11 +436,26 @@ export function buildTuiAgentCallbacks(runId: string): {
           break;
         }
         case "agent-complete":
+          // A terminal event (error/cancelled) already settled this run:
+          // never re-finalize and never flip the terminal phase to DONE.
+          if (terminalPhase) break;
+          settled = true;
+          terminalPhase = "done";
+          toolNames.clear();
           tuiState.finalizeActiveReasoning("agent-complete");
           tuiState.finalizeAssistantDraft("agent-complete");
           tuiState.agentPhase = "done";
           break;
         case "error":
+          // Terminal: already-received content stays in the transcript exactly
+          // as streamed (finalize only detaches the draft — it never rewrites
+          // message content), the phase is ERROR (never a fake DONE), and this
+          // handler set is settled against any late delta. Idempotent like
+          // `cancelled`: the FIRST terminal event owns the terminal phase.
+          if (terminalPhase) break;
+          settled = true;
+          terminalPhase = "error";
+          toolNames.clear();
           tuiState.finalizeActiveReasoning("error");
           tuiState.finalizeAssistantDraft("error");
           tuiState.agentPhase = "error";
@@ -371,6 +466,120 @@ export function buildTuiAgentCallbacks(runId: string): {
       }
     },
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 6 — deterministic session lifecycle
+//
+// ONE `SessionRunDriver` per session owns the foreground slot, the atomic
+// completion boundary (steer promotion + queue drain) and the idle gate. The
+// previous implementation re-entered the loop through `setTimeout(() =>
+// sendMessage("", true), 0)` / `setTimeout(..., 50)`; both are gone — the next
+// work is chosen synchronously when the run settles, so a steer that arrives
+// exactly at completion becomes the next run with no timer window and no empty
+// synthetic prompt.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const sessionDrivers = new Map<string, SessionRunDriver>();
+
+function driverForSession(sessionId = tuiState.currentSessionId): SessionRunDriver {
+  let driver = sessionDrivers.get(sessionId);
+  if (!driver) {
+    driver = new SessionRunDriver({
+      sessionId,
+      run: (run) => runForegroundTurn(run),
+      // Promote pending steers FIFO, exactly once (durable via the registry's
+      // journal): the promoted content IS the continuation's user message.
+      promoteSteers: () => {
+        const pending = pendingInputs.pending(sessionId);
+        if (pending.length === 0) return [];
+        return pendingInputs
+          .promote(sessionId, pending.map((input) => input.id))
+          .map((input) => input.content);
+      },
+      dequeueMessage: () => {
+        const next = messageQueue.dequeue();
+        return next ? { id: next.id, text: next.text } : null;
+      },
+      // One foreground request per session: a submit that arrives while a run
+      // is in flight is admitted as a steer instead of racing a second request.
+      admitSteer: (content) => {
+        pendingInputs.admit(sessionId, content, { delivery: "steer" });
+      },
+      // Invariant 4: IDLE only when nothing is in flight and nothing is queued.
+      externalIdleBlockers: () => {
+        const blockers: string[] = [];
+        if (pendingInputs.count(sessionId) > 0) blockers.push("pending-steer");
+        if (messageQueue.size() > 0) blockers.push("queued-message");
+        if (tuiState.pendingConfirmation) blockers.push("pending-permission");
+        if (tuiState.getActiveToolActivities().length > 0) blockers.push("active-tool");
+        if (tuiState.agentPhase === "compacting") blockers.push("compaction");
+        return blockers;
+      },
+      abort: () => {
+        try {
+          tuiState.abortController?.abort();
+        } catch {
+          /* an abort hook must never break the settle path */
+        }
+      },
+      onSettle: settleForegroundRun,
+      onIdle: () => {
+        messageQueue.setIsProcessing(false);
+        tuiState.agentPhase = "idle";
+        tuiState.saveCurrentSession();
+        tuiState.requestRender();
+      },
+    });
+    sessionDrivers.set(sessionId, driver);
+  }
+  return driver;
+}
+
+/**
+ * Exactly-once terminal transition for a settled run. FAILED never becomes DONE:
+ * the phase is decided once, by the driver, from the run outcome.
+ */
+function settleForegroundRun(settled: SettledRun): void {
+  if (settled.phase === "cancelled") {
+    tuiState.agentPhase = "cancelled";
+    statusManager.cancel();
+  } else if (settled.phase === "failed") {
+    tuiState.agentPhase = "error";
+    statusManager.failed(settled.error || "Execution failed");
+  } else {
+    tuiState.agentPhase = "done";
+    const reasoningDoneMsg =
+      tuiState.reasoningTokens > 0
+        ? `✔ Done · ${tuiState.reasoningTokens.toLocaleString()} reasoning tokens`
+        : undefined;
+    if (reasoningDoneMsg && (tuiState.reasoningText || tuiState.messages.some((m) => m.role === "reasoning"))) {
+      statusManager.done(reasoningDoneMsg);
+    } else if (settled.next) {
+      // The boundary is atomic: the next run starts in this same step, so keep
+      // the spinner alive instead of flashing a terminal "Done".
+      statusManager.update(
+        settled.next.kind === "continuation"
+          ? "Processing steer…"
+          : `Processing next queued message (${messageQueue.size()} remaining)…`,
+      );
+    } else {
+      statusManager.done();
+    }
+  }
+  try {
+    observabilityHub.info("tui", "session.run_settled", {
+      outcome: settled.phase,
+      metadata: {
+        sessionId: settled.run.kind === "continuation" ? "steer" : "user",
+        runId: settled.run.runId,
+        kind: settled.run.kind,
+        hasNext: Boolean(settled.next),
+      } as any,
+    });
+  } catch {
+    /* observability must never break the lifecycle */
+  }
 }
 
 export async function sendMessage(text: string, isContinuation = false): Promise<void> {
@@ -392,12 +601,53 @@ export async function sendMessage(text: string, isContinuation = false): Promise
     return;
   }
 
+  const driver = driverForSession();
+
+  // A continuation with no text is an explicit "resume leftover work" request:
+  // the driver promotes pending steers / drains the queue. There is never an
+  // empty synthetic user prompt.
+  if (isContinuation && !text.trim()) {
+    driver.resumePendingWork();
+    await driver.whenSettled();
+    return;
+  }
+
+  if (!getActiveProvider()) {
+    stopSpinner();
+    tuiState.appendMessage({ role: "assistant", content: "✖ Error: No provider configured. Use /provider add to set one up." });
+    tuiState.setStatus("✖ No provider configured");
+    tuiState.requestRender();
+    return;
+  }
+
+  const submitted = driver.submit(text);
+  if (!submitted.started) {
+    // A run is in flight: the input was admitted as a steer (FIFO, durable).
+    tuiState.requestRender();
+    return;
+  }
+  await driver.whenSettled();
+}
+
+/**
+ * ONE foreground turn: append the user-visible message(s), run the shared
+ * agent engine, adopt the transcript, and return the outcome. Terminal status
+ * is NOT decided here — the driver's settle owns `done|failed|cancelled`.
+ */
+async function runForegroundTurn(run: ForegroundRun): Promise<RunOutcome> {
+  const text = run.text;
   messageQueue.setIsProcessing(true);
 
   // Initialize fresh run with isolated runId and reset reasoning draft
   const runId = tuiState.startNewRun(tuiState.currentSessionId);
 
-  if (text.trim()) {
+  if (run.kind === "continuation") {
+    // One user message per promoted steer, in FIFO order — the promoted text is
+    // the prompt, so the model never sees an empty synthetic user turn.
+    for (const promoted of run.promoted) {
+      tuiState.appendMessage({ role: "user", content: promoted });
+    }
+  } else if (text.trim()) {
     tuiState.appendMessage({ role: "user", content: text });
   }
 
@@ -428,11 +678,10 @@ export async function sendMessage(text: string, isContinuation = false): Promise
     // tool_calls parsing, no direct tool execution, no provider-specific code.
     const provider = getActiveProvider();
     if (!provider) {
-      stopSpinner();
+      // Defensive: `sendMessage` already refuses without a provider. A failure
+      // is never reported as a success here.
       tuiState.appendMessage({ role: "assistant", content: "✖ Error: No provider configured. Use /provider add to set one up." });
-      tuiState.setStatus("✖ No provider configured");
-      tuiState.requestRender();
-      return;
+      return { success: false, error: "No provider configured. Use /provider add to set one up." };
     }
 
     tuiState.setStatus("Calling API…");
@@ -549,30 +798,17 @@ export async function sendMessage(text: string, isContinuation = false): Promise
       }
     }
 
-    if (!result.success) {
-      statusManager.failed(result.error || "Execution failed");
-      tuiState.agentPhase = "error";
-    } else {
-      tuiState.agentPhase = "done";
-      const reasoningDoneMsg =
-        tuiState.reasoningTokens > 0
-          ? `Done · ${tuiState.reasoningTokens.toLocaleString()} reasoning tokens`
-          : undefined;
-      if (reasoningDoneMsg && (tuiState.reasoningText || tuiState.messages.some((m) => m.role === "reasoning"))) {
-        statusManager.done(`✔ ${reasoningDoneMsg}`);
-      } else {
-        statusManager.done();
-      }
-    }
-    
+    // Terminal status is decided by the driver's settle (exactly once), never
+    // here — a FAILED run can therefore never be painted as DONE.
     tuiState.saveCurrentSession();
     tuiState.requestRender();
+    return result.success ? { success: true } : { success: false, error: result.error };
   } catch (err: any) {
     tuiState.finalizeActiveReasoning("error");
     if (err?.name === "AbortError") {
-      tuiState.agentPhase = "cancelled";
-      statusManager.cancel();
       tuiState.appendMessage({ role: "assistant", content: "(cancelled)" });
+      tuiState.saveCurrentSession();
+      return { success: false, error: "Cancelled", cancelled: true };
     } else if (err?.message?.includes("401") || err?.status === 401) {
       statusManager.failed("Authentication failed (401).");
       tuiState.appendMessage({ role: "system", content: "⚠️ API Key expired or invalid (401)." });
@@ -600,47 +836,25 @@ export async function sendMessage(text: string, isContinuation = false): Promise
         }
       }
     } else {
-      tuiState.agentPhase = "error";
-      statusManager.failed(err?.message || String(err));
-      tuiState.appendMessage({ role: "assistant", content: "✖ Error: " + (err?.message || String(err)) });
-      tuiState.showToast("⚠️ " + (err?.message || String(err)), 3500);
+      const message = err?.message || String(err);
+      tuiState.appendMessage({ role: "assistant", content: "✖ Error: " + message });
+      tuiState.showToast("⚠️ " + message, 3500);
+      tuiState.saveCurrentSession();
+      return { success: false, error: message };
     }
     tuiState.saveCurrentSession();
+    return { success: false, error: "Authentication failed (401)." };
   } finally {
     tuiState.abortController = null;
     // NOTE: `agent.start` / `agent.end` are fired by AgentHarness.executeLoop,
     // the single loop entry every front-end uses — not here. Firing them in the
     // TUI would double-report the lifecycle.
-
-    // ── Completion Boundary: Re-check pending steers ──
-    // A steer might have arrived exactly while we were returning from the harness
-    // but before we reached this block. We must not drop into idle if work remains.
-    if (pendingInputs.count(tuiState.currentSessionId) > 0) {
-      tuiState.setStatus("Processing queued follow-up…");
-      tuiState.saveCurrentSession();
-      tuiState.requestRender();
-      setTimeout(() => {
-        sendMessage("", true).catch(() => {});
-      }, 0);
-      return;
-    }
-
-    if (messageQueue.size() > 0) {
-      const nextTask = messageQueue.dequeue();
-      if (nextTask) {
-        tuiState.setStatus(`Processing next queued message (${messageQueue.size()} remaining)…`);
-        tuiState.saveCurrentSession();
-        tuiState.requestRender();
-        setTimeout(() => {
-          sendMessage(nextTask.text).catch(() => {});
-        }, 50);
-        return;
-      }
-    }
-    messageQueue.setIsProcessing(false);
+    //
+    // Phase 6: the completion boundary (pending steers → queued messages → idle)
+    // is NOT handled here. `SessionRunDriver.drain` decides the next work
+    // synchronously when this turn settles — no timers, no re-entrant
+    // `sendMessage("", true)`, no window where Idle can be shown with work left.
   }
-
-  tuiState.requestRender();
 }
 
 function stopSpinner(): void {

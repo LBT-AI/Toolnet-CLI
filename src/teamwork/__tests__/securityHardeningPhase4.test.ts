@@ -271,23 +271,33 @@ test("basic", () => { expect(1 + 1).toBe(2); });`);
       expect(policyEngine.isCapabilityAllowed("DYNAMIC_EXECUTION")).toBe(false);
     });
 
+    // Phase 4 (TN-R0-007A): the dynamic payload decides, not the interpreter
+    // name. `bash -c 'cat a | wc -l'` spawns processes → DYNAMIC_EXECUTION.
+    const dynamicCmd = "bash -c 'cat a | wc -l'";
+
     test("dynamic execution requires approval in ask mode", () => {
-      const perm = securityEngine.evaluate("shell", { command: "bash -c 'echo test'" }, "ask", tmpDir, tmpDir);
+      const perm = securityEngine.evaluate("shell", { command: dynamicCmd }, "ask", tmpDir, tmpDir);
       expect(perm.needsApproval).toBe(true);
       expect(perm.capability).toBe("DYNAMIC_EXECUTION");
     });
 
     test("dynamic execution denied in workspace mode", () => {
-      const perm = securityEngine.evaluate("shell", { command: "bash -c 'echo test'" }, "workspace", tmpDir, tmpDir);
+      const perm = securityEngine.evaluate("shell", { command: dynamicCmd }, "workspace", tmpDir, tmpDir);
       expect(perm.allowed).toBe(false);
       expect(perm.capability).toBe("DYNAMIC_EXECUTION");
     });
 
     test("full-access allows dynamic execution but logs intrinsic risk", () => {
-      const perm = securityEngine.evaluate("shell", { command: "bash -c 'echo test'" }, "full-access", tmpDir, tmpDir);
+      const perm = securityEngine.evaluate("shell", { command: dynamicCmd }, "full-access", tmpDir, tmpDir);
       expect(perm.allowed).toBe(true);
       expect(perm.capability).toBe("DYNAMIC_EXECUTION");
       expect(perm.riskLevel).toBe("DANGEROUS");
+    });
+
+    test("read-only inline interpreter is workspace execution, not dynamic execution", () => {
+      const perm = securityEngine.evaluate("shell", { command: "bash -c 'echo test'" }, "workspace", tmpDir, tmpDir);
+      expect(perm.capability).toBe("EXECUTE");
+      expect(perm.allowed).toBe(true);
     });
 
     test("eval variable payload blocked in workspace", () => {

@@ -173,6 +173,38 @@ export class StatusManager {
   }
 
   /**
+   * Phase 2.2 — activity heartbeat.
+   *
+   * The spinner/status timer only runs while `isStreaming` is true, but a tool
+   * can keep running after the stream view is done (and tools that never emit
+   * progress rely on THIS tick for every visual change). While at least one
+   * activity is running, keep ONE shared heartbeat alive: it advances the
+   * canonical spinner index and every activity's elapsed timer, so a silent
+   * fetch/browser/run still repaints its frame ~11×/s without any transcript
+   * spam. The moment no activity is running the timer self-cancels — no
+   * idle spin, no leaked interval.
+   */
+  public ensureActivityHeartbeat(): void {
+    if (tuiState.spinnerTimer) return; // the start() timer already drives everything
+    if (tuiState.getActiveToolActivities().length === 0) return;
+    tuiState.spinnerTimer = setInterval(() => {
+      const running = tuiState.getActiveToolActivities();
+      if (running.length === 0) {
+        // Nothing left to animate: self-cancel so no timer ever outlives its
+        // activities (cleanup contract — complete/error/cancel each remove
+        // their activity, this tick then stops itself).
+        this.stopTimer();
+        return;
+      }
+      tuiState.spinnerIdx = (tuiState.spinnerIdx + 1) % SPINNER.length;
+      for (const activity of running) {
+        activity.elapsedMs = Date.now() - activity.startedAt;
+      }
+      tuiState.requestChromeRender();
+    }, this.intervalMs);
+  }
+
+  /**
    * Updates current activity status label immediately.
    */
   public update(status: string): void {

@@ -82,6 +82,22 @@ export {
 } from "./tools";
 
 export {
+  ADAPTIVE_EXTENSION_CHUNK,
+  ADAPTIVE_HARD_CAP,
+  ADAPTIVE_MAX_EQUIVALENT_FAILED_VARIANTS,
+  ADAPTIVE_MAX_EXTENSION_TOOL_CALLS,
+  ADAPTIVE_MIN_VERIFIED_FOR_EXTENSION,
+  decideAdaptiveExtension,
+  equivalentFailureLoopError,
+  hardCapError,
+  hasMeaningfulProgress,
+  semanticFailureSignature,
+  type AdaptiveDecision,
+  type AdaptiveProgressSnapshot,
+  type AdaptiveStopKind,
+} from "./continuation";
+
+export {
   decideContinuation,
   exceedsRepeatedToolCalls,
   maxTurnsError,
@@ -92,6 +108,30 @@ export {
   type ContinuationInput,
   type ContinuationKind,
 } from "./continuation";
+
+// Phase 5 — structured error-driven recovery policy (bounded, code-driven).
+export {
+  approvalPendingError,
+  browserRequestRequiresRealBrowser,
+  cancelledError,
+  extractStructuredError,
+  internalErrorStop,
+  policyBypassError,
+  RECOVERY_CODES,
+  RECOVERY_DEFAULT_DIRECTORY_TOOL,
+  RECOVERY_MAX_ATTEMPTS_PER_SIGNATURE,
+  RECOVERY_MAX_TOTAL_ATTEMPTS,
+  recoveryBudgetError,
+  recoveryDenialSignature,
+  recoveryExhaustedError,
+  recoveryFailureSignature,
+  recoveryTargetFor,
+  RecoveryGovernor,
+  selectAlternateTool,
+  type RecoveryAction,
+  type RecoveryDecision,
+  type RecoveryFailure,
+} from "./recovery";
 
 export {
   describeContextPolicy,

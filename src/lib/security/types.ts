@@ -101,6 +101,7 @@ export interface ToolGatewayResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  structuredError?: import("../../core/contracts").StructuredToolError;
   allowed: boolean;
   needsApproval?: boolean;
   approvalRequired?: boolean;

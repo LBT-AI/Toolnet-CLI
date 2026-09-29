@@ -7,6 +7,8 @@ dist/
 *.db.json
 *.sqlite
 *.sqlite.json
+*.sqlite-shm
+*.sqlite-wal
 .env
 .DS_Store
 .toolnet/
@@ -21,3 +23,19 @@ __pycache__/
 .aider*
 .agents/
 .bravecode/
+
+# Generated runtime / local emulator state (never release content)
+.wrangler/
+.wrangler/state/**
+
+# Release archives and cache artifacts
+*.zip
+
+# Local development scratch scripts
+/debug_state*.py
+/fix_harness_test*.py
+/fix_test.py
+/patch*.py
+/patch*.js
+/test-mock*
+/test-pw.js

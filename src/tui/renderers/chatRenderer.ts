@@ -23,7 +23,7 @@ import {
   tableToLines,
   type MarkdownTable,
 } from "../../lib/markdown";
-import { tuiState, type ActiveToolActivity } from "../state";
+import { tuiState, SPINNER, type ActiveToolActivity } from "../state";
 import { countLines } from "../input/composerDocument";
 
 /**
@@ -103,7 +103,23 @@ export interface RenderedChatFrame {
  */
 export const MAX_ACTIVITY_ROWS = 4;
 
-export function renderActiveToolActivity(activity: ActiveToolActivity, cols: number): string[] {
+/**
+ * Resolve the CURRENT canonical spinner frame for live activity rows.
+ *
+ * Phase 2.2: the active tool row reuses the ONE canonical spinner
+ * (`SPINNER` + `tuiState.spinnerIdx`, advanced by the statusService
+ * heartbeat) instead of a static `●` — a silent tool must still look alive.
+ * `frameOverride` exists ONLY so tests can drive exact frames (fake time);
+ * production callers always paint the shared index.
+ */
+export function currentSpinnerFrame(frameOverride?: number): string {
+  const total = SPINNER.length;
+  const raw = frameOverride ?? tuiState.spinnerIdx;
+  const idx = ((Math.floor(raw) % total) + total) % total;
+  return SPINNER[idx] ?? SPINNER[0]!;
+}
+
+export function renderActiveToolActivity(activity: ActiveToolActivity, cols: number, frameOverride?: number): string[] {
   const isNarrow = cols <= 60;
   const elapsedSec = Math.max(0, Math.floor(activity.elapsedMs / 1000));
   const elapsedStr = `${elapsedSec}s`;
@@ -112,8 +128,9 @@ export function renderActiveToolActivity(activity: ActiveToolActivity, cols: num
   const action = activity.actionLabel || actionInfo.actionLabel;
   const target = activity.target || prettyToolTarget(activity.name, activity.args);
 
-  // Running = info blue; the completed row turns green/red (tool-format).
-  const dot = `${A.fgInfo}●${A.reset}`;
+  // Running = info blue + ANIMATED frame; completed rows keep their own
+  // green/red presentation in tool-format.
+  const dot = `${A.fgInfo}${currentSpinnerFrame(frameOverride)}${A.reset}`;
   const label = `${A.bold}${A.fgInfo}${action}${A.reset}`;
   const elapsed = `${A.dim}${A.fgMuted}· ${elapsedStr}${A.reset}`;
 
@@ -144,13 +161,15 @@ export function renderActiveToolActivity(activity: ActiveToolActivity, cols: num
  * parallel tools stay individually readable without flooding the frame, and the
  * total is capped at MAX_ACTIVITY_ROWS so the layout below never moves.
  */
-export function renderToolActivities(activities: ActiveToolActivity[], cols: number): string[] {
+export function renderToolActivities(activities: ActiveToolActivity[], cols: number, frameOverride?: number): string[] {
+  // Only RUNNING activities paint: a completed/errored/cancelled activity is
+  // closed in state and must vanish from the live overlay in the same frame.
   const running = activities.filter((activity) => activity.status === "running");
   if (running.length === 0) return [];
-  if (running.length === 1) return renderActiveToolActivity(running[0], cols);
+  if (running.length === 1) return renderActiveToolActivity(running[0], cols, frameOverride);
 
   const visible = running.slice(-MAX_ACTIVITY_ROWS);
-  const rows = visible.map((activity) => renderActiveToolActivity(activity, cols)[0]);
+  const rows = visible.map((activity) => renderActiveToolActivity(activity, cols, frameOverride)[0]);
   const hidden = running.length - visible.length;
   if (hidden > 0) {
     rows.push(`  ${A.dim}${A.fgMuted}… +${hidden} more${A.reset}`);
@@ -206,6 +225,14 @@ export function renderChatMessagesWithMetadata(
   for (let mIdx = 0; mIdx < messages.length; mIdx++) {
     const msg = messages[mIdx];
     const isUser = msg.role === "user";
+    // Message chrome, hoisted so every early-exit branch (tool response, tool
+    // calls, streamed continuation) can paint with the same prefix/geometry.
+    const prefix = isUser
+      ? primaryColor + A.bold + " ❯ " + A.reset
+      : A.fgCyan + A.bold + " ✦ " + A.reset;
+    const prefixIndent = "   ";
+    const msgBg = isUser ? "" : A.bgTool;
+    const wrapWidth = Math.max(20, chatCols - prefixIndent.length - 2);
     // Start index of THIS message's painted segment — the long-result policy
     // compacts per message, never across message boundaries.
     const msgStartIdx = result.lines.length;
@@ -363,7 +390,32 @@ export function renderChatMessagesWithMetadata(
     }
 
     // ── 2. Tool Calls Requested by Model ───────────────────────────────────
+    // An assistant message can now carry BOTH streamed text and tool calls.
+    // Dropping `msg.content` here (the old behavior) erased the text the user
+    // watched stream in — the "T" orphan fragment bug. Render the text FIRST,
+    // then the tool-start rows.
     if (msg.tool_calls && msg.tool_calls.length > 0) {
+      const preToolText = redactOutputSecrets(msg.content || "");
+      if (preToolText.trim()) {
+        const isStreamingSegment = tuiState.activeAssistantDraft?.id === msg.id && tuiState.activeAssistantDraft?.streaming;
+        const rawPreToolLines = preToolText.split("\n");
+        let sawCodeBlock = false;
+        for (let lIdx = 0; lIdx < rawPreToolLines.length; lIdx++) {
+          let rawLine = rawPreToolLines[lIdx];
+          if (!sawCodeBlock && rawLine.trim().startsWith("```")) {
+            sawCodeBlock = !sawCodeBlock;
+            continue; // fence lines render via the code-box path only when present in full messages; pre-tool text is kept verbatim otherwise
+          }
+          const linePrefix = lIdx === 0 ? prefix : prefixIndent;
+          const formatted = !sawCodeBlock
+            ? formatInlineMarkdown(rawLine, A.fgText)
+            : A.fgBorder + "│ " + A.reset + rawLine;
+          const wrapped = wrapText(formatted, wrapWidth);
+          for (const wrappedLine of wrapped) {
+            pushRenderedLines(result, [msgBg + linePrefix + wrappedLine + (isStreamingSegment && lIdx === rawPreToolLines.length - 1 ? S.caretBar : "") + A.reset], msg);
+          }
+        }
+      }
       for (const tc of msg.tool_calls) {
         // If already completed in the transcript, avoid duplicate start row
         const alreadyAnswered = messages.some(
@@ -386,15 +438,6 @@ export function renderChatMessagesWithMetadata(
     }
 
     // ── 3. Regular Conversation Messages (User / Assistant / System) ───────
-    const prefix = isUser
-      ? primaryColor + A.bold + " ❯ " + A.reset
-      : A.fgCyan + A.bold + " ✦ " + A.reset;
-    const prefixIndent = "   ";
-    // Visual hierarchy: assistant responses get a soft background block so
-    // they read as distinct from user prompts (which stay on the bare panel).
-    const msgBg = isUser ? "" : A.bgTool;
-    const wrapWidth = Math.max(20, chatCols - prefixIndent.length - 2);
-
     const activeAssistantDraft = tuiState.activeAssistantDraft;
     const isStreamingAssistant = msg.role === "assistant"
       && activeAssistantDraft !== null

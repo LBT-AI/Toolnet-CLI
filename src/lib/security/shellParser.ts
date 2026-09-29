@@ -183,7 +183,149 @@ export function tokenizeShell(command: string): string[] {
   return tokens;
 }
 
-const INTERPRETERS = new Set(["python", "python3", "node", "perl", "ruby", "sh", "bash", "zsh", "dash", "eval"]);
+const INTERPRETERS = new Set(["python", "python3", "node", "perl", "ruby", "php", "sh", "bash", "zsh", "dash", "eval"]);
+
+/**
+ * Inline-script flag for each interpreter (`-c`, `-e`, `-r`, `--eval`).
+ * Single source of truth shared by the parser and the classifier so the
+ * interpreter name → flag mapping can never drift between layers.
+ */
+export const INTERPRETER_INLINE_FLAGS: Record<string, string[]> = {
+  python: ["-c"],
+  python3: ["-c"],
+  node: ["-e", "--eval"],
+  perl: ["-e"],
+  ruby: ["-e"],
+  lua: ["-e"],
+  php: ["-r"],
+  sh: ["-c"],
+  bash: ["-c"],
+  zsh: ["-c"],
+  dash: ["-c"],
+  eval: ["-c", "-e", "--eval"], // eval is not flag-based; kept for lookup symmetry
+};
+
+export interface InlineScriptIntent {
+  /** Script spawns subprocesses, shells out, or executes dynamic code. */
+  spawnsProcesses: boolean;
+  /** Script deletes files/directories (rmtree, unlink, fs.rmSync, …). */
+  deletesPaths: boolean;
+  /** Script writes files/paths or mutates state. */
+  mutatesWorkspace: boolean;
+  /** Destructive system mutation (root/home/​/etc/etc targets). */
+  destructiveSystem: boolean;
+  reason?: string;
+}
+
+// Patterns that spawn other processes from an inline script (word-boundary
+// anchored where a bare substring would over-match, e.g. \bsystem\s*\( must not
+// match "filesystem(").
+const INLINE_SPAWN_PATTERNS: Array<string | RegExp> = [
+  "os.system",
+  "subprocess",
+  "popen",
+  "child_process",
+  "execsync",
+  "execfile",
+  "spawnsync",
+  "shellexec",
+  "shell_exec",
+  "passthru",
+  "proc_open",
+  /\bsystem\s*\(/, // php system(...)
+  /\beval\s*\(/, // dynamic code execution from a string
+];
+
+// Patterns that delete paths.
+const INLINE_DELETE_PATTERNS: Array<string | RegExp> = [
+  "rmtree",
+  "unlink", // covers unlinkSync
+  "rmsync",
+  "os.rmdir",
+  /\brm\s+/, // shell-style rm inside the script ('rm x' — not 'farm ')
+];
+
+// Patterns that write/mutate files. Import/require of os/fs alone is NOT
+// mutation — the specific mutating calls are what counts (keeps read-only
+// inspection like `python -c 'import os; print(os.getcwd())'` usable).
+const INLINE_MUTATE_PATTERNS: Array<string | RegExp> = [
+  "file_put_contents",
+  /\bfwrite\s*\(/,
+  /\bftruncate\s*\(/,
+  // Write-mode open: open("f","w"), fopen($f,"a"). Quotes are optional
+  // because interpreter scripts are unquoted by the tokenizer — read mode
+  // ("r") deliberately stays clean.
+  /\bopen\s*\([^)]*,\s*['"]?[wax]\+?b?['"]?\s*[,)]/,
+  /\bwritefilesync\b/,
+  /\bwritefile\b/,
+  /\bappendfile\b/,
+  /\bmkdir[\s(]/,
+  /\bmkfile\b/,
+  /\btouch[\s(]/,
+  "os.rename",
+  "os.remove",
+  "os.makedirs",
+  "os.mkdir",
+  "shutil", // copy/move/delete — any shutil use mutates the tree
+  /\bfs\.\w*(write|append|rm|mkdir|mkdtemp|rmdir|truncate|chmod|chown|link|symlink|rename|copyfile|cp)/,
+  /\.write_text\s*\(/,
+  /\.write_bytes\s*\(/,
+];
+
+function matchesAny(patterns: Array<string | RegExp>, s: string): boolean {
+  return patterns.some((p) => (typeof p === "string" ? s.includes(p) : p.test(s)));
+}
+
+/**
+ * Shell-style output redirection inside the script (`> file`, `>> file`).
+ * Must not match `=>` (arrow functions, PHP arrays) or `->` (PHP/JS deref).
+ */
+const INLINE_REDIRECT_PATTERN = /(?:^|[\s;])(>{1,2})\s*[^\s|&;]/;
+
+/**
+ * Classifies the intent/capabilities of an inline interpreter script
+ * (php -r, python -c, node -e, bash -c …). Read-only inspection is safe;
+ * workspace mutation is gated; process spawning / deletion / destructive
+ * system mutation is flagged for deny or critical-deny upstream.
+ */
+export function inlineScriptIntent(script: string): InlineScriptIntent {
+  const s = (script || "").toLowerCase();
+  const intent: InlineScriptIntent = {
+    spawnsProcesses: false,
+    deletesPaths: false,
+    mutatesWorkspace: false,
+    destructiveSystem: false,
+  };
+  if (!s.trim()) return intent;
+
+  // Pipeline `|` and command substitution (`$(...)`, backticks) move data
+  // between processes — process-spawning regardless of the commands involved.
+  // `||` (logical-or, ubiquitous in JS/PHP) must NOT match: the regex requires
+  // a non-pipe char on at least one side of the single pipe.
+  const pipesData = /(^|[^|])\|([^|]|$)/.test(s) || /\$\(/.test(s) || s.includes("`");
+
+  intent.spawnsProcesses = pipesData || matchesAny(INLINE_SPAWN_PATTERNS, s);
+  intent.deletesPaths = matchesAny(INLINE_DELETE_PATTERNS, s);
+  intent.mutatesWorkspace =
+    intent.deletesPaths || matchesAny(INLINE_MUTATE_PATTERNS, s) || INLINE_REDIRECT_PATTERN.test(script);
+
+  // Destructive system mutation: deletion or shell-out targeting root/home/system.
+  // Evaluated on structured intent flags, never on raw substring hope.
+  const targetsSystem =
+    /rm\s+-[a-z]*r[a-z]*\s+(\/|\/\*|~|\$home)(?=\s|$|[;&|)])/.test(s) ||
+    /rmtree\s*\(\s*['"]?(\/|\/\*|~|\$home|\/etc|\/var)/.test(s) ||
+    (intent.spawnsProcesses && /(rm\s+-[a-z]*r|mkfs|dd\s+if=|shutdown|reboot|poweroff)/.test(s));
+  intent.destructiveSystem = intent.deletesPaths && targetsSystem;
+
+  if (intent.destructiveSystem) {
+    intent.reason = "inline script deletes root/home/system directories";
+  } else if (intent.spawnsProcesses) {
+    intent.reason = "inline script spawns subprocesses or shells out";
+  } else if (intent.mutatesWorkspace) {
+    intent.reason = "inline script writes/mutates files or paths";
+  }
+  return intent;
+}
 
 /**
  * Parses a stream of shell tokens into structured Command Nodes.
@@ -239,6 +381,7 @@ export function parseShellCommand(commandStr: string): ShellParseResult {
     let isSubshell = false;
     let subCommands: ShellCommandNode[] = [];
     let hasNodeDynamic = false;
+    const dynamicTokens: string[] = [];
 
     let idx = 0;
 
@@ -279,7 +422,7 @@ export function parseShellCommand(commandStr: string): ShellParseResult {
 
       // Check unresolved variable expansion e.g. $CMD or ${VAR}
       if (/\$[A-Za-z_]|\$\{[A-Za-z0-9_]+\}/.test(tok)) {
-        hasDynamicVariables = true;
+        dynamicTokens.push(tok);
         hasNodeDynamic = true;
       }
 
@@ -332,7 +475,11 @@ export function parseShellCommand(commandStr: string): ShellParseResult {
     if (INTERPRETERS.has(baseExec)) {
       isInterpreter = true;
       interpreterName = baseExec;
-      const cFlagIdx = args.findIndex((a) => a === "-c" || a === "-e" || a === "--eval");
+      // Flag lookup comes from INTERPRETER_INLINE_FLAGS (single source of
+      // truth shared with the classifier) so e.g. `php -r` is recognized
+      // exactly once and can never drift between layers.
+      const inlineFlags = INTERPRETER_INLINE_FLAGS[baseExec] || [];
+      const cFlagIdx = args.findIndex((a) => inlineFlags.includes(a));
       if (cFlagIdx !== -1 && args[cFlagIdx + 1]) {
         inlineScript = unquoteShellToken(args[cFlagIdx + 1]);
         // Recursively inspect shell subcommands inside sh -c or bash -c
@@ -343,6 +490,24 @@ export function parseShellCommand(commandStr: string): ShellParseResult {
           allRedirectTargets.push(...nested.allRedirectTargets);
         }
       }
+    }
+
+    // Shell-variable expansion inside a NON-shell interpreter's inline script is
+    // data handed to that interpreter, not shell-position expansion: in
+    // `php -r 'echo $x;'` the `$x` is a PHP variable, never a shell variable.
+    // Only shell interpreters (sh/bash/zsh/dash) expand `$VAR` inside `-c`, so
+    // only they keep the fail-closed dynamic flag (TN-R0-007A).
+    const shellInterpreter = ["sh", "bash", "zsh", "dash"].includes(baseExec);
+    const dynamicOnlyInsideInlineScript =
+      !shellInterpreter &&
+      !!inlineScript &&
+      dynamicTokens.length > 0 &&
+      dynamicTokens.every((t) => unquoteShellToken(t) === inlineScript);
+    if (dynamicTokens.length > 0 && !dynamicOnlyInsideInlineScript) {
+      hasDynamicVariables = true;
+    }
+    if (dynamicOnlyInsideInlineScript) {
+      hasNodeDynamic = false;
     }
 
     // 4. Unwrap command, env, nohup wrappers

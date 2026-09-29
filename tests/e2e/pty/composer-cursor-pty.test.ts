@@ -13,7 +13,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { paint } from "./screen";
 
-const ROOT = process.cwd();
+const ROOT = join(import.meta.dir, "..", "..", "..");
 const ENTRY = join(ROOT, "dist", "node", "index.js");
 const DRIVER = join(ROOT, "tests", "e2e", "pty", "driver.cjs");
 const COLS = 52;
@@ -26,12 +26,15 @@ try {
   nodePty = null;
 }
 const hasEntry = existsSync(ENTRY);
-const cond = nodePty && hasEntry ? it : it.skip;
+const posix = process.platform !== "win32";
+const cond = nodePty && hasEntry && posix ? it : it.skip;
 const skipNote = !nodePty
   ? " (skipped: node-pty unavailable)"
   : !hasEntry
     ? " (skipped: run bun run build first)"
-    : "";
+    : !posix
+      ? " (skipped: PTY acceptance is POSIX-only)"
+      : "";
 
 function runDriver(script: Array<[number, string]>): { output: string; exitCode: number } {
   const res = spawnSync(

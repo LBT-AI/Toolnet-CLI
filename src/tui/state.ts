@@ -58,6 +58,12 @@ export interface AssistantDraft {
   runId: string;
   turnId: number;
   streaming: boolean;
+  /**
+   * Semantic identity of the WHOLE model response (all generation segments,
+   * including those after tool results). Constant across tool interleaves;
+   * changes only on a run boundary or a new user message.
+   */
+  responseKey: string;
 }
 
 /**
@@ -205,6 +211,20 @@ export class TuiState {
   private pendingToolCalls = new Map<string, number>();
   private completedToolCallTurnId: number | null = null;
 
+  /**
+   * Semantic identity of the assistant's CURRENT response — one key per
+   * model response, spanning every generation segment a tool interleave
+   * produces (text → tool → tool result → synthesis).
+   *
+   * Assigned when the first assistant message of a response is created and
+   * handed to every subsequent segment, so the UI can render them as one
+   * conversational turn WITHOUT merging their wire shapes (the engine's
+   * assistant→tool→assistant transcript order must stay replayable).
+   * Cleared only on a run boundary (startNewRun) or a real user message —
+   * never by tool activity inside one response.
+   */
+  private activeResponseKey: string | null = null;
+
   private resetAssistantTurnState(): void {
     this.activeAssistantDraft = null;
     this.currentAssistantMessageId = null;
@@ -224,13 +244,42 @@ export class TuiState {
   }
 
   appendMessage(message: Msg): Msg {
+    // A real user/system message closes the streamed response identity so the
+    // NEXT assistant text opens a genuinely new semantic turn. Engine-driven
+    // messages (tool results, reasoning blocks) and assistant segments never do.
+    if (this.opensNewResponse(message)) {
+      this.activeResponseKey = null;
+    }
     const normalized = this.withMessageId(message);
+    if (normalized.role === "assistant" && !normalized.responseKey) {
+      normalized.responseKey = this.ensureResponseKey();
+    }
     this.messages.push(normalized);
     return normalized;
   }
 
   replaceMessages(messages: readonly Msg[]): Msg[] {
     const nextMessages = messages.map((message) => this.withMessageId(message));
+    // Phase 2.1: pre-existing sessions (and post-hoc engine adoption) can hold
+    // assistant messages without a responseKey. Backfill one per contiguous
+    // assistant block so renderer grouping and the transcript merge never
+    // split old conversations into fragments. Blocks are separated by any
+    // non-assistant/non-tool/non-reasoning message (a real turn boundary).
+    let backfillKey: string | null = null;
+    for (const message of nextMessages) {
+      if (message.role === "assistant") {
+        if (!message.responseKey) {
+          if (!backfillKey) {
+            backfillKey = `resp_bf_${this.messageSeq}_${Math.random().toString(36).slice(2, 8)}`;
+          }
+          message.responseKey = backfillKey;
+        } else {
+          backfillKey = message.responseKey;
+        }
+      } else if (this.opensNewResponse(message)) {
+        backfillKey = null;
+      }
+    }
     const hasSharedAnchor = this.chatViewport.anchorMessageId
       ? nextMessages.some((message) => message.id === this.chatViewport.anchorMessageId)
       : false;
@@ -279,8 +328,34 @@ export class TuiState {
     if (this.completedToolCallTurnId === this.currentTurnId) {
       this.currentTurnId += 1;
       this.completedToolCallTurnId = null;
-      this.resetAssistantTurnState();
+      // Semantic response identity SURVIVES the turn counter bump: the text
+      // after a tool result belongs to the SAME assistant response as the
+      // text before the tool call. Only a run boundary or a real user
+      // message may close an activeResponseKey — see appendMessage.
     }
+  }
+
+  /**
+   * Ensure a semantic response key exists for the response currently being
+   * streamed. Called by every assistant-message producer; idempotent within
+   * one response, fresh per run.
+   */
+  private ensureResponseKey(): string {
+    if (!this.activeResponseKey) {
+      this.activeResponseKey = `resp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+    return this.activeResponseKey;
+  }
+
+  /**
+   * True when `message` opens a NEW semantic response rather than continuing
+   * the one being streamed. A user prompt (or any non-assistant, non-tool,
+   * non-reasoning message — e.g. a steering system notice) is a real turn
+   * boundary; tool results and reasoning blocks never are.
+   */
+  private opensNewResponse(message: Msg): boolean {
+    if (message.role === "assistant" || message.role === "tool" || message.role === "reasoning") return false;
+    return true;
   }
 
   openAssistantDraft(turnId = this.currentTurnId): AssistantDraft {
@@ -288,11 +363,13 @@ export class TuiState {
     if (this.activeAssistantDraft?.runId === this.currentRunId && this.activeAssistantDraft.turnId === turnId) {
       return this.activeAssistantDraft;
     }
+    const responseKey = this.ensureResponseKey();
     this.activeAssistantDraft = {
       id: this.nextMessageId("assistant"),
       runId: this.currentRunId,
       turnId,
       streaming: true,
+      responseKey,
     };
     this.currentAssistantMessageId = this.activeAssistantDraft.id;
     this.currentAssistantTurnId = turnId;
@@ -321,6 +398,9 @@ export class TuiState {
     this.activeAssistantDraft = null;
     this.currentAssistantMessageId = null;
     this.currentAssistantTurnId = null;
+    // NOTE: activeResponseKey is deliberately NOT cleared here. finalize is a
+    // stream-segment boundary (tool call, agent-complete, cancel), not the end
+    // of the semantic response; later segments must rejoin the same key.
     this.requestRender();
     return { ...draft, streaming: false };
   }
@@ -338,6 +418,10 @@ export class TuiState {
       : undefined;
     if (existing && draftTurnId === turnId) {
       existing.tool_calls = [...(existing.tool_calls ?? []), call];
+      // Keep the whole response under one semantic identity even when the
+      // pre-tool text was empty: the tool-carrying segment still belongs to
+      // this response (requires test C — no orphan empty bubble later).
+      if (!existing.responseKey) existing.responseKey = this.ensureResponseKey();
       this.currentAssistantMessageId = existing.id ?? null;
       this.currentAssistantTurnId = turnId;
       return existing.id!;
@@ -349,6 +433,7 @@ export class TuiState {
       id,
       content: "",
       tool_calls: [call],
+      responseKey: this.ensureResponseKey(),
     });
     this.currentAssistantMessageId = id;
     this.currentAssistantTurnId = turnId;
@@ -683,6 +768,9 @@ export class TuiState {
     this.activeReasoningDraft = null;
     this.activeToolActivity = null;
     this.resetAssistantTurnState();
+    // A new run is a hard response boundary: the previous response can never
+    // be continued by this run.
+    this.activeResponseKey = null;
     this.reasoningText = "";
     this.reasoningTokens = 0;
     this.reasoningElapsed = "";

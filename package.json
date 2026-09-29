@@ -1,8 +1,9 @@
 {
   "name": "toolnetcli",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "type": "module",
   "license": "MIT",
+  "packageManager": "bun@1.4.0",
   "description": "ToolNet CLI — AI coding agent for the terminal",
   "repository": {
     "type": "git",
@@ -42,7 +43,8 @@
     "build:bin:win-x64": "bun build src/index.tsx --compile --target=bun-windows-x64 --outfile dist-bin/toolnet-windows-x64.exe"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "bun": ">=1.4.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -52,6 +54,7 @@
   },
   "devDependencies": {
     "@types/bun": "1.4.0",
+    "node-pty": "1.1.0",
     "tsx": "^4.23.13",
     "typescript": "5.8.2"
   }

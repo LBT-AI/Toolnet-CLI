@@ -1,6 +1,12 @@
 import path from "node:path";
 import type { RiskLevel } from "./types";
-import { parseShellCommand, type ShellCommandNode, type ShellParseResult } from "./shellParser";
+import {
+  parseShellCommand,
+  type ShellCommandNode,
+  type ShellParseResult,
+  type ShellRedirection,
+  inlineScriptIntent,
+} from "./shellParser";
 import { isPathInsideWorkspace } from "./workspacePolicy";
 import { isSensitiveFile } from "./secretGuard";
 
@@ -20,6 +26,94 @@ const CRITICAL_EXECUTABLES = new Set([
   "systemctl", "service", "iptables", "ufw", "nft", "insmod", "rmmod", "modprobe"
 ]);
 const SENSITIVE_SYSTEM_PREFIXES = ["/etc", "/var", "/usr", "/bin", "/sbin", "/root", "/proc", "/sys", "/dev"];
+
+/**
+ * Semantic file sinks that are harmless by construction. Writing to them
+ * discards data (or, for /dev/stdout-style fds, duplicates an existing
+ * stream) and never touches persistent system state, so a redirect to one
+ * of them is NEVER system tampering — TN-R0-007B.
+ */
+const HARMLESS_SINKS = new Set([
+  "/dev/null", // bit bucket
+  "/dev/stdout", // duplicate of fd 1
+  "/dev/stderr", // duplicate of fd 2
+  "/dev/tty", // controlling terminal
+  "/dev/zero", // infinite zero sink
+  "/dev/full", // write-returns-ENOSPC, destroys nothing
+]);
+
+/**
+ * FD duplication targets: a bare non-negative integer (`2>&1`, `1>&2`) or an
+ * fd alias path (`/dev/fd/1`, `/dev/stdout`, `/dev/stderr`). These redirect a
+ * file descriptor to another descriptor, not to a filesystem path — no file
+ * is written.
+ */
+function isFdDuplicationTarget(target: string): boolean {
+  if (/^\d+$/.test(target)) return true;
+  if (/^\/dev\/fd\/\d+$/.test(target)) return true;
+  return target === "/dev/stdout" || target === "/dev/stderr";
+}
+
+/**
+ * True for paths that are never a persistent filesystem write: semantic
+ * discard sinks (/dev/null …), fd aliases (/dev/fd/N, /dev/stdout) and bare
+ * fd numbers (`2>&1`). Shared so argument checks, redirect checks and the
+ * capability layer agree on what `/dev/null` means — TN-R0-007B.
+ */
+export function isHarmlessSinkPath(target: string): boolean {
+  return HARMLESS_SINKS.has(target) || isFdDuplicationTarget(target);
+}
+
+export interface RedirectTargetAssessment {
+  /** Redirect writes into a filesystem path (as opposed to fd-dup or discard). */
+  writesFilesystem: boolean;
+  /** Target is a semantic discard sink (/dev/null …). */
+  isHarmlessSink: boolean;
+  /** Stream being redirected is stderr or all (2>, 2>>, &>, 2>&1 …). */
+  isStderrOrAll: boolean;
+  /** Absolute/normalized target path (empty for fd-dup). */
+  resolvedTarget: string;
+}
+
+/**
+ * FD-aware semantics of a single redirection — the single source of truth for
+ * how a redirect target must be treated, shared by every redirect check so
+ * `2>/dev/null` can never again be confused with a /dev write.
+ */
+export function assessRedirection(red: ShellRedirection): RedirectTargetAssessment {
+  const isStderrOrAll = red.type === "2>" || red.type === "2>>" || red.type === "&>" || red.type === ">&" || red.type === "2>&1";
+  const fdDup = isFdDuplicationTarget(red.target) || red.type === "2>&1";
+  if (fdDup) {
+    return { writesFilesystem: false, isHarmlessSink: false, isStderrOrAll, resolvedTarget: "" };
+  }
+  const target = red.target;
+  if (HARMLESS_SINKS.has(target)) {
+    return { writesFilesystem: false, isHarmlessSink: true, isStderrOrAll, resolvedTarget: target };
+  }
+  return { writesFilesystem: true, isHarmlessSink: false, isStderrOrAll, resolvedTarget: target };
+}
+
+/**
+ * Redirect targets that carry real filesystem-write semantics (fd-dups and
+ * harmless discard sinks excluded). This is what workspace/system policy
+ * applies to — TN-R0-007B fixed at the classification boundary.
+ */
+export function filesystemRedirectTargets(ast: ShellParseResult): string[] {
+  const out: string[] = [];
+  for (const node of ast.nodes) {
+    for (const red of node.redirections) {
+      const a = assessRedirection(red);
+      if (a.writesFilesystem) out.push(a.resolvedTarget);
+    }
+    for (const sub of node.subCommands) {
+      for (const red of sub.redirections) {
+        const a = assessRedirection(red);
+        if (a.writesFilesystem) out.push(a.resolvedTarget);
+      }
+    }
+  }
+  return out;
+}
 
 /**
  * High-accuracy AST-driven Shell Command Classifier.
@@ -131,8 +225,12 @@ export function classifyShellCommand(
     }
   }
 
-  // 4. Check Redirection Targets for Workspace Boundary Violation or System Files
-  for (const target of ast.allRedirectTargets) {
+  // 4. Check Redirection Targets for Workspace Boundary Violation or System Files.
+  // FD-aware (TN-R0-007B): fd duplications (2>&1) and semantic discard sinks
+  // (/dev/null…) carry no filesystem write and are never system tampering.
+  // Real filesystem targets keep full protection (TN-R0-007C stays correct:
+  // `2>&1` never appears here because its target is fd "1").
+  for (const target of filesystemRedirectTargets(ast)) {
     // Credential directories are protected independently of the host username
     // (/root, /home/runner, etc.); this must remain portable across CI/users.
     const sensitiveTarget = isSensitiveFile(target);
@@ -181,11 +279,13 @@ export function classifyShellCommand(
     }
   }
 
-  // 5. Check if pure Safe Read-Only single command without side-effects
+  // 5. Check if pure Safe Read-Only single command without side-effects.
+  // FD-aware: a discard redirect (`2>/dev/null`, `>&/dev/null`) does not make a
+  // read-only command side-effectful.
   if (
     !ast.hasPipes &&
     !ast.hasSubshells &&
-    ast.allRedirectTargets.length === 0 &&
+    filesystemRedirectTargets(ast).length === 0 &&
     ast.nodes.length === 1
   ) {
     const mainNode = ast.nodes[0];
@@ -210,8 +310,11 @@ export function classifyShellCommand(
     }
   }
 
-  // 5. Interpreter inline execution (-c, -e) is inherently dynamic → DANGEROUS
-  //    (unless already flagged as CRITICAL_DENY by subcommand inspection above)
+  // 5. Interpreter inline execution (-c, -e, -r) — intent-aware (Phase 4 / TN-R0-007A).
+  //    The inline script's semantics decide the risk, never the interpreter's
+  //    name alone. Destructive payloads are CRITICAL_DENY; mutating or
+  //    process-spawning payloads are DANGEROUS (gated); read-only inspection
+  //    falls through like any other safe command.
   for (const node of ast.nodes) {
     if (node.isInterpreter && node.inlineScript) {
       const script = node.inlineScript.toLowerCase();
@@ -238,15 +341,46 @@ export function classifyShellCommand(
         };
       }
 
-      return {
-        riskLevel: "DANGEROUS",
-        isDangerous: true,
-        isCritical: false,
-        category: "DYNAMIC_EVALUATION",
-        reason: `Interpreter inline execution (${node.interpreterName || node.normalizedExecutable} -c/-e) executes dynamic code`,
-        suggestedAction: "Requires explicit user confirmation.",
-        ast,
-      };
+      const intent = inlineScriptIntent(node.inlineScript);
+      if (intent.destructiveSystem) {
+        return {
+          riskLevel: "CRITICAL_DENY",
+          isDangerous: true,
+          isCritical: true,
+          category: "SYSTEM_DESTRUCTION",
+          reason: `Interpreter inline script performs destructive system mutation: "${node.inlineScript.slice(0, 60)}"`,
+          suggestedAction: "Permanently blocked by security policy.",
+          ast,
+        };
+      }
+
+      if (intent.spawnsProcesses) {
+        return {
+          riskLevel: "DANGEROUS",
+          isDangerous: true,
+          isCritical: false,
+          category: "DYNAMIC_EVALUATION",
+          reason: `Interpreter inline execution spawns processes or shells out (${node.interpreterName || node.normalizedExecutable}): "${node.inlineScript.slice(0, 60)}"`,
+          suggestedAction: "Requires explicit user confirmation.",
+          ast,
+        };
+      }
+
+      if (intent.mutatesWorkspace) {
+        return {
+          riskLevel: "DANGEROUS",
+          isDangerous: true,
+          isCritical: false,
+          category: "INLINE_SCRIPT_EVALUATION",
+          reason: `Interpreter inline script mutates files or paths: "${node.inlineScript.slice(0, 60)}"`,
+          suggestedAction: "Requires explicit user confirmation.",
+          ast,
+        };
+      }
+
+      // Read-only inline inspection (echo/print/cat of a fixture) falls
+      // through — it is classified exactly like the equivalent plain command
+      // in step 5's safe-read check. No blanket DANGEROUS flag.
     }
   }
 
@@ -608,28 +742,41 @@ function inspectCommandNode(
         suggestedAction: "Blocked permanently.",
       };
     }
-    const destructivePhrases = [
-      "rmtree",
-      "unlink",
-      "os.system",
-      "subprocess",
-      "child_process",
-      "execsync",
-      "shutil",
-      "require('fs')",
-      "import os",
-      "import shutil",
-      "import subprocess",
-    ];
+    // Intent-aware fallback (Phase 4 / TN-R0-007A): the inline script's
+    // semantics — not a keyword list — decide the risk. A read-only payload
+    // (echo/print/cat a fixture) falls through to normal classification and
+    // must never be blanket-flagged just because it imports a module.
+    const intent = inlineScriptIntent(node.inlineScript);
 
-    const hasDestructive = destructivePhrases.some((p) => script.includes(p));
-    if (hasDestructive) {
+    if (intent.destructiveSystem) {
+      return {
+        riskLevel: "CRITICAL_DENY",
+        isDangerous: true,
+        isCritical: true,
+        category: "SYSTEM_DESTRUCTION",
+        reason: `Inline script performs destructive system mutation: "${node.inlineScript.slice(0, 40)}…"`,
+        suggestedAction: "Permanently blocked by security policy.",
+      };
+    }
+
+    if (intent.spawnsProcesses) {
+      return {
+        riskLevel: "DANGEROUS",
+        isDangerous: true,
+        isCritical: false,
+        category: "DYNAMIC_EVALUATION",
+        reason: `Inline script spawns processes or shells out (${node.interpreterName || node.normalizedExecutable}): "${node.inlineScript.slice(0, 40)}…"`,
+        suggestedAction: "Requires explicit user confirmation.",
+      };
+    }
+
+    if (intent.mutatesWorkspace) {
       return {
         riskLevel: "DANGEROUS",
         isDangerous: true,
         isCritical: false,
         category: "INLINE_SCRIPT_EVALUATION",
-        reason: `Interpreter inline script contains system/filesystem execution calls: "${node.inlineScript.slice(0, 40)}…"`,
+        reason: `Inline script mutates filesystem state: "${node.inlineScript.slice(0, 40)}…"`,
         suggestedAction: "Requires explicit user confirmation.",
       };
     }
@@ -650,6 +797,8 @@ function inspectCommandNode(
   // 7. Inspect paths in arguments for Protected System Directories or Traversals
   for (const arg of args) {
     if (arg.startsWith("-")) continue;
+    // FD-aware: /dev/null and fd aliases are not protected system paths.
+    if (isHarmlessSinkPath(arg)) continue;
 
     // If argument is inside current workspace, allow it even if workspace is under /root or /var
     if (workspaceRoot) {

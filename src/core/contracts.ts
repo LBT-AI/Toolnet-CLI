@@ -14,7 +14,33 @@
  * never a bespoke JSON blob. The model always receives the result bound to
  * its original tool_call_id.
  */
+export type ToolErrorCode =
+  | "TOOL_UNAVAILABLE"
+  | "TIMEOUT"
+  | "NETWORK_ERROR"
+  | "HTTP_ERROR"
+  | "NOT_FOUND"
+  | "NOT_A_FILE"
+  | "INVALID_INPUT"
+  | "OUTSIDE_WORKSPACE"
+  | "PERMISSION_REQUIRED"
+  | "PERMISSION_DENIED"
+  | "SECURITY_DENIED"
+  | "CANCELLED"
+  | "EXECUTION_FAILED"
+  | "INTERNAL_ERROR";
+
+export interface StructuredToolError {
+  code: ToolErrorCode;
+  message: string;
+  retryable: boolean;
+  suggestedAction?: string;
+  suggestedTool?: string;
+  details?: Record<string, unknown>;
+}
+
 export interface ToolResult {
+  structuredError?: StructuredToolError;
   ok: boolean;
 
   stdout?: string;

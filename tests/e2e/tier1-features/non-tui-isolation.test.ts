@@ -4,12 +4,18 @@ import { visibleWidth, padVisible, truncateVisible, formatRelativeTime } from ".
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve, join } from "node:path";
 
+// Derive the expected version from package.json (single source of truth) so a
+// release bump never leaves a stale hard-coded version behind.
+const PKG_VERSION = JSON.parse(
+  readFileSync(new URL("../../../package.json", import.meta.url), "utf8")
+).version as string;
+
 describe("Tier 1 Feature Coverage: Non-TUI Commands Isolation & Shared Contracts", () => {
   it("F2.1: 'toolnet version' executes cleanly without alt-screen switch or TUI initialization", async () => {
     const res = await runToolNetCli({ args: ["version"] });
     expect(res.exitCode).toBe(0);
     expect(res.hasAltScreen).toBe(false);
-    expect(res.stdout).toContain("ToolNet CLI v1.3.0");
+    expect(res.stdout).toContain(`ToolNet CLI v${PKG_VERSION}`);
   });
 
   it("F2.2: 'toolnet --help' prints global help and exits cleanly with code 0", async () => {

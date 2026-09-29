@@ -427,17 +427,20 @@ describe("PHASE1 shell hardening", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("PHASE1 interpreter classification (all through gateway policy)", () => {
-  const cases: Array<{ cmd: string; expectCapability: string }> = [
-    { cmd: "python -c 'print(1)'", expectCapability: "DYNAMIC_EXECUTION" },
-    { cmd: "node -e 'console.log(1)'", expectCapability: "DYNAMIC_EXECUTION" },
-    { cmd: "bash -c 'echo x'", expectCapability: "DYNAMIC_EXECUTION" },
-    { cmd: "sh -c 'echo x'", expectCapability: "DYNAMIC_EXECUTION" },
+  // Phase 4 (TN-R0-007A): an inline interpreter is gated when its SCRIPT
+  // spawns processes or mutates state — never because of the interpreter's
+  // name alone.
+  const gatedCases: Array<{ cmd: string; expectCapability: string }> = [
+    { cmd: "python -c 'import os; os.system(\"ls\")'", expectCapability: "DYNAMIC_EXECUTION" },
+    { cmd: "node -e 'require(\"child_process\").execSync(\"ls\")'", expectCapability: "DYNAMIC_EXECUTION" },
+    { cmd: "bash -c 'cat a | wc -l'", expectCapability: "DYNAMIC_EXECUTION" },
+    { cmd: "sh -c 'cat a | wc -l'", expectCapability: "DYNAMIC_EXECUTION" },
     { cmd: "env FOO=bar node script.js", expectCapability: "DYNAMIC_EXECUTION" },
     { cmd: "find . -name '*.ts' -exec rm {} ;", expectCapability: "DYNAMIC_EXECUTION" },
     { cmd: "cat list | xargs rm", expectCapability: "DYNAMIC_EXECUTION" },
   ];
 
-  for (const { cmd, expectCapability } of cases) {
+  for (const { cmd, expectCapability } of gatedCases) {
     test(`capability of "${cmd}" is gated (${expectCapability} or stricter) and not silently allowlisted`, () => {
       const cap = securityEngine.evaluate("shell", { command: cmd }, "workspace", tmpBase, tmpBase);
       // Either the expected dynamic-execution capability, or a STRICTER locked
@@ -447,6 +450,24 @@ describe("PHASE1 interpreter classification (all through gateway policy)", () =>
       // DYNAMIC_EXECUTION capability is locked by default → must not be ALLOW
       // without approval/trust. Classification must come before any executor.
       expect(cap.allowed).toBe(false);
+    });
+  }
+
+  // Read-only payloads are ordinary workspace execution: the interpreter name
+  // must not itself lock them (this was TN-R0-007A).
+  const readOnlyCases = [
+    "python -c 'print(1)'",
+    "node -e 'console.log(1)'",
+    "bash -c 'echo x'",
+    "sh -c 'echo x'",
+    "php -r 'echo 1;'",
+  ];
+
+  for (const cmd of readOnlyCases) {
+    test(`read-only inline interpreter "${cmd}" is allowed by workspace policy`, () => {
+      const cap = securityEngine.evaluate("shell", { command: cmd }, "workspace", tmpBase, tmpBase);
+      expect(cap.capability).toBe("EXECUTE");
+      expect(cap.allowed).toBe(true);
     });
   }
 

@@ -11,25 +11,39 @@ on:
 permissions:
   contents: read
 
+# Pinned toolchain — keep these in sync with .nvmrc and package.json
+# (packageManager + engines). Never use `latest` in CI or release jobs.
+env:
+  BUN_VERSION: "1.4.0"
+  NODE_VERSION: "22"
+
 jobs:
+  # ── Cross-platform: typecheck, tests, build and REAL CLI smoke ─────────────
   test:
-    name: Typecheck, Test, Build
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
+      - name: Setup Bun (pinned)
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js (pinned)
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -37,37 +51,71 @@ jobs:
       - name: TypeScript
         run: bun run typecheck
 
-      - name: Unit tests
-        run: bun test --timeout 30000
-
+      # Build BEFORE tests: the PTY acceptance suites consume dist/node/index.js
+      # and skip explicitly (never silently pass) when it is absent.
       - name: Build Bun and Node bundles
         run: bun run build
 
-      - name: Bun smoke test
+      - name: Unit + E2E tests (isolated environment)
+        shell: bash
+        run: |
+          # Strip ambient agent/developer shell state so test output can never
+          # depend on the host shell (see lspGoldenE2E CLAUDECODE isolation).
+          unset CLAUDECODE CLAUDE_CODE_SSE_PORT CLAUDE_CODE_ENTRYPOINT 2>/dev/null || true
+          bun test --timeout 30000
+
+      - name: Bun CLI smoke (--help)
         run: bun dist/index.js --help
 
-      - name: Node 22 smoke test
+      - name: Node CLI smoke (--help)
         run: node dist/node/index.js --help
 
-      - name: Build Node persistence smoke bundle
-        run: bun build scripts/node-persistence-smoke.ts --target=node --outfile=/tmp/toolnet-node-persistence-smoke.mjs
+      - name: Launcher smoke (--version)
+        run: node bin/toolnet.js --version
 
-      - name: Node 22 native SQLite persistence smoke test
-        run: node /tmp/toolnet-node-persistence-smoke.mjs
+      - name: Secret scan (tracked files)
+        shell: bash
+        run: bun scripts/phase8-secret-scan.ts
+
+      - name: Installer smoke (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/phase8-installer-smoke.sh
+
+      - name: NPM package dry run
+        run: npm pack --dry-run
+
+  # ── Node 20 fallback compatibility (linux) ────────────────────────────────
+  compat-node20:
+    name: compat (node 20)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun (pinned)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
 
-      - name: Node 20 fallback persistence smoke test
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Node bundle
+        run: bun run build:node
+
+      - name: Build Node persistence smoke bundle
+        run: bun build scripts/node-persistence-smoke.ts --target=node --outfile=/tmp/toolnet-node-persistence-smoke.mjs
+
+      - name: Node 20 native SQLite persistence smoke test
         run: node /tmp/toolnet-node-persistence-smoke.mjs
 
-      - name: Node 20 CLI smoke test
+      - name: Node 20 CLI smoke (--help)
         run: node dist/node/index.js --help
-
-      - name: Launcher smoke test
-        run: node bin/toolnet.js --version
-
-      - name: NPM package dry run
-        run: npm pack --dry-run

@@ -54,13 +54,15 @@ $checksumUrl  = "https://github.com/$REPO/releases/download/v$version/checksums.
 $installDir = if ($env:TOOLNET_INSTALL_DIR) { $env:TOOLNET_INSTALL_DIR } else { Join-Path $env:USERPROFILE "bin" }
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-# Add to PATH for this session if needed
-$currentPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ";"
+# Add to PATH for THIS SESSION only. The installer must never mutate the
+# user's persisted PATH (non-destructive, reversible); it prints the exact
+# command instead.
+$currentPath = $env:Path -split ";"
 if ($installDir -notin $currentPath) {
     $env:Path = "$installDir;$env:Path"
-    # Persist
-    [Environment]::SetEnvironmentVariable("Path", "$installDir;$([Environment]::GetEnvironmentVariable('Path', 'User'))", "User")
-    Write-Info "Added $installDir to user PATH."
+    Write-Warn "$installDir is not in your persisted PATH."
+    Write-Host "  Add it permanently (run once):" -ForegroundColor Gray
+    Write-Host "    [Environment]::SetEnvironmentVariable('Path', \"$installDir;`$([Environment]::GetEnvironmentVariable('Path','User'))\", 'User')" -ForegroundColor Gray
 }
 
 # Download zip

@@ -57,7 +57,13 @@ def run_session(cols: int, rows: int, resize: bool) -> tuple[bytearray, int]:
     master, slave = pty.openpty()
     resize_pty(master, cols, rows)
 
-    env = dict(os.environ)
+    # Isolate the child from ambient agent/developer shell state (e.g.
+    # CLAUDECODE) so an interactive shell can never change the captured stream.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not (k == "CLAUDECODE" or k.startswith("CLAUDE_CODE_"))
+    }
     env.update({"TERM": "xterm-256color", "COLUMNS": str(cols), "LINES": str(rows)})
 
     proc = subprocess.Popen(

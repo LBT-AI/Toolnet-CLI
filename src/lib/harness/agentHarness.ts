@@ -31,7 +31,8 @@ import { getModelCapabilities } from "../reasoning";
 import { sessionInbox } from "../../core/background/inbox";
 import { pendingInputs } from "../../core/agent/pendingInput";
 import { ToolCache, createMetrics, type ToolCall, type ToolPlannerMetrics } from "./toolPlanner";
-import { executeToolBatch, signatureForToolCall } from "./toolExecutor";
+import { executeToolBatch, signatureForToolCall, toolErrorEnvelope, validateToolInput } from "./toolExecutor";
+import type { StructuredToolError } from "../../core/contracts";
 import { toolRegistry } from "./toolRegistry";
 import { hookRegistry } from "../../core/hooks";
 import { createWorkspaceContext, type WorkspaceContext } from "./workspace";
@@ -63,6 +64,9 @@ import {
   exceedsRepeatedToolCalls,
   ExecutionEvidenceCollector,
   exposedToolNames,
+  extractStructuredError,
+  RecoveryGovernor,
+  recoveryTargetFor,
   fingerprintResponse,
   isMutationTool,
   isPassthroughToolPolicy,
@@ -81,6 +85,17 @@ import {
   type ExecutionEvidence,
   type HarnessProfile,
 } from "../../core/harness";
+// Phase 3 adaptive-budget constants/helpers come from the policy module
+// directly (single source of truth; all values centralized there).
+import {
+  ADAPTIVE_HARD_CAP,
+  ADAPTIVE_MAX_EQUIVALENT_FAILED_VARIANTS,
+  ADAPTIVE_MIN_VERIFIED_FOR_EXTENSION,
+  decideAdaptiveExtension,
+  equivalentFailureLoopError,
+  hardCapError,
+  semanticFailureSignature,
+} from "../../core/harness/continuation";
 // Import the subagent pieces surgically (not via the module barrel) so the
 // harness graph does not pull the manager + registry in eagerly.
 import { DEFAULT_SUBAGENT_MAX_DEPTH, decideTool, type ToolPermissionScope } from "../../core/agent/agents/types";
@@ -680,7 +695,7 @@ export class AgentHarness {
 
     if (options.signal?.aborted) {
       return {
-        result: JSON.stringify({ stdout: "", stderr: "Cancelled", exitCode: 130 }),
+        result: JSON.stringify({ stdout: "", stderr: "Cancelled", exitCode: 130, structuredError: { code: "CANCELLED", message: "Cancelled", retryable: false } }),
         allowed: false,
         reason: "Cancelled",
       };
@@ -699,16 +714,16 @@ export class AgentHarness {
 
       // An explicit deny can never be unlocked — not by the model, and not by
       // a user approval prompt for a different (ASK) tool.
+      // The terminal tool:error for this call is emitted once, by the caller
+      // that owns the call id (the runTool lifecycle). An id-less event here
+      // would be a second terminal outcome.
       if (verdict === "deny") {
         this.metrics.toolCallsExecuted++;
-        this.emitEvent("tool:error", this.activeMode, {
-          toolName: name,
-          toolArgs: args,
-          reason: "denied-by-scope",
-        });
+        const message = `Permission Denied: tool '${name}' is not permitted in this agent's scope.`;
         return {
           result: JSON.stringify({
-            error: `Permission Denied: tool '${name}' is not permitted in this agent's scope.`,
+            error: message,
+            structuredError: { code: "PERMISSION_DENIED", message, retryable: false },
           }),
           allowed: false,
           reason: `Tool '${name}' is outside the active permission scope.`,
@@ -769,6 +784,11 @@ export class AgentHarness {
           stderr: gatewayRes.stderr || `Approval Required: ${gatewayRes.reason || `Tool ${name} requires interactive approval.`}`,
           exitCode: 1,
           approvalRequired: true,
+          structuredError: {
+            code: "PERMISSION_REQUIRED",
+            message: gatewayRes.stderr || `Approval Required: ${gatewayRes.reason || `Tool ${name} requires interactive approval.`}`,
+            retryable: false
+          }
         }),
         allowed: false,
         needsApproval: true,
@@ -778,8 +798,33 @@ export class AgentHarness {
 
     if (!gatewayRes.allowed) {
       this.metrics.toolCallsExecuted++;
+      // A gateway result that already carries a typed error (e.g. the executor
+      // threw → INTERNAL_ERROR) is not a policy denial; keep its code.
+      if (gatewayRes.structuredError) {
+        return {
+          result: JSON.stringify({
+            error: gatewayRes.structuredError.message,
+            stderr: gatewayRes.stderr,
+            exitCode: gatewayRes.exitCode || 1,
+            structuredError: gatewayRes.structuredError,
+          }),
+          allowed: false,
+          reason: gatewayRes.reason,
+        };
+      }
+      let code = "SECURITY_DENIED";
+      if (gatewayRes.reason && gatewayRes.reason.includes("outside workspace")) {
+        code = "OUTSIDE_WORKSPACE";
+      }
       return {
-        result: JSON.stringify({ error: `Permission Denied: ${gatewayRes.reason || "Blocked by sandbox policy."}` }),
+        result: JSON.stringify({
+          error: `Permission Denied: ${gatewayRes.reason || "Blocked by sandbox policy."}`,
+          structuredError: {
+            code,
+            message: `Permission Denied: ${gatewayRes.reason || "Blocked by sandbox policy."}`,
+            retryable: false
+          }
+        }),
         allowed: false,
         reason: gatewayRes.reason,
       };
@@ -1001,7 +1046,10 @@ export class AgentHarness {
     try { observabilityHub.info("harness", "turn.start", { correlation: corr, metadata: { mode, model: options.model || this.config.model } as any }); } catch {}
     try { observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { operation: "turn" } }); } catch {}
  // — an explicit caller budget always wins, then the profile's.
-    const maxTurns = resolveMaxTurns(
+    // Phase 3: this is the SOFT budget — it can grow through bounded,
+    // progress-gated extensions (decideAdaptiveExtension), never past the
+    // centralized hard cap.
+    let maxTurns = resolveMaxTurns(
       options.maxTurns,
       this.profile.continuationPolicy.maxTurns,
       this.config.maxTurns,
@@ -1124,6 +1172,96 @@ export class AgentHarness {
     const snapshotEvidence = () =>
       this.evidenceCollector?.snapshot() ?? emptyExecutionEvidence();
 
+    // ── Phase 3: bounded adaptive continuation state ─────────────────────────
+    // `maxTurns` is the SOFT budget. While the run keeps making meaningful
+    // verified progress it earns bounded extensions; without progress it stops
+    // early; the hard cap ALWAYS terminates. All constants are centralized in
+    // core/harness/continuation.ts — no literals here.
+    let softBudget = maxTurns;
+    let extensionsGranted = 0;
+    let synthesisReserveActive = false;
+    let budgetStop: { kind: "hard-cap" | "no-progress" | "repeated-loop" | "legacy-budget"; error: string } | null = null;
+    const distinctSuccessfulToolSigs = new Set<string>();
+
+    // ── Phase 5: structured error-driven recovery ──────────────────────────
+    // Failure recovery is decided from the machine-readable
+    // `structuredError.code` (Phase 1.4), never from prose. The governor owns
+    // its own bounded budget — independent of the Phase 3 turn budget — and
+    // stops the run when a code may not be recovered (denials, cancellation,
+    // internal errors) or when the budget/equivalence bound is reached.
+    const recoveryGovernor = new RecoveryGovernor();
+    let recoveryStop: string | null = null;
+    const pendingRecoveryInstructions: string[] = [];
+    // Per tool: coarse semantic signature → number of FAILED executions of
+    // that variant group. Equivalent rephrasings of the same failing command
+    // accumulate in ONE group; a success clears its group.
+    const equivalentFailedVariants = new Map<string, Map<string, number>>();
+
+    const adaptiveEvidence = () => {
+      const observed = snapshotEvidence();
+      return {
+        distinctSuccessfulToolSigs: distinctSuccessfulToolSigs.size,
+        // Phase 3 counts VERIFIED work: the completion-gate evidence the loop
+        // itself records (recordEvidence only counts ok=true), plus the
+        // collector's verifiedMutations. Failed tool calls come from the
+        // collector's cumulative counter.
+        verifiedMutations: Math.max(evidence.successfulMutations, observed.verifiedMutations),
+        testsPassed: evidence.testsPassed,
+        verificationsPassed: evidence.verificationsPassed,
+        failedToolCalls: observed.failedToolCalls,
+      };
+    };
+
+    /**
+ * — the SOFT budget boundary, evaluated when the last turn of the
+     * current budget level is consumed without a final answer. Three outcomes:
+     * extend (bounded, progress-gated), reserve (ONE final synthesis turn when
+     * the task is effectively complete), or stop (hard cap / no-progress with a
+     * distinguishable terminal error).
+     */
+    const evaluateBudgetBoundary = (): { action: "extend" | "reserve" | "stop"; error?: string } => {
+      const snapshot = adaptiveEvidence();
+      // A model that never produced ANY tool work (all talk, no calls) has no
+      // claim on extensions or the synthesis reserve: it settles at the budget
+      // with the EXACT legacy error, preserving the historical contract for
+      // narrating/stuck-without-tools runs.
+      if (snapshot.distinctSuccessfulToolSigs === 0 && toolCallsCount === 0) {
+        const legacyError = maxTurnsError(maxTurns);
+        budgetStop = { kind: "legacy-budget", error: legacyError };
+        return { action: "stop", error: legacyError };
+      }
+      const decision = decideAdaptiveExtension({ turnsUsed, softBudget, snapshot });
+      if (!decision.extended) {
+        const kind = decision.stopKind === "hard-cap" ? "hard-cap" : "no-progress";
+        const error = decision.stopKind === "hard-cap" ? hardCapError(ADAPTIVE_HARD_CAP) : decision.reason;
+        budgetStop = { kind, error }; // eslint-disable-line no-param-reassign
+        // Reserve ONE turn for the final synthesis when the task is effectively
+        // complete: real verified work exists, tools were used, and no synthesis
+        // has been produced yet. The reserve turn must END the run — it never
+        // earns further budget.
+        const verifiedWork = snapshot.verifiedMutations + snapshot.testsPassed + snapshot.verificationsPassed;
+        const synthesisPending = awaitingToolSynthesis || toolCallsCount > 0;
+        if (verifiedWork >= ADAPTIVE_MIN_VERIFIED_FOR_EXTENSION && synthesisPending) {
+          // Marked by the level header (`synthesisReserveActive = true`);
+          // exactly one more provider turn, then the header settles the run.
+          maxTurns = turnsUsed + 1;
+          return { action: "reserve", error };
+        }
+        return { action: "stop", error };
+      }
+      // Bounded extension: the run proved meaningful verified progress.
+      softBudget = decision.budget;
+      maxTurns = decision.budget;
+      extensionsGranted += 1;
+      this.emitEvent("agent:thinking", mode, {
+        reason: "budget-extended",
+        extensionsGranted,
+        newBudget: softBudget,
+        detail: decision.reason,
+      });
+      return { action: "extend" };
+    };
+
     /**
  * — one progress sample per model turn. Returns a structured abort when
      * the bound is reached, else null. Disabled for the identity profile.
@@ -1171,7 +1309,53 @@ export class AgentHarness {
     this.emitEvent("agent:start", mode, { model, totalMessages: messages.length });
     this.agentState.transition("thinking");
 
-    while (turnsUsed < maxTurns) {
+    // ── Phase 3: outer loop = bounded adaptive budget levels ─────────────────
+    // The inner loop runs the current SOFT budget once; the outer loop can
+    // re-enter it a bounded number of times through progress-gated extensions.
+    // The hard cap ALWAYS terminates — no infinite agent. (One label, `outer`,
+    // because a boundary stop must exit BOTH loops from the level header.)
+    outer: do {
+      // ── Phase 3: soft-budget boundary ─────────────────────────────────
+      // Evaluated when the PREVIOUS level consumed its last turn without a
+      // final answer (skipped on first entry, turnsUsed === 0). Decides ONCE
+      // per level: extend the bounded budget (meaningful verified progress),
+      // reserve ONE synthesis turn (task effectively complete), or stop
+      // (hard cap / no-progress) with a distinguishable terminal error.
+      //
+      // Adaptive continuation applies to the CALLER's budget shape: an explicit
+      // caller budget (TURBO 5 / SUBAGENT 8 / qa 15) is the soft budget and can
+      // still earn bounded extensions; the caller may opt out entirely by
+      // passing adaptiveContinuation: false (ExecutionOptions) or a negative
+      // budget — those keep the EXACT legacy hard-stop behavior.
+      const callerOwnedBudget = options.maxTurns !== undefined;
+      const adaptiveEnabled =
+        (options.adaptiveContinuation ?? true) && softBudget > 0;
+      if (turnsUsed > 0 && adaptiveEnabled) {
+        if (synthesisReserveActive) {
+          // The reserved synthesis turn ran and the run still wants more —
+          // the reserve never earns further budget. Stop with the boundary
+          // verdict recorded when the reserve was granted.
+          budgetStop = budgetStop ?? {
+            kind: "no-progress",
+            error: "Final synthesis not produced within the reserved turn. Stopping.",
+          };
+          break outer;
+        }
+        // The boundary decision belongs to the level header: only when the
+        // current SOFT budget is consumed does a level end.
+        if (turnsUsed >= softBudget) {
+          const boundary = evaluateBudgetBoundary();
+          if (boundary.action === "stop") {
+            break outer;
+          }
+          if (boundary.action === "reserve") {
+            // Mark the granted reserve turn so it cannot be granted twice.
+            synthesisReserveActive = true;
+          }
+          // "extend": maxTurns has grown — the inner loop re-enters.
+        }
+      }
+      while (turnsUsed < maxTurns) {
       turnsUsed++;
 
  // notification instead of polling. Runtime messages that
@@ -1279,13 +1463,20 @@ export class AgentHarness {
       // call tools. Models without native tool calling still receive schemas;
       // their structured JSON tool blocks are parsed by the adapter below.
       const caps = getModelCapabilities(model);
-      const toolsForRequest =
+      let toolsForRequest =
         caps?.tools === false
           ? undefined
           : // toolsOverride wins (subagent scoping, plan mode),
             // then the profile's EXPOSURE policy over the canonical registry.
             options.toolsOverride || this.toolsForProfile();
 
+      if (toolsForRequest) {
+        const { getBrowserCapability } = await import("../browserTool");
+        const cap = await getBrowserCapability();
+        if (!cap.available) {
+          toolsForRequest = toolsForRequest.filter((t: any) => t.function?.name !== "browser");
+        }
+      }
       let modelRes: { response: AgentModelResponse; hadMessage: boolean };
       // Per-turn structured-call allowlist: derived from the EXACT schemas this
       // turn exposes. The adapter parses structured JSON tool calls against
@@ -1519,6 +1710,35 @@ export class AgentHarness {
           failedToolCalls,
         });
         if (gate.decision === "continue") {
+          // ── Phase 3: a reserve turn that fails the gate ends the run ──────
+          // The reserve existed ONLY to produce the final synthesis; a bounce
+          // here would ask for more tool work the budget no longer covers.
+          // Stop with the boundary verdict recorded when the reserve was
+          // granted (the honest prose is still reported in `output`).
+          if (synthesisReserveActive) {
+            // Explicit annotation: budgetStop is assigned inside the boundary
+            // closure, so control-flow narrowing cannot see it here.
+            const stop: { kind: "hard-cap" | "no-progress" | "repeated-loop"; error: string } =
+              budgetStop ?? { kind: "no-progress", error: "Budget boundary reached; stopping." };
+            this.agentState.transition("error", "max-turns");
+            try {
+              observabilityHub.warn("harness", "turn.budget_stop", { correlation: corr, outcome: "error", errorCode: stop.kind === "hard-cap" ? "HARD_CAP" : "NO_PROGRESS" });
+              if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", stop.kind === "hard-cap" ? "HARD_CAP" : "NO_PROGRESS");
+            } catch {}
+            return {
+              success: false,
+              output: finalOutput,
+              messages,
+              toolCallsCount,
+              turnsUsed,
+              tokensUsed: accumulatedTokens,
+              durationMs: Date.now() - startTime,
+              mode,
+              sessionId,
+              evidence: { ...evidence },
+              error: stop.error,
+            };
+          }
           // — a repeated non-answer that the gate rejects is not progress.
           const stalledAtGate = checkProgress(finalOutput);
           if (stalledAtGate) {
@@ -1640,29 +1860,151 @@ export class AgentHarness {
       };
 
       let loopAborted = false;
+      // Phase 3: set when the same tool fails with too many equivalent
+      // argument variants — a semantic no-progress loop. Checked after the
+      // batch, exactly like the identical-args loop flag.
+      let equivalentLoopStop: string | null = null;
       // Set when the user explicitly DENIES a tool. The batch finishes (so every
       // tool_call still gets a transcript answer), then the run stops instead of
       // asking the model/user again.
       let approvalStop: string | null = null;
+
+      // Exactly one terminal event (tool:complete | tool:error) per call id.
+      // Every terminal emission for a call in this batch goes through here,
+      // both from the runTool body and from the executor settling a call itself
+      // (cancel / timeout / throw). A second one is dropped and logged. The set
+      // exists only for this batch (one assistant turn).
+      const settledToolIds = new Set<string>();
+      const emitTerminal = (
+        type: "tool:complete" | "tool:error",
+        payload: { id: string } & Record<string, unknown>
+      ): void => {
+        if (settledToolIds.has(payload.id)) {
+          try {
+            observabilityHub.warn("harness", "tool.duplicate_settlement", {
+              correlation: corr,
+              metadata: { callId: payload.id, event: type } as any,
+            });
+          } catch {}
+          return;
+        }
+        settledToolIds.add(payload.id);
+        this.emitEvent(type, mode, payload);
+      };
+      const warnLifecycle = (event: string, call: ToolCall, extra: Record<string, unknown> = {}): void => {
+        try {
+          observabilityHub.warn("harness", event, {
+            correlation: corr,
+            metadata: { callId: call.id, toolName: call.name, ...extra } as any,
+          });
+        } catch {}
+      };
+
+      // ── Phase 5: structured failure → recovery decision ──────────────────
+      // The inventory a recovery instruction may name: the tools THIS turn
+      // exposed plus every registry-dispatchable name (aliases / plugins).
+      const recoveryToolInventory = (): ReadonlySet<string> =>
+        new Set<string>([
+          ...(allowedToolNames ?? []),
+          ...toolRegistry.list().map((t) => t.name),
+        ]);
+      /**
+       * Feeds ONE machine-readable failure to the bounded recovery governor.
+       * A `stop` verdict ends the run after the batch settles; a granted
+       * recovery becomes a single corrective instruction for the next turn.
+       */
+      const noteRecovery = (name: string, args: any, error: StructuredToolError | null): void => {
+        if (!error) return;
+        const decision = recoveryGovernor.assess({
+          toolName: name,
+          args: (args ?? {}) as Record<string, unknown>,
+          error,
+          target: recoveryTargetFor(name, args as Record<string, unknown>),
+          availableTools: recoveryToolInventory(),
+        });
+        if (decision.action === "none") return;
+        this.emitEvent("agent:thinking", mode, {
+          turnsUsed,
+          toolCallsCount,
+          recovery: decision.action,
+          recoveryCode: decision.code,
+          alternateTool: decision.alternateTool,
+          recoveryReason: decision.reason,
+        });
+        if (decision.stop) {
+          recoveryStop = recoveryStop ?? decision.error ?? decision.reason;
+          return;
+        }
+        if (decision.instruction) pendingRecoveryInstructions.push(decision.instruction);
+      };
+
       this.agentState.transition("executing-tool");
       const outcome = await executeToolBatch(parsedCalls, {
         signal: combinedSignal,
         cwd: this.config.currentCwd || process.cwd(),
         needsApproval,
         maxRepeat: 2,
+        onForcedSettle: (call, content, error) => {
+          failedToolCalls += 1;
+          noteRecovery(call.name, call.args, extractStructuredError(content));
+          emitTerminal("tool:error", {
+            toolName: call.name,
+            toolArgs: call.args,
+            result: content,
+            reason: error.message,
+            id: call.id,
+            callId: call.id,
+          });
+        },
+        onLateCompletion: (call, kind) => warnLifecycle("tool.late_completion_ignored", call, { kind }),
+        onDuplicateCallId: (call) => warnLifecycle("tool.duplicate_call_id", call),
         runTool: async (name, args, id) => {
           // Front-end specific tools (e.g. the TUI's save_plan) run before the
           // core gateway. Returning null falls through to the normal path.
           if (options.onCustomTool) {
             const custom = await options.onCustomTool(name, args, id);
             if (custom) {
-              if (!custom.allowed) failedToolCalls += 1;
+              if (!custom.allowed) {
+                failedToolCalls += 1;
+                noteRecovery(name, args, extractStructuredError(custom.result));
+              }
               this.emitEvent("tool:queued", mode, { toolName: name, toolArgs: args, id });
-              this.emitEvent(custom.allowed ? "tool:complete" : "tool:error", mode, {
+              emitTerminal(custom.allowed ? "tool:complete" : "tool:error", {
                 toolName: name, toolArgs: args, result: custom.result, id,
               });
               return custom;
             }
+          }
+
+          // Preflight, before any gate or implementation runs. A tool that is
+          // neither registered nor exposed this turn is TOOL_UNAVAILABLE.
+          // Arguments that do not fit the tool's schema are INVALID_INPUT. Each
+          // of these is one terminal failure, and nothing executes.
+          const registered = toolRegistry.get(name);
+          const exposedSchema = (toolsForRequest ?? []).find((t: any) => t?.function?.name === name)?.function?.parameters;
+          const preflightError: StructuredToolError | null =
+            !registered && !allowedToolNames?.has(name)
+              ? {
+                  code: "TOOL_UNAVAILABLE",
+                  message: `Tool '${name}' is not available.`,
+                  retryable: false,
+                  suggestedAction: "Use one of the tools provided in this turn.",
+                }
+              : validateToolInput(name, args, (registered?.parameters ?? exposedSchema) as Record<string, unknown> | undefined);
+          if (preflightError) {
+            failedToolCalls += 1;
+            noteRecovery(name, args, preflightError);
+            const result = toolErrorEnvelope(preflightError);
+            this.emitEvent("tool:queued", mode, { toolName: name, toolArgs: args, id });
+            emitTerminal("tool:error", {
+              toolName: name,
+              toolArgs: args,
+              result,
+              reason: preflightError.message,
+              id,
+              callId: id,
+            });
+            return { result, allowed: false, reason: preflightError.message };
           }
 
           // Loop detection is CONSECUTIVE-only: the same (tool, args) repeated
@@ -1676,6 +2018,16 @@ export class AgentHarness {
           } else {
             this.lastToolSig = sig;
             this.consecutiveToolRepeat = 1;
+          }
+          // ── Phase 3 progress accounting (observability only here — guards
+          // below decide stops; no tool result is rewritten). Every executed
+          // call feeds two maps: distinct SUCCESSFUL signatures (meaningful
+          // work) and SEMANTICALLY equivalent failed variants (retry churn).
+          const adaptiveSig = semanticFailureSignature(name, args);
+          let failedVariants = equivalentFailedVariants.get(name);
+          if (!failedVariants) {
+            failedVariants = new Map<string, number>();
+            equivalentFailedVariants.set(name, failedVariants);
           }
  // — the repeat bound comes from the profile, never a literal.
           if (exceedsRepeatedToolCalls(this.profile.continuationPolicy, this.consecutiveToolRepeat)) {
@@ -1739,7 +2091,8 @@ export class AgentHarness {
             const approvedExitCode = approvedParsed?.exitCode ?? (approvedParsed?.success === false ? 1 : 0);
             const approvedVerified = approvedVerification ? approvedVerification.ok : approvedExitCode === 0;
             if (approvedExitCode !== 0) {
-              this.emitEvent("tool:error", mode, {
+              noteRecovery(name, args, extractStructuredError(approvedResult.result));
+              emitTerminal("tool:error", {
                 toolName: name,
                 toolArgs: args,
                 result: approvedResult.result,
@@ -1754,7 +2107,7 @@ export class AgentHarness {
             if (isMutationTool(name)) recordEvidence(evidence, "mutation", approvedVerified);
             if (looksLikeTestCommand(name, args)) recordEvidence(evidence, "test", approvedVerified);
             if (looksLikeVerificationCommand(name, args)) recordEvidence(evidence, "verification", approvedVerified);
-            this.emitEvent("tool:complete", mode, {
+            emitTerminal("tool:complete", {
               toolName: name,
               toolArgs: args,
               result: approvedResult.result,
@@ -1768,6 +2121,7 @@ export class AgentHarness {
           };
 
           if (!res.allowed && res.needsApproval) {
+            noteRecovery(name, args, extractStructuredError(res.result));
             if (!options.requestApproval) {
               // No front-end can resolve the gate. Surface it and return the
               // typed result so the model learns approval is required (the
@@ -1776,6 +2130,16 @@ export class AgentHarness {
               this.emitEvent("agent:error", mode, {
                 error: "Permission required before continuing; execution paused for approval.",
                 code: "APPROVAL_REQUIRED",
+              });
+              // The call itself settles here (PERMISSION_REQUIRED); tool:start
+              // was already emitted, so it must not stay open.
+              emitTerminal("tool:error", {
+                toolName: name,
+                toolArgs: args,
+                result: res.result,
+                reason: res.reason ?? "Approval required",
+                id,
+                callId: id,
               });
               return res;
             }
@@ -1788,7 +2152,7 @@ export class AgentHarness {
                 error: approvalStop,
                 code: "APPROVAL_DENIED",
               });
-              return {
+              const denied = {
                 ...res,
                 result: JSON.stringify({
                   stdout: "",
@@ -1796,8 +2160,22 @@ export class AgentHarness {
                   exitCode: 1,
                   approvalRequired: true,
                   approvalDenied: true,
+                  structuredError: {
+                    code: "PERMISSION_DENIED",
+                    message: "Permission denied by user.",
+                    retryable: false
+                  }
                 }),
               };
+              emitTerminal("tool:error", {
+                toolName: name,
+                toolArgs: args,
+                result: denied.result,
+                reason: "Permission denied by user.",
+                id,
+                callId: id,
+              });
+              return denied;
             }
 
             return approveAndExecute();
@@ -1805,7 +2183,8 @@ export class AgentHarness {
 
           if (!res.allowed) {
             failedToolCalls += 1;
-            this.emitEvent("tool:error", mode, {
+            noteRecovery(name, args, extractStructuredError(res.result));
+            emitTerminal("tool:error", {
               toolName: name,
               toolArgs: args,
               result: res.result,
@@ -1820,7 +2199,23 @@ export class AgentHarness {
           const exitCode = parsed?.exitCode ?? (parsed?.success === false ? 1 : 0);
           if (exitCode !== 0) {
             failedToolCalls += 1;
-            this.emitEvent("tool:error", mode, {
+            noteRecovery(name, args, extractStructuredError(res.result));
+            // Phase 3 repeated-tool guard (semantic tier): a FAILED execution
+            // of the same tool with equivalent arguments is retry churn, not
+            // progress. Distinct variants are counted per tool; past the
+            // centralized bound the run stops — the model has demonstrated it
+            // cannot succeed by rephrasing, only by changing approach.
+            // Gate: adaptive continuation only (the legacy path keeps its
+            // exact historical stop set).
+            if (adaptiveEnabled) {
+              const groupCount = (failedVariants.get(adaptiveSig) ?? 0) + 1;
+              failedVariants.set(adaptiveSig, groupCount);
+              if (groupCount > ADAPTIVE_MAX_EQUIVALENT_FAILED_VARIANTS) {
+                equivalentLoopStop = equivalentFailureLoopError(groupCount);
+                this.emitEvent("agent:error", mode, { error: equivalentLoopStop, code: "EQUIVALENT_FAILURE_LOOP" });
+              }
+            }
+            emitTerminal("tool:error", {
               toolName: name,
               toolArgs: args,
               result: res.result,
@@ -1841,10 +2236,15 @@ export class AgentHarness {
           }
           const verified = verification ? verification.ok : true;
           recordEvidence(evidence, "execution", true);
+          // Phase 3: a SUCCESSFUL distinct execution is the definition of
+          // meaningful tool work — it feeds the extension decision. A variant
+          // that finally succeeded is no longer retry churn.
+          distinctSuccessfulToolSigs.add(adaptiveSig);
+          failedVariants.delete(adaptiveSig);
           if (isMutationTool(name)) recordEvidence(evidence, "mutation", verified);
           if (looksLikeTestCommand(name, args)) recordEvidence(evidence, "test", verified);
           if (looksLikeVerificationCommand(name, args)) recordEvidence(evidence, "verification", verified);
-          this.emitEvent("tool:complete", mode, {
+          emitTerminal("tool:complete", {
             toolName: name,
             toolArgs: args,
             result: res.result,
@@ -1920,6 +2320,71 @@ export class AgentHarness {
         };
       }
 
+      // ── Phase 3: semantic repeated-tool guard ─────────────────────────
+      // The batch is fully settled (so every tool_call got a transcript
+      // answer); stop BEFORE asking the model for another turn.
+      if (equivalentLoopStop) {
+        this.agentState.transition("error", "loop-detected");
+        this.emitEvent("agent:error", mode, { error: equivalentLoopStop, code: "EQUIVALENT_FAILURE_LOOP" });
+        try {
+          observabilityHub.warn("harness", "turn.loop_detected", { correlation: corr, outcome: "error", errorCode: "EQUIVALENT_FAILURE_LOOP" });
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: "error", error_class: "loop" } });
+          if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", "EQUIVALENT_FAILURE_LOOP");
+        } catch {}
+        return {
+          success: false,
+          output: "",
+          messages,
+          toolCallsCount,
+          turnsUsed,
+          tokensUsed: accumulatedTokens,
+          durationMs: Date.now() - startTime,
+          mode,
+          sessionId,
+          evidence: { ...evidence },
+          error: equivalentLoopStop,
+        };
+      }
+
+      // ── Phase 5: recovery settle ──────────────────────────────────────────
+      // The batch is fully settled (every tool_call got a transcript answer), so
+      // a code-driven recovery STOP ends the run here with a distinguishable
+      // error; a granted recovery is delivered as ONE bounded corrective
+      // instruction the model sees on its next turn.
+      if (recoveryStop) {
+        this.agentState.transition("error", "recovery-stop");
+        this.emitEvent("agent:error", mode, { error: recoveryStop, code: "RECOVERY_STOP" });
+        try {
+          observabilityHub.warn("harness", "turn.recovery_stop", { correlation: corr, outcome: "error", errorCode: "RECOVERY_STOP" });
+          observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: "error", error_class: "recovery" } });
+          if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", "RECOVERY_STOP");
+        } catch {}
+        return {
+          success: false,
+          output: "",
+          messages,
+          toolCallsCount,
+          turnsUsed,
+          tokensUsed: accumulatedTokens,
+          durationMs: Date.now() - startTime,
+          mode,
+          sessionId,
+          evidence: { ...evidence },
+          error: recoveryStop,
+        };
+      }
+
+      if (pendingRecoveryInstructions.length > 0) {
+        const instructions = pendingRecoveryInstructions.splice(0, pendingRecoveryInstructions.length);
+        messages.push({ role: "user", content: instructions.join("\n\n") });
+        this.emitEvent("agent:thinking", mode, {
+          turnsUsed,
+          toolCallsCount,
+          recovery: "instruction-delivered",
+          recoveryCount: recoveryGovernor.totalRecoveries,
+        });
+      }
+
       // The progress bound is evaluated after evidence is recorded, so a corrective turn with
       // real tool progress is not aborted as a no-progress turn.
       const stalled = checkProgress(assistantContent);
@@ -1951,8 +2416,79 @@ export class AgentHarness {
 
       this.emitEvent("agent:thinking", mode, { turnsUsed, toolCallsCount });
       awaitingToolSynthesis = toolCallsCount > 0 && Boolean(evidence.successfulMutations || evidence.testsPassed || evidence.verificationsPassed);
-    }
+      } // inner while
+      // Inner loop exhausted its budget without a boundary decision:
+      // with adaptive continuation DISABLED this is the legacy hard stop —
+      // settle at the tail immediately (prevents a spin on the outer loop).
+      if (!adaptiveEnabled) break outer;
+    } while (true); // outer — bounded by the adaptive level header above
 
+    // ═══ Phase 3: post-loop settle (one terminal verdict for every exit) ═══
+    // Exits: a normal `finish` returned inside the loop; the level header
+    // broke out (hard cap / no-progress / repeated-loop); the reserve-turn
+    // contract completed (synthesis accepted or bounce → stop).
+    if (budgetStop) {
+      // A reserve synthesis turn may have produced real prose: report it
+      // honestly instead of an empty output.
+      const tailText = (() => {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i];
+          if (m.role === "assistant" && String(m.content ?? "").trim()) return String(m.content);
+        }
+        return "";
+      })();
+      const gate = evaluateCompletionGate({
+        requirements,
+        evidence,
+        proposedAnswer: tailText,
+        turnsRemaining: 0,
+        toolCallsExecuted: toolCallsCount,
+        failedToolCalls,
+      });
+      const gateAccepts = gate.decision !== "continue" && tailText.trim().length > 0;
+      if (gateAccepts && budgetStop.kind === "no-progress") {
+        // Task effectively complete at the boundary — deliver the synthesis
+        // instead of an error (never a fake success: the evidence gate decided).
+        this.agentState.transition("responding");
+        this.emitEvent("agent:complete", mode, { output: tailText, turnsUsed, toolCallsCount, boundary: budgetStop.kind });
+        try {
+          if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "ok", "BOUNDARY_SYNTHESIS");
+        } catch {}
+        return {
+          success: true,
+          output: tailText,
+          messages,
+          toolCallsCount,
+          turnsUsed,
+          tokensUsed: accumulatedTokens,
+          durationMs: Date.now() - startTime,
+          mode,
+          sessionId,
+          evidence: { ...evidence },
+        };
+      }
+      this.agentState.transition("error", budgetStop.kind === "hard-cap" ? "hard-cap" : "max-turns");
+      try {
+        observabilityHub.warn("harness", "turn.budget_stop", { correlation: corr, outcome: "error", errorCode: budgetStop.kind === "hard-cap" ? "HARD_CAP" : "NO_PROGRESS" });
+        observabilityHub.metrics.increment(MetricsRegistry.NAMES.sessionTurnCount, { labels: { outcome: "error", error_class: budgetStop.kind } });
+        if (turnSpan) observabilityHub.trace.end(turnSpan.spanId, "error", budgetStop.kind === "hard-cap" ? "HARD_CAP" : "NO_PROGRESS");
+      } catch {}
+      return {
+        success: false,
+        output: gateAccepts ? tailText : "",
+        messages,
+        toolCallsCount,
+        turnsUsed,
+        tokensUsed: accumulatedTokens,
+        durationMs: Date.now() - startTime,
+        mode,
+        sessionId,
+        evidence: { ...evidence },
+        error: budgetStop.error,
+      };
+    }
+    // Legacy exit (all turns consumed without any boundary decision —
+    // e.g. every extension path disabled): historical error string kept.
     this.agentState.transition("error", "max-turns");
     try {
       observabilityHub.warn("harness", "turn.max_turns", { correlation: corr, outcome: "error", errorCode: "MAX_TURNS" });

@@ -225,7 +225,10 @@ describe("Long-Running Tool UX & Semantic Color System", () => {
       const lines = renderChatMessages(msgs, 80, A.fgCyan);
       const text = lines.map((l) => stripAnsi(l)).join("\n");
 
-      expect(text).toContain("● Test bun test · 4s");
+      // Phase 2.2: the live row paints the CURRENT canonical spinner frame
+      // (animated) instead of the old static `●`.
+      expect(text).toContain("Test bun test · 4s");
+      expect(text).not.toContain("● Test bun test");
       expect(text).toContain("running test suite...");
       expect(text).toContain("1 pass, 0 fail");
     });

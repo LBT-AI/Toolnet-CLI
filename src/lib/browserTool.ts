@@ -22,13 +22,65 @@ async function getPlaywright(): Promise<any> {
   return null;
 }
 
+export interface BrowserCapability {
+  available: boolean;
+  reason?: string;
+}
+
+let capabilityCache: BrowserCapability | null = null;
+
+export async function getBrowserCapability(): Promise<BrowserCapability> {
+  if (capabilityCache) return capabilityCache;
+
+  const pw = await getPlaywright();
+  const chromium = pw?.chromium || pw?.default?.chromium || pw;
+  if (!pw || !chromium || typeof chromium.executablePath !== "function") {
+    capabilityCache = {
+      available: false,
+      reason: "Playwright runtime unavailable"
+    };
+    return capabilityCache;
+  }
+
+  try {
+    const exePath = chromium.executablePath();
+    if (!exePath || !fs.existsSync(exePath)) {
+      capabilityCache = {
+        available: false,
+        reason: "Chromium executable unavailable"
+      };
+      return capabilityCache;
+    }
+  } catch (err: any) {
+    capabilityCache = {
+      available: false,
+      reason: "Failed to locate Chromium executable: " + (err?.message || String(err))
+    };
+    return capabilityCache;
+  }
+
+  capabilityCache = { available: true };
+  return capabilityCache;
+}
+
+export function resetBrowserCapabilityCacheForTests() {
+  capabilityCache = null;
+  playwrightModule = null;
+}
+
 async function ensurePage(): Promise<{ page: any; error?: string }> {
+  const cap = await getBrowserCapability();
+  if (!cap.available) {
+    return {
+      page: null,
+      error: `TOOL_UNAVAILABLE: ${cap.reason}`
+    };
+  }
   const pw = await getPlaywright();
   if (!pw) {
     return {
       page: null,
-      error:
-        "Playwright is not installed. To enable real browser features (JS rendering, click, fill, screenshot), install Playwright by running:\n  npm install -g playwright\nor\n  npx playwright install chromium"
+      error: `TOOL_UNAVAILABLE: Playwright runtime unavailable`
     };
   }
 
@@ -63,6 +115,19 @@ export async function executeBrowserTool(args: any): Promise<ToolResult> {
 
   const { page, error } = await ensurePage();
   if (!page) {
+    if (error && error.startsWith("TOOL_UNAVAILABLE")) {
+      return { 
+        success: false, 
+        error, 
+        structuredError: {
+          code: "TOOL_UNAVAILABLE",
+          message: error,
+          retryable: false,
+          suggestedAction: "Use another available tool or continue without browser access.",
+          details: { reason: error.includes("Chromium") ? "missing_chromium" : "missing_playwright" }
+        }
+      };
+    }
     return { success: false, error };
   }
 
@@ -129,4 +194,12 @@ export async function closeBrowser(): Promise<void> {
     activeContext = null;
     activePage = null;
   }
+}
+
+export function resetBrowserStateForTests() {
+  activeBrowser = null;
+  activeContext = null;
+  activePage = null;
+  capabilityCache = null;
+  playwrightModule = null;
 }

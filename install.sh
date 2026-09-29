@@ -10,6 +10,11 @@ set -euo pipefail
 REPO="LBT-AI/Toolnet-CLI"
 BINARY_NAME="toolnet"
 
+# Global so the EXIT trap can clean it up after `main` returns (a `local`
+# declared inside main is unset by the time the trap runs, which under
+# `set -u` aborts a SUCCESSFUL install with an unbound-variable error).
+tmpdir=""
+
 # ---- Helpers ----
 info()  { printf "\033[36m%s\033[0m\n" "$*"; }
 ok()    { printf "\033[32m✔ %s\033[0m\n" "$*"; }
@@ -84,9 +89,8 @@ main() {
   local download_url="https://github.com/${REPO}/releases/download/v${version}/${artifact_name}${archive_ext}"
   local checksum_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt"
 
-  local tmpdir
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' EXIT
+  trap 'rm -rf "${tmpdir:-}"' EXIT
 
   local archive_path="${tmpdir}/${artifact_name}${archive_ext}"
   info "Downloading ..."
@@ -121,6 +125,9 @@ main() {
   if [ "$archive_ext" = ".zip" ]; then
     require_cmd unzip
     unzip -o -q "$archive_path" -d "$tmpdir"
+    # The Windows archive ships the binary as `toolnet.exe` (the same member
+    # the PowerShell installer and the Scoop manifest expect).
+    [ -f "${tmpdir}/toolnet.exe" ] && binary_path="${tmpdir}/toolnet.exe"
   else
     tar -xzf "$archive_path" -C "$tmpdir"
   fi

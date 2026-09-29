@@ -11,7 +11,10 @@ import { redactOutputSecrets } from "./security/outputRedactor";
 import { resolveDefaultTimeout, clampTimeout } from "./commandClassifier";
 import { TerminalOutputBuffer } from "./terminalOutput";
 
+import type { StructuredToolError } from "../core/contracts";
+
 export interface ToolResult {
+  structuredError?: StructuredToolError;
   success: boolean;
   data?: string;
   error?: string;
@@ -220,9 +223,9 @@ export function toolRead(filePath: string, offset = 0, limit = MAX_OUTPUT_LINES,
     const absPath = resolvePath(filePath, ctx);
     const access = checkPathTraversal(filePath, absPath, true, ctx);
     if (!access.allowed) return { success: false, error: access.error };
-    if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${absPath}` };
+    if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${absPath}`, structuredError: { code: "NOT_FOUND", message: `File not found: ${absPath}`, retryable: false, details: { path: absPath } } };
     const stat = fs.statSync(absPath);
-    if (!stat.isFile()) return { success: false, error: `Not a file: ${absPath}` };
+    if (!stat.isFile()) return { success: false, error: `Not a file: ${absPath}`, structuredError: { code: "NOT_A_FILE", message: `Not a file: ${absPath}`, retryable: false, suggestedTool: "list_dir", suggestedAction: "Use list_dir to inspect this directory.", details: { path: absPath } } };
 
     const content = fs.readFileSync(absPath, "utf8");
     const lines = content.split("\n");
@@ -435,9 +438,9 @@ export function toolEdit(filePath: string, oldString: string, newString: string,
     const absPath = resolvePath(filePath, ctx);
     const access = checkPathTraversal(filePath, absPath, false, ctx);
     if (!access.allowed) return { success: false, error: access.error };
-    if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${absPath}` };
+    if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${absPath}`, structuredError: { code: "NOT_FOUND", message: `File not found: ${absPath}`, retryable: false, details: { path: absPath } } };
     const stat = fs.statSync(absPath);
-    if (!stat.isFile()) return { success: false, error: `Not a file: ${absPath}` };
+    if (!stat.isFile()) return { success: false, error: `Not a file: ${absPath}`, structuredError: { code: "NOT_A_FILE", message: `Not a file: ${absPath}`, retryable: false, suggestedTool: "list_dir", suggestedAction: "Use list_dir to inspect this directory.", details: { path: absPath } } };
 
     const content = fs.readFileSync(absPath, "utf8");
     const idx = content.indexOf(oldString);
@@ -469,9 +472,9 @@ export function toolReplaceAll(filePath: string, oldString: string, newString: s
     const absPath = resolvePath(filePath, ctx);
     const access = checkPathTraversal(filePath, absPath, false, ctx);
     if (!access.allowed) return { success: false, error: access.error };
-    if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${absPath}` };
+    if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${absPath}`, structuredError: { code: "NOT_FOUND", message: `File not found: ${absPath}`, retryable: false, details: { path: absPath } } };
     const stat = fs.statSync(absPath);
-    if (!stat.isFile()) return { success: false, error: `Not a file: ${absPath}` };
+    if (!stat.isFile()) return { success: false, error: `Not a file: ${absPath}`, structuredError: { code: "NOT_A_FILE", message: `Not a file: ${absPath}`, retryable: false, suggestedTool: "list_dir", suggestedAction: "Use list_dir to inspect this directory.", details: { path: absPath } } };
 
     const content = fs.readFileSync(absPath, "utf8");
     const newContent = content.replaceAll(oldString, newString);
@@ -558,7 +561,7 @@ const DEFAULT_SHELL_OUTPUT_CAP = 512 * 1024; // hard byte cap per stream
  * workspaceRoot (legacy default) → process.cwd(). A stale module root (e.g.
  * deleted by another test) self-heals to process.cwd() instead of failing.
  */
-function resolveShellExecCwd(ctx: ShellExecContext): { ok: true; cwd: string } | { ok: false; error: string } {
+function resolveShellExecCwd(ctx: ShellExecContext): { ok: true; cwd: string } | { ok: false; error: string; structuredError?: import("../core/contracts").StructuredToolError } {
   const mode = ctx.sandboxMode || getSandboxMode();
 
   const candidates: string[] = [];
@@ -593,7 +596,7 @@ function resolveShellExecCwd(ctx: ShellExecContext): { ok: true; cwd: string } |
     }
   }
 
-  return { ok: false, error: `cwd '${requested}' is outside the allowed workspace roots (sandbox: ${mode})` };
+  return { ok: false, error: `cwd '${requested}' is outside the allowed workspace roots (sandbox: ${mode})`, structuredError: { code: "OUTSIDE_WORKSPACE", message: `cwd '${requested}' is outside the allowed workspace roots`, retryable: false } };
 }
 
 /**
@@ -1058,80 +1061,134 @@ export function toolFileExists(filePath: string, ctx?: PathExecContext): ToolRes
 export async function toolWebFetch(url: string, signal?: AbortSignal): Promise<ToolResult & { _html?: string }> {
   try {
     if (!url) {
-      return { success: false, error: `Invalid URL: empty` };
-    }
-    if (signal?.aborted) {
-      return { success: false, error: "Cancelled" };
+      return { success: false, error: `Invalid URL: empty`, structuredError: { code: "INVALID_INPUT", message: "Invalid URL: empty", retryable: false } };
     }
     const { safeFetch, SafeFetchError } = await import("./security/safeFetch");
-    const startTime = Date.now();
-    let res;
-    try {
-      res = await safeFetch(url, {
-        timeoutMs: 20000,
-        maxHops: 3,
-        allowLocalhost: false,
-        signal,
-        headers: {
-          "User-Agent": "Mozilla/5.0 (compatible; ToolNet-CLI/1.0; +https://toolnet.ai)",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.5",
-        },
-      });
-    } catch (err: any) {
-      if (err instanceof SafeFetchError) {
-        return { success: false, error: `Web fetch error (${err.code}): ${err.message}` };
+    const MAX_ATTEMPTS = 3;
+    let attempt = 0;
+
+    while (attempt < MAX_ATTEMPTS) {
+      attempt++;
+      if (signal?.aborted) {
+        return { success: false, error: "Cancelled", structuredError: { code: "CANCELLED", message: "Cancelled", retryable: false } };
       }
-      const msg = redactSecrets(err?.message || String(err));
-      return { success: false, error: `Web fetch error: ${msg}` };
+
+      const startTime = Date.now();
+      let res;
+      let errorMsg = "";
+      let isRetryable = false;
+
+      try {
+        res = await safeFetch(url, {
+          timeoutMs: 20000,
+          maxHops: 3,
+          allowLocalhost: false,
+          signal,
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible; ToolNet-CLI/1.0; +https://toolnet.ai)",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+          },
+        });
+
+        const responseTimeMs = Date.now() - startTime;
+        const finalUrl = res.url;
+        const originalUrl = url;
+
+        if (res.status >= 200 && res.status < 300) {
+          const contentType = res.headers.get("content-type") || "";
+          const html = res.body;
+          const size = html.length;
+
+          // Extract title
+          const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+          const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, "").trim() : "(no title)";
+
+          // Strip tags and get readable text (first ~2000 chars)
+          const text = html
+            .replace(/<script[\s\S]*?<\/script>/gi, "")
+            .replace(/<style[\s\S]*?<\/style>/gi, "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s{2,}/g, " ")
+            .trim()
+            .substring(0, 3000);
+
+          const summary = [
+            `URL: ${finalUrl}${finalUrl !== originalUrl ? ` (redirected from ${originalUrl} via ${res.hops} hops${res.crossOrigin ? ", cross-origin" : ""})` : ""}`,
+            `Status: ${res.status} | Time: ${responseTimeMs}ms | Size: ${Math.round(size / 1024)}KB | HTTPS: ${originalUrl.startsWith("https://") ? "✓" : "✗"}`,
+            `Content-Type: ${contentType}`,
+            `Title: ${title}`,
+            ``,
+            `=== Page Text (first 3000 chars) ===`,
+            text,
+          ].join("\n");
+
+          const { data, truncated } = truncateOutput(summary);
+          const result: ToolResult & { _html?: string } = { success: true, data, truncated };
+          result._html = html;
+          return result;
+        }
+
+        errorMsg = `HTTP ${res.status} ${res.statusText} (${responseTimeMs}ms)\nURL: ${finalUrl}`;
+        if (res.status === 408 || res.status === 425 || res.status === 429 || res.status >= 500) {
+          isRetryable = true;
+        }
+      } catch (err: any) {
+        if (err.name === "AbortError" || signal?.aborted) {
+          return { success: false, error: "Cancelled", structuredError: { code: "CANCELLED", message: "Cancelled", retryable: false } };
+        }
+        if (err instanceof SafeFetchError) {
+          errorMsg = `Web fetch error (${err.code}): ${err.message}`;
+          if (err.code === "TIMEOUT" || err.code === "NETWORK_ERROR" || err.code === "NO_RESPONSE") {
+            isRetryable = true;
+          }
+        } else {
+          const msg = redactSecrets(err?.message || String(err));
+          errorMsg = `Web fetch error: ${msg}`;
+          if (err instanceof TypeError) {
+            isRetryable = true;
+          }
+        }
+      }
+
+      if (!isRetryable || attempt === MAX_ATTEMPTS) {
+        const finalError = attempt > 1 ? `${errorMsg} (after ${attempt} attempts)` : errorMsg;
+        let code: import("../core/contracts").ToolErrorCode = "EXECUTION_FAILED";
+        let details: any = undefined;
+        if (res && res.status) {
+          code = "HTTP_ERROR";
+          details = { status: res.status };
+        } else if (errorMsg.includes("TIMEOUT")) {
+          code = "TIMEOUT";
+        } else if (errorMsg.includes("NETWORK_ERROR") || errorMsg.includes("NO_RESPONSE") || errorMsg.includes("TypeError")) {
+          code = "NETWORK_ERROR";
+        } else if (errorMsg.includes("INVALID_URL") || errorMsg.includes("FORBIDDEN_SCHEME")) {
+          code = "INVALID_INPUT";
+        } else if (errorMsg.includes("LOCALHOST_DENIED") || errorMsg.includes("NETWORK_POLICY_DENIED")) {
+          code = "SECURITY_DENIED";
+        }
+        return { 
+          success: false, 
+          error: finalError,
+          structuredError: {
+            code,
+            message: finalError,
+            retryable: isRetryable,
+            details
+          }
+        };
+      }
+
+      const backoffMs = attempt === 1 ? 250 : 750;
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
     }
-    const responseTimeMs = Date.now() - startTime;
-    const finalUrl = res.url;
-    const originalUrl = url;
-
-    if (res.status < 200 || res.status >= 300) {
-      return { success: false, error: `HTTP ${res.status} ${res.statusText} (${responseTimeMs}ms)\nURL: ${finalUrl}` };
-    }
-
-    const contentType = res.headers.get("content-type") || "";
-    const html = res.body;
-    const size = html.length;
-
-    // Extract title
-    const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, "").trim() : "(no title)";
-
-    // Strip tags and get readable text (first ~2000 chars)
-    const text = html
-      .replace(/<script[\s\S]*?<\/script>/gi, "")
-      .replace(/<style[\s\S]*?<\/style>/gi, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s{2,}/g, " ")
-      .trim()
-      .substring(0, 3000);
-
-    const summary = [
-      `URL: ${finalUrl}${finalUrl !== originalUrl ? ` (redirected from ${originalUrl} via ${res.hops} hops${res.crossOrigin ? ", cross-origin" : ""})` : ""}`,
-      `Status: ${res.status} | Time: ${responseTimeMs}ms | Size: ${Math.round(size / 1024)}KB | HTTPS: ${originalUrl.startsWith("https://") ? "✓" : "✗"}`,
-      `Content-Type: ${contentType}`,
-      `Title: ${title}`,
-      ``,
-      `=== Page Text (first 3000 chars) ===`,
-      text,
-    ].join("\n");
-
-    const { data, truncated } = truncateOutput(summary);
-
-    // Store _html internally for toolAuditUrl to reuse
-    const result: ToolResult & { _html?: string } = { success: true, data, truncated };
-    result._html = html;
-    return result;
+    
+    return { success: false, error: "Exhausted retries" };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return { success: false, error: `Web fetch error: ${msg}` };
   }
 }
-
 
 export async function toolAuditUrl(url: string): Promise<ToolResult> {
   const fetchRes = await toolWebFetch(url);

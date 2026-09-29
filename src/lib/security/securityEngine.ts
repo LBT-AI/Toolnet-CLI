@@ -9,7 +9,8 @@ import type {
   ToolExecutionContext,
 } from "./types";
 import { isSensitiveFile } from "./secretGuard";
-import { classifyShellCommand } from "./commandClassifier";
+import { classifyShellCommand, isHarmlessSinkPath } from "./commandClassifier";
+import { inlineScriptIntent, parseShellCommand, type ShellCommandNode } from "./shellParser";
 import { policyEngine } from "./policyEngine";
 import { SessionTrustManager, getLegacyCompatibilitySessionId } from "./sessionTrust";
 import { isAlwaysTrusted } from "./persistentTrust";
@@ -309,22 +310,32 @@ export class SecurityEngine {
       const command = String(args?.command || args?.cmd || "").trim();
       const analysis = classifyShellCommand(command, wsRoot, baseCwd);
       const candidatePaths: string[] = [];
+      // FD-aware (TN-R0-007B): discard sinks and fd aliases (/dev/null,
+      // /dev/stdout, /dev/fd/2, `2>&1`) are not filesystem locations, so they
+      // must never count as an out-of-workspace path.
+      const isRealAbsolutePath = (p: string) =>
+        p.startsWith("/") && !p.includes("://") && !isHarmlessSinkPath(p);
       if (analysis.ast) {
         for (const node of analysis.ast.nodes) {
           for (const arg of node.args) {
-            if (arg.startsWith("/") && !arg.includes("://")) {
+            if (isRealAbsolutePath(arg)) {
               candidatePaths.push(arg);
             }
           }
           for (const redir of node.redirections) {
-            if (redir.target.startsWith("/") && !redir.target.includes("://")) {
+            if (isRealAbsolutePath(redir.target)) {
               candidatePaths.push(redir.target);
             }
           }
           for (const sub of node.subCommands) {
             for (const arg of sub.args) {
-              if (arg.startsWith("/") && !arg.includes("://")) {
+              if (isRealAbsolutePath(arg)) {
                 candidatePaths.push(arg);
+              }
+            }
+            for (const redir of sub.redirections) {
+              if (isRealAbsolutePath(redir.target)) {
+                candidatePaths.push(redir.target);
               }
             }
           }
@@ -546,11 +557,70 @@ export class SecurityEngine {
     if (/\b(curl|wget|ping|ssh|scp)\b/i.test(trimmed)) {
       return "NETWORK";
     }
+    // Inline interpreter scripts (php -r, python -c, node -e, bash -c …) are
+    // capability-classified from the script's intent, not the interpreter's
+    // name (TN-R0-007A).
+    const inlineCap = this.inlineInterpreterCapability(trimmed);
+    if (inlineCap) {
+      return inlineCap;
+    }
+    if (this.isReadOnlyInlineInterpreterCommand(trimmed)) {
+      return "EXECUTE";
+    }
     // Check for dynamic execution patterns
     if (this.isDynamicExecution(trimmed)) {
       return "DYNAMIC_EXECUTION";
     }
     return "EXECUTE";
+  }
+
+  /**
+   * Capability implied by an inline interpreter script's semantics — the single
+   * source of truth shared with the classifier (both use `inlineScriptIntent`).
+   *
+   * Returns null when there is no inline interpreter, or when the script is
+   * read-only: such a command is classified like any other plain command
+   * (e.g. `php -r 'echo "hi";'` → EXECUTE, not DYNAMIC_EXECUTION).
+   */
+  private inlineInterpreterCapability(command: string): PermissionCapability | null {
+    const ast = parseShellCommand(command);
+    if (!ast.isValid) return null;
+
+    const visit = (node: ShellCommandNode): PermissionCapability | null => {
+      if (node.isInterpreter && node.inlineScript) {
+        const intent = inlineScriptIntent(node.inlineScript);
+        if (intent.destructiveSystem) return intent.deletesPaths ? "DELETE" : "SYSTEM";
+        if (intent.spawnsProcesses) return "DYNAMIC_EXECUTION";
+        if (intent.mutatesWorkspace) return "MODIFY";
+      }
+      for (const sub of node.subCommands) {
+        const subCap = visit(sub);
+        if (subCap) return subCap;
+      }
+      return null;
+    };
+
+    for (const node of ast.nodes) {
+      const cap = visit(node);
+      if (cap) return cap;
+    }
+    return null;
+  }
+
+  /**
+   * True when the command is a single NON-shell inline interpreter invocation
+   * whose script is read-only. Its script body is data for the interpreter, so
+   * raw shell heuristics (e.g. `$var` inside a php script) must not mark the
+   * whole invocation as dynamic — TN-R0-007A.
+   */
+  private isReadOnlyInlineInterpreterCommand(command: string): boolean {
+    const ast = parseShellCommand(command);
+    if (!ast.isValid || ast.nodes.length !== 1) return false;
+    const node = ast.nodes[0];
+    if (!node.isInterpreter || !node.inlineScript) return false;
+    if (["sh", "bash", "zsh", "dash"].includes(node.normalizedExecutable)) return false;
+    const intent = inlineScriptIntent(node.inlineScript);
+    return !intent.spawnsProcesses && !intent.mutatesWorkspace && !intent.destructiveSystem;
   }
 
   /**
@@ -562,20 +632,11 @@ export class SecurityEngine {
     // eval
     if (/\beval\s+/.test(command)) return true;
 
-    // bash -c, sh -c, zsh -c, dash -c
-    if (/\b(bash|sh|zsh|dash)\s+-c\s+/.test(command)) return true;
-
-    // python -c, python3 -c
-    if (/\bpython3?\s+-c\s+/.test(command)) return true;
-
-    // node -e
-    if (/\bnode\s+-e\s+/.test(command)) return true;
-
-    // perl -e
-    if (/\bperl\s+-e\s+/.test(command)) return true;
-
-    // ruby -e
-    if (/\bruby\s+-e\s+/.test(command)) return true;
+    // NOTE (TN-R0-007A): inline interpreter flags (bash|sh|zsh|dash -c,
+    // python -c, node -e, perl/ruby/lua -e, php -r) are deliberately NOT
+    // matched here. Their capability comes from `inlineInterpreterCapability`,
+    // which reads the inline script's intent — a blanket name match would
+    // wrongly lock read-only inspection (`php -r 'echo 1;'`).
 
     // env VAR=value sh -c or env VAR=value bash -c
     if (/\benv\s+[A-Z_]+\s*=\s*.*\s+(bash|sh)\s+-c/.test(command)) return true;
@@ -606,10 +667,6 @@ export class SecurityEngine {
 
     // find -delete
     if (/\bfind\s+.*\s+-delete\b/.test(command)) return true;
-
-    // php -r, lua -e style inline interpreters
-    if (/\bphp\s+-r\s+/.test(command)) return true;
-    if (/\b(ruby|python3?|perl|node|lua)\s+-[ec]\s+/.test(command)) return true;
 
     // Variable in command position: $CMD, ${CMD}
     if (/\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*\s+/.test(command)) return true;

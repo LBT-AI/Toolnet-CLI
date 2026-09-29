@@ -62,6 +62,13 @@ function messageFromEvent(event: SessionEvent): SessionMessage | null {
   return null;
 }
 
+/** The three journal events that genuinely END a run. */
+const TERMINAL_SESSION_EVENTS: ReadonlySet<SessionEvent["type"]> = new Set([
+  "session.completed",
+  "session.failed",
+  "session.cancelled",
+]);
+
 function terminalStatusFromEvent(event: SessionEvent): SessionStatus | null {
   switch (event.type) {
     case "session.completed":
@@ -150,7 +157,12 @@ export function replaySession(input: ReplayInput): ReplayResult {
     const terminal = terminalStatusFromEvent(event);
     if (terminal) {
       status = terminal;
-      sawTerminalEvent = true;
+      // Only a GENUINELY terminal event ends the run. A plain
+      // `session.status` projection (e.g. "running" / "waiting_permission")
+      // must NOT mark the journal as ended — otherwise a crashed run whose last
+      // durable event is a status update looks finished instead of interrupted,
+      // and resume would never report the crash.
+      if (TERMINAL_SESSION_EVENTS.has(event.type)) sawTerminalEvent = true;
     }
   }
 

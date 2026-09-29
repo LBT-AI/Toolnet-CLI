@@ -142,6 +142,7 @@ describe("canonical markdown renderer (Task 6)", () => {
           runId: "run-1",
           turnId: 1,
           streaming: true,
+          responseKey: "resp_test_draft_1",
         };
         const msgs: Msg[] = [{ role: "assistant", id: "draft-1", content: prefix }];
         return renderChatMessages(msgs, 80, "").map((l) => stripAnsi(l)).join("\n");
