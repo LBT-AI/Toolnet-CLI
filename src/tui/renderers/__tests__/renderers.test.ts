@@ -1,4 +1,5 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeEach } from "bun:test";
+import { tuiState } from "../../state";
 import { renderHeader } from "../headerRenderer";
 import { renderChatMessages } from "../chatRenderer";
 import { renderSidebar } from "../sidebarRenderer";
@@ -15,6 +16,13 @@ import { stripAnsi, visibleWidth } from "../../layout";
 import { setNoColor } from "../../../term";
 
 describe("TUI Renderers Unit Tests", () => {
+  beforeEach(() => {
+    // The empty-transcript render is only empty when no live tool overlay is
+    // active; guarantee that here so the assertion never depends on the state
+    // a sibling suite happened to leave behind.
+    tuiState.clearToolActivities();
+  });
+
   it("renderHeader renders title, mode badge, and status without ANSI overflow", () => {
     const output = renderHeader(80, {
       agentMode: "Build",

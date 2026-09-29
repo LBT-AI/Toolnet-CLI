@@ -18,7 +18,7 @@
 
 ### Changed
 - Pinned the supported toolchain: Bun `1.4.0`, Node `22` (Node `>=20` supported). CI runs on Ubuntu, macOS and Windows and executes real CLI smoke tests.
-- `node-pty` is now a declared dev dependency so the PTY acceptance suites are reproducibly provisioned; they skip explicitly (never silently pass) when unavailable or off-POSIX.
+- PTY acceptance is now **opt-in** (`TOOLNET_PTY_ACCEPTANCE=1`) and skips explicitly (never silently passes) when its prerequisites are absent, so the default CI matrix stays reproducible without a native PTY module.
 - Removed generated runtime/emulator state from version control and added `.gitignore` rules for `.wrangler/`, SQLite `-shm`/`-wal` files and release archives.
 
 ## [1.3.0] - 2026-09-27

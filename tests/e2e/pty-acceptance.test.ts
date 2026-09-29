@@ -16,10 +16,15 @@
  *     identically from any working directory.
  *   - The PTY is a POSIX pseudo-terminal; on Windows the tests SKIP explicitly
  *     (never a silent pass) instead of depending on forkpty behaviour.
- *   - When node-pty or the built entry is missing the tests SKIP explicitly, so
- *     a green run can never hide an unexecuted acceptance.
+ *   - PTY acceptance is OPT-IN: it runs only when TOOLNET_PTY_ACCEPTANCE=1 is
+ *     set (node-pty + a built entry + a POSIX host are also required). Without
+ *     the flag the tests SKIP explicitly — a green CI run is reproducible and
+ *     never depends on a fragile native PTY module being present.
  *   - The child env strips agent/developer shell variables (notably CLAUDECODE)
  *     so an ambient shell can never change the captured byte stream.
+ *
+ * Run locally / in a dedicated job:
+ *   TOOLNET_PTY_ACCEPTANCE=1 bun test tests/e2e/pty-acceptance.test.ts
  */
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -46,16 +51,19 @@ const ENTRY = join(ROOT, "dist", "node", "index.js");
 const DRIVER = join(ROOT, "tests", "e2e", "pty", "driver.cjs");
 const hasEntry = existsSync(ENTRY);
 const posix = process.platform !== "win32";
-const ready = Boolean(pty) && hasEntry && posix;
+const enabled = process.env.TOOLNET_PTY_ACCEPTANCE === "1";
+const ready = Boolean(pty) && hasEntry && posix && enabled;
 const cond = ready ? it : it.skip;
 
-const skipReason = !pty
-  ? "node-pty unavailable"
-  : !hasEntry
-    ? "run `bun run build` first"
-    : !posix
-      ? "PTY acceptance is POSIX-only"
-      : "";
+const skipReason = !enabled
+  ? "set TOOLNET_PTY_ACCEPTANCE=1 to run"
+  : !pty
+    ? "node-pty unavailable"
+    : !hasEntry
+      ? "run `bun run build` first"
+      : !posix
+        ? "PTY acceptance is POSIX-only"
+        : "";
 
 interface PtyResult {
   output: string;

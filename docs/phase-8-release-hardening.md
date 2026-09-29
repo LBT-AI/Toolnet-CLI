@@ -47,7 +47,7 @@ rotation is required.
 |---|---|
 | Pinned toolchain | Bun `1.4.0` and Node `22` pinned in `ci.yml`; `release.yml` no longer uses `bun-version: latest`. Added `.nvmrc` (`22`), `packageManager: bun@1.4.0`, `engines.bun >= 1.4.0`. |
 | CLAUDECODE isolation | CI test step `unset`s `CLAUDECODE`/`CLAUDE_CODE_*`; `lspGoldenE2E` already strips them from its fixture env; PTY child env is sanitised in both the Bun and Python harnesses. |
-| PTY test isolation | PTY suites resolve `ROOT` from `import.meta.dir` (not `process.cwd()`), skip **explicitly** (never silently pass) when node-pty or the built entry is missing or off-POSIX, and the child env is isolated. `node-pty@1.1.0` is now a declared dev dependency so CI provisions it; CI builds **before** testing so the entry exists. |
+| PTY test isolation | PTY suites resolve `ROOT` from `import.meta.dir` (not `process.cwd()`), are **opt-in** (`TOOLNET_PTY_ACCEPTANCE=1`), and skip **explicitly** (never silently pass) when the flag, node-pty, the built entry or a POSIX host is missing; the child env is isolated. PTY acceptance is deliberately NOT part of the default CI matrix (it needs a fragile native PTY module and a real TTY), keeping CI reproducible; CI still builds **before** testing. |
 
 ## 4. Cross-platform CI
 
@@ -65,6 +65,19 @@ A separate `compat (node 20)` job preserves the Node 20 persistence + CLI smoke.
 > Runner execution note: the matrix is authored and validated locally on Linux;
 > macOS/Windows runners execute on push. Cross-compiled binaries for all five
 > targets were produced and checksum-verified locally.
+
+### Follow-up from the first real CI run (run `36526332918`, commit `57e6f67`)
+
+Every job failed on the first push. Audited root causes and fixes:
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| `compat (node 20)` → *Install dependencies* | Declaring `node-pty@1.1.0` dragged a native `node-gyp` build into every job, which fails on the pinned Node 20 / headless image. | `node-pty` **un-declared**; PTY acceptance is opt-in and no longer installs anything in CI. |
+| `test (ubuntu/macos/windows)` → *PTY acceptance* | GitHub-hosted headless runners do not provide a real interactive TTY; the PTY suites fail (and burn 20–50 s each) regardless of OS. | PTY acceptance gated behind `TOOLNET_PTY_ACCEPTANCE=1` and skipped **explicitly** — CI no longer depends on a native PTY module or a real TTY. |
+| `test (all)` → `renderChatMessages renders empty conversation gracefully` | Process-global TUI leak: `stableViewport.test.ts` left `tuiState` tool activities set, so a sibling suite's “empty transcript” assertion saw 2 live rows. | `afterEach` cleanup in the leaking suite + **defensive precondition** (`clearToolActivities()`) in the renderer suite, so the assertion no longer depends on sibling order. |
+
+Post-fix local gate: typecheck PASS; full suite **3442 pass / 31 skip / 0 fail**
+(the 11 new skips are the explicitly opt-in PTY cases).
 
 ## 5. Package
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { tuiState } from "../state";
 import {
   createChatViewport,
@@ -22,6 +22,13 @@ describe("Stable message-anchored TUI viewport", () => {
     tuiState.activeAssistantDraft = null;
     tuiState.activeToolActivity = null;
     tuiState.activeReasoningDraft = null;
+  });
+
+  afterEach(() => {
+    // Live tool activity is process-global TUI state. Leaving it set leaked
+    // into sibling suites (e.g. the empty-transcript render assertion), so the
+    // file must clean up after itself.
+    tuiState.clearToolActivities();
   });
 
   it("keeps the same message and intra-message row when wrapping changes", () => {

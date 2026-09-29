@@ -51,8 +51,9 @@ jobs:
       - name: TypeScript
         run: bun run typecheck
 
-      # Build BEFORE tests: the PTY acceptance suites consume dist/node/index.js
-      # and skip explicitly (never silently pass) when it is absent.
+      # Build BEFORE tests: the PTY acceptance suites consume dist/node/index.js.
+      # They are opt-in (TOOLNET_PTY_ACCEPTANCE=1) and skip explicitly — never
+      # silently pass — so this matrix stays reproducible without node-pty.
       - name: Build Bun and Node bundles
         run: bun run build
 

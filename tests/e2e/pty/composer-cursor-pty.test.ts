@@ -27,14 +27,18 @@ try {
 }
 const hasEntry = existsSync(ENTRY);
 const posix = process.platform !== "win32";
-const cond = nodePty && hasEntry && posix ? it : it.skip;
-const skipNote = !nodePty
-  ? " (skipped: node-pty unavailable)"
-  : !hasEntry
-    ? " (skipped: run bun run build first)"
-    : !posix
-      ? " (skipped: PTY acceptance is POSIX-only)"
-      : "";
+// PTY acceptance is opt-in (see tests/e2e/pty-acceptance.test.ts).
+const enabled = process.env.TOOLNET_PTY_ACCEPTANCE === "1";
+const cond = nodePty && hasEntry && posix && enabled ? it : it.skip;
+const skipNote = !enabled
+  ? " (skipped: set TOOLNET_PTY_ACCEPTANCE=1)"
+  : !nodePty
+    ? " (skipped: node-pty unavailable)"
+    : !hasEntry
+      ? " (skipped: run bun run build first)"
+      : !posix
+        ? " (skipped: PTY acceptance is POSIX-only)"
+        : "";
 
 function runDriver(script: Array<[number, string]>): { output: string; exitCode: number } {
   const res = spawnSync(
