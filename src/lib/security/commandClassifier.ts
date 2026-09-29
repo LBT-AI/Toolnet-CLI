@@ -9,7 +9,7 @@ import {
   type ShellRedirection,
   inlineScriptIntent,
 } from "./shellParser";
-import { isPathInsideWorkspace } from "./workspacePolicy";
+import { isPathInsideWorkspace, resolveRealPath } from "./workspacePolicy";
 import { isSensitiveFile } from "./secretGuard";
 
 export interface CommandAnalysis {
@@ -257,6 +257,12 @@ export function classifyShellCommand(
     // unusable on those hosts. This mirrors the argument-path rule in step 7.
     const pathCheck = workspaceRoot ? isPathInsideWorkspace(target, workspaceRoot, cwd) : null;
     const insideWorkspace = pathCheck?.isInside === true;
+    // A target that resolves into the platform temp dir is discard-grade on
+    // every OS, so decide on the RESOLVED path: macOS TMPDIR is textually under
+    // the protected `/var` prefix (`/var/folders/...` -> `/private/var/...`)
+    // while its Linux counterpart `/tmp` is not, which is the whole asymmetry.
+    const resolvedTarget = pathCheck?.resolvedPath || resolveRealPath(target, cwd);
+    const isTempTarget = isOsTempPath(resolvedTarget);
 
     // Credential directories are protected independently of the host username
     // (/root, /home/runner, etc.); this must remain portable across CI/users.
@@ -273,7 +279,7 @@ export function classifyShellCommand(
       };
     }
 
-    if (!insideWorkspace) {
+    if (!insideWorkspace && !isTempTarget) {
       for (const sysPrefix of SENSITIVE_SYSTEM_PREFIXES) {
         if (target === sysPrefix || target.startsWith(sysPrefix + "/")) {
           return {
@@ -287,21 +293,18 @@ export function classifyShellCommand(
           };
         }
       }
+    }
 
-      if (pathCheck && !pathCheck.isInside) {
-        const realTarget = pathCheck.resolvedPath || target;
-        if (!isOsTempPath(realTarget)) {
-          return {
-            riskLevel: "DANGEROUS",
-            isDangerous: true,
-            isCritical: false,
-            category: "WORKSPACE_ESCAPE",
-            reason: `Output redirection target '${target}' escapes workspace boundary`,
-            suggestedAction: "Requires user confirmation before writing outside workspace.",
-            ast,
-          };
-        }
-      }
+    if (pathCheck && !pathCheck.isInside && !isTempTarget) {
+      return {
+        riskLevel: "DANGEROUS",
+        isDangerous: true,
+        isCritical: false,
+        category: "WORKSPACE_ESCAPE",
+        reason: `Output redirection target '${target}' escapes workspace boundary`,
+        suggestedAction: "Requires user confirmation before writing outside workspace.",
+        ast,
+      };
     }
   }
 

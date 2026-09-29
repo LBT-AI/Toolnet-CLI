@@ -96,10 +96,13 @@ test("Control case: /dev/null as an argument is not an out-of-workspace path", (
 // temp dir — the normal case for tests and for macOS TMPDIR in general — could
 // never write its own files in 'workspace' mode.
 
+/** Shell arguments use `/` separators: a backslash is an escape in bash. */
+const shellPath = (p: string) => p.replace(/\\/g, "/");
+
 test("a workspace under a protected prefix may still redirect into itself", () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-redirect-ws-"));
   try {
-    const cmd = `echo hello > ${ws}/nested.txt`;
+    const cmd = `echo hello > ${shellPath(path.join(ws, "nested.txt"))}`;
     const analysis = classifyShellCommand(cmd, ws, ws);
     expect(analysis.category).not.toBe("SYSTEM_TAMPERING");
     expect(analysis.isDangerous).toBe(false);
@@ -114,7 +117,7 @@ test("a workspace under a protected prefix may still redirect into itself", () =
 
 test("a redirect into the platform temp dir outside the workspace is not system tampering", () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-redirect-outside-"));
-  const sink = path.join(os.tmpdir(), `toolnet-redirect-sink-${process.pid}.txt`);
+  const sink = shellPath(path.join(os.tmpdir(), `toolnet-redirect-sink-${process.pid}.txt`));
   try {
     const analysis = classifyShellCommand(`echo hello > ${sink}`, ws, ws);
     expect(analysis.category).not.toBe("SYSTEM_TAMPERING");
@@ -127,7 +130,7 @@ test("a redirect into the platform temp dir outside the workspace is not system 
 test("an out-of-workspace redirect outside temp dirs stays gated", () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-redirect-escape-"));
   try {
-    const outside = path.join(os.homedir(), "toolnet-outside-write.txt");
+    const outside = shellPath(path.join(os.homedir(), "toolnet-outside-write.txt"));
     const analysis = classifyShellCommand(`echo hello > ${outside}`, ws, ws);
     expect(analysis.isDangerous).toBe(true);
     expect(["WORKSPACE_ESCAPE", "SYSTEM_TAMPERING", "SENSITIVE_FILE_ACCESS"]).toContain(analysis.category);
