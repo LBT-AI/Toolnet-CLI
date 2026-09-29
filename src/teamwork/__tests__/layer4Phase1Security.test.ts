@@ -373,9 +373,14 @@ describe("PHASE1 shell hardening", () => {
     expect(res.stdout).not.toContain("classified-xyz");
     expect(res.stdout).not.toContain("aws-secret-probe");
     // HOME is allowlisted (so tools can find the user's cache), but only when
-    // the host actually defines it — Windows shells may not.
+    // the host actually defines it — Windows shells may not. Compare the
+    // directory, not the notation: the shell may render `C:\\Users\\x` as
+    // `/c/Users/x`.
+    const renderPath = (p: string) =>
+      p.replace(/\\/g, "/").replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`);
+    const childHome = /\[([^\]]*)\]\s*$/.exec(String(res.stdout ?? ""))?.[1] ?? "";
     const home = process.env.HOME;
-    if (home) expect(res.stdout).toContain(`[${home}]`);
+    if (home) expect(renderPath(childHome)).toBe(renderPath(home));
     else expect(String(res.stdout).startsWith("[")).toBe(true);
   });
 

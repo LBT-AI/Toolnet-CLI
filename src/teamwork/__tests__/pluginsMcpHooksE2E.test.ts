@@ -580,6 +580,10 @@ describe("Shipped example plugins — loaded from examples/ live", () => {
         sessionId: "sess-example-format",
       }),
     );
+    if (written.exitCode !== 0) {
+      // Surface the real tool error instead of a bare "expected 0, got 1".
+      throw new Error(`write_file failed: ${JSON.stringify(written).slice(0, 1000)}`);
+    }
     expect(written.exitCode).toBe(0);
     expect(fs.readFileSync(path.join(workspace, "src/thing.ts"), "utf8")).toBe("export const x = 1;\n");
 

@@ -58,6 +58,20 @@ function seatbeltProfile(options: { workspaceRoot: string; networkMode?: Network
     }
   }
 
+  // Write operations are spelled out instead of relying on the `file-write*`
+  // shorthand: not every macOS release expands the meta-operation, and a
+  // profile that silently grants nothing would break every write.
+  const writeOps = [
+    "file-write-create",
+    "file-write-data",
+    "file-write-flags",
+    "file-write-mode",
+    "file-write-owner",
+    "file-write-setugid",
+    "file-write-times",
+    "file-write-unlink",
+  ].join(" ");
+
   const rules = [
     "(version 1)",
     "(deny default)",
@@ -65,10 +79,10 @@ function seatbeltProfile(options: { workspaceRoot: string; networkMode?: Network
     "(allow sysctl-read)",
     "(allow mach-lookup)",
     "(allow file-read*)",
-    ...[...writable].map((dir) => `(allow file-write* (subpath ${sexpString(dir)}))`),
-    '(allow file-write* (literal "/dev/null"))',
-    '(allow file-write* (literal "/dev/stdout"))',
-    '(allow file-write* (literal "/dev/stderr"))',
+    ...[...writable].map((dir) => `(allow ${writeOps} (subpath ${sexpString(dir)}))`),
+    `(allow ${writeOps} (literal "/dev/null"))`,
+    `(allow ${writeOps} (literal "/dev/stdout"))`,
+    `(allow ${writeOps} (literal "/dev/stderr"))`,
   ];
   if (options.networkMode !== "denied") rules.push("(allow network*)");
   return rules.join("\n");
@@ -88,12 +102,16 @@ function seatbeltIsOperational(): boolean {
     } catch {}
     return "/tmp";
   })();
-  const probeFile = path.join(probeRoot, `.toolnet-sandbox-probe-${process.pid}-${Date.now()}`);
-  const profile = seatbeltProfile({ workspaceRoot: probeRoot, networkMode: "ask" });
+
+  // The probe runs the exact shape the tool depends on — `bash -c` creating a
+  // NEW file inside a workspace subdirectory — so a profile that cannot
+  // resolve its shell or create files reports the backend as unavailable here
+  // instead of failing every user command at runtime.
+  let probeDir: string | null = null;
   try {
-    // Mirrors the real invocation shape (bash -c), so a profile that cannot
-    // resolve/execute its shell or write inside the allowed roots fails here
-    // instead of breaking every user command at runtime.
+    probeDir = fs.mkdtempSync(path.join(probeRoot, ".toolnet-sandbox-probe-"));
+    const probeFile = path.join(probeDir, "probe.txt");
+    const profile = seatbeltProfile({ workspaceRoot: probeDir, networkMode: "ask" });
     const res = spawnSync(
       "/usr/bin/sandbox-exec",
       ["-p", profile, "bash", "-c", `printf ok > '${probeFile}'; exit 42`],
@@ -103,9 +121,11 @@ function seatbeltIsOperational(): boolean {
   } catch {
     return false;
   } finally {
-    try {
-      fs.rmSync(probeFile, { force: true });
-    } catch {}
+    if (probeDir) {
+      try {
+        fs.rmSync(probeDir, { recursive: true, force: true });
+      } catch {}
+    }
   }
 }
 

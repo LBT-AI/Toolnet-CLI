@@ -143,6 +143,19 @@ describe.serial("Autonomous Coding Agent Integration", () => {
     expect(fs.readFileSync(path.join(tmpDir, "hello.txt"), "utf-8")).toBe("Hello ToolNet\n");
   });
 
+  /**
+   * True when the denied payload never reached a protected OS file: either it
+   * does not exist (macOS) or it cannot be read (root-only on CI Linux) or it
+   * is present and free of the probe string.
+   */
+  function protectedFileUntouched(target: string): boolean {
+    try {
+      return !fs.readFileSync(target, "utf8").includes("test");
+    } catch {
+      return true;
+    }
+  }
+
   // TEST 3 — Permission denied prevents file creation
   test("denies write_file outside workspace in workspace mode", async () => {
     const harness = new AgentHarness({
@@ -152,8 +165,10 @@ describe.serial("Autonomous Coding Agent Integration", () => {
       currentCwd: tmpDir,
     });
 
-    // A canonical protected POSIX file; on Windows the equivalent is a path
-    // outside the workspace that must not be created by the denied call.
+    // A path outside the workspace must be denied. On POSIX the canonical
+    // protected file is /etc/shadow (absent on macOS, root-only readable on CI
+    // Linux, so "unchanged" is checked through what can be observed); Windows
+    // has no such file, so a never-before-existing target proves the same thing.
     const outsideTarget = process.platform === "win32"
       ? path.join(path.parse(tmpDir).root, `toolnet-outside-${process.pid}.txt`)
       : "/etc/shadow";
@@ -182,7 +197,7 @@ describe.serial("Autonomous Coding Agent Integration", () => {
     // The tool call must have been denied: the target is untouched (POSIX) or
     // simply never created (Windows).
     if (outsideTarget === "/etc/shadow") {
-      expect(fs.readFileSync(outsideTarget, "utf8")).not.toContain("test");
+      expect(protectedFileUntouched(outsideTarget)).toBe(true);
     } else {
       expect(fs.existsSync(outsideTarget)).toBe(false);
     }

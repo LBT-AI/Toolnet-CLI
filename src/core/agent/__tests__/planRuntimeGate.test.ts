@@ -57,6 +57,8 @@ describe("plan runtime — harness hard gate (scenario C)", () => {
     // The only sanctioned write class is pinned server-side; the tool derives
     // the path from workspaceRoot + session, never from tool input.
     const p = planPathForSession(planWorkspace, "plan-sec-session");
-    expect(p).toBe(path.join(planWorkspace, ".toolnet", "plans", "plan-sec-session.md"));
+    // Compare resolved paths: the pinned path is a literal string, so its
+    // separators are not required to match the host's notation.
+    expect(path.resolve(p)).toBe(path.resolve(planWorkspace, ".toolnet", "plans", "plan-sec-session.md"));
   });
 });
