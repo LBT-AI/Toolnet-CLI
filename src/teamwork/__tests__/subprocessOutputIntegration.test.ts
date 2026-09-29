@@ -28,7 +28,10 @@ describe("toolBash — normalized output", () => {
   });
 
   test("spinner frames never become committed lines", async () => {
-    const res = await toolBash("printf '|\\r/\\r-\\r\\\\\\rDone\\n'");
+    // Octal escapes keep the byte sequence identical on GNU and MSYS printf:
+    // \015 = CR, \134 = backslash, \012 = LF. Quoting backslashes instead
+    // makes the payload shell-dependent.
+    const res = await toolBash("printf '|\\015/\\015-\\015\\134\\015Done\\012'");
     expect(res.stdout).toBe("Done");
   });
 

@@ -9,6 +9,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { BackgroundJobService } from "../../core/background/service";
 import { SessionInbox, renderBackgroundNotification, sessionInbox } from "../../core/background/inbox";
@@ -19,7 +20,7 @@ import {
 } from "../../core/background/persistence";
 import type { BackgroundJob } from "../../core/background/types";
 
-const persistPath = path.join("/tmp", `toolnet-bg-jobs-${process.pid}.json`);
+const persistPath = path.join(os.tmpdir(), `toolnet-bg-jobs-${process.pid}.json`);
 
 function makeService(overrides: Partial<ConstructorParameters<typeof BackgroundJobService>[0]> = {}) {
   return new BackgroundJobService({

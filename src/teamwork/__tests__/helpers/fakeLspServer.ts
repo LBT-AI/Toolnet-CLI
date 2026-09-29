@@ -11,6 +11,7 @@
  */
 
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { toUri } from "../../../core/lsp/normalize";
 import { createMemoryTransportPair } from "../../../core/lsp/transport";
 import type { DiagnosticItem, LspTransport, SpawnedServer, SymbolInfo } from "../../../core/lsp/types";
@@ -126,10 +127,15 @@ function toWireDiagnostic(item: DiagnosticItem) {
   };
 }
 
+/**
+ * `file://` URI → absolute path, using the same canonical conversion the
+ * production client uses. String-stripping `file://` would leave the leading
+ * slash of `file:///C:/x` in place and mis-resolve every Windows path.
+ */
 function uriToFile(uri: unknown): string | undefined {
   if (typeof uri !== "string" || !uri.startsWith("file://")) return undefined;
   try {
-    return path.resolve(decodeURIComponent(uri.replace("file://", "")));
+    return path.resolve(fileURLToPath(uri));
   } catch {
     return undefined;
   }

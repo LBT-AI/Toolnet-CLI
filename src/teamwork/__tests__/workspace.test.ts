@@ -95,9 +95,12 @@ describe("Workspace Management & Path Resolution", () => {
 
   test("toolBash runs command with cwd = workspaceRoot", async () => {
     setWorkspaceRoot(subProj);
-    const res = await toolBash("pwd");
+    const res = await toolBash("pwd && touch cwd-proof.txt");
     expect(res.success).toBe(true);
-    expect(res.stdout?.trim()).toBe(subProj);
+    // The shell may render the directory in its own notation (MSYS maps the
+    // Windows temp dir to /tmp), so prove the cwd by where a relative file
+    // lands instead of comparing rendered text.
+    expect(fs.existsSync(path.join(subProj, "cwd-proof.txt"))).toBe(true);
   });
 
   test("/pwd command prints process.cwd(), workspaceRoot, shell cwd", async () => {

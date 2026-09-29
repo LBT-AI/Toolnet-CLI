@@ -600,6 +600,23 @@ function resolveShellExecCwd(ctx: ShellExecContext): { ok: true; cwd: string } |
 }
 
 /**
+ * Translates the directory a shell reports into a host path.
+ *
+ * POSIX shells print `/a/b`. On Windows, Git Bash/MSYS prints `/d/a/b` (or
+ * `/c/Users/...`) for `D:\a\b`, while cmd-style shells print `D:/a/b`; both
+ * forms must map onto a real Windows path for shell cwd tracking to work.
+ * Returns undefined when the reported text is not an absolute directory.
+ */
+function resolveShellReportedCwd(reported: string): string | undefined {
+  if (process.platform !== "win32") {
+    return reported.startsWith("/") ? reported : undefined;
+  }
+  const msys = /^\/?([A-Za-z])\/(.*)$/.exec(reported);
+  if (msys) return `${msys[1].toUpperCase()}:/${msys[2]}`;
+  return /^[A-Za-z]:[\\/]/.test(reported) ? reported : undefined;
+}
+
+/**
  * Kill a child process AND its entire process group.
  * POSIX: the child is spawned with `detached: true` so it leads its own
  * process group; killing -pid takes down grandchildren (sleep, daemons, etc.).
@@ -905,9 +922,10 @@ export async function toolBash(command: string, timeoutMs?: number, execCtx?: Sh
       if (cwdMarkerIdx !== -1) {
         const afterMarker = finalStdout.substring(cwdMarkerIdx + cwdMarker.length).trim();
         const newCwd = afterMarker.split("\n")[0].trim();
-        if (newCwd && newCwd.startsWith("/") && fs.existsSync(newCwd)) {
+        const reportedCwd = newCwd ? resolveShellReportedCwd(newCwd) : undefined;
+        if (reportedCwd && fs.existsSync(reportedCwd)) {
           // Only follow the child's cd if it stayed within workspace policy
-          const check = resolveShellExecCwd({ ...ctx, cwd: newCwd });
+          const check = resolveShellExecCwd({ ...ctx, cwd: reportedCwd });
           if (check.ok) currentCwd = check.cwd;
         }
         finalStdout = finalStdout.substring(0, cwdMarkerIdx).trim();

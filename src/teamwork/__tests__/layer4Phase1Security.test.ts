@@ -334,9 +334,13 @@ describe("PHASE1 shell hardening", () => {
 
   test("cwd = provided context cwd (not module global)", async () => {
     const ctx: ShellExecContext = { cwd: inner, workspaceRoot: wsRoot, sandboxMode: "workspace" };
-    const res = await toolBash("pwd", 10000, ctx);
+    const res = await toolBash("pwd && touch cwd-proof.txt", 10000, ctx);
     expect(res.success).toBe(true);
-    expect(res.stdout?.trim()).toBe(fs.realpathSync(inner));
+    // The shell may render the directory in its own notation (MSYS maps the
+    // Windows temp dir to /tmp), so prove the cwd by where a relative file
+    // lands — never in the module-global root.
+    expect(fs.existsSync(path.join(inner, "cwd-proof.txt"))).toBe(true);
+    expect(fs.existsSync(path.join(wsRoot, "cwd-proof.txt"))).toBe(false);
   });
 
   test("cwd outside workspace blocked in workspace mode", async () => {
@@ -368,7 +372,11 @@ describe("PHASE1 shell hardening", () => {
     expect(res.success).toBe(true);
     expect(res.stdout).not.toContain("classified-xyz");
     expect(res.stdout).not.toContain("aws-secret-probe");
-    expect(res.stdout).toContain(`[${process.env.HOME}]`);
+    // HOME is allowlisted (so tools can find the user's cache), but only when
+    // the host actually defines it — Windows shells may not.
+    const home = process.env.HOME;
+    if (home) expect(res.stdout).toContain(`[${home}]`);
+    else expect(String(res.stdout).startsWith("[")).toBe(true);
   });
 
   test("explicit env cannot smuggle secret-looking vars", () => {
@@ -405,7 +413,9 @@ describe("PHASE1 shell hardening", () => {
     expect((res.stderr || "").length).toBeLessThan(5000);
   }, 30000);
 
-  test("timeout kills the whole process tree (grandchild included)", async () => {
+  // Uses pgrep and POSIX process-group signalling to prove the grandchild is
+  // gone — not representable on Windows (taskkill/MSYS), so explicitly skipped.
+  test.skipIf(process.platform === "win32")("timeout kills the whole process tree (grandchild included)", async () => {
     const ctx: ShellExecContext = { cwd: inner, workspaceRoot: wsRoot, sandboxMode: "workspace" };
     const start = Date.now();
     const res = await toolBash("sleep 30 & sleep 30", 500, ctx);
@@ -499,8 +509,11 @@ describe("PHASE1 call graph assertions", () => {
         if (f.isDirectory()) { walk(p); continue; }
         if (!f.name.endsWith(".ts") || f.name.endsWith(".test.ts")) continue;
         const src = fs.readFileSync(p, "utf8");
-        if (src.includes("_executeToolRaw") && !allowed.has(path.relative(libDir, p))) {
-          offenders.push(path.relative(libDir, p));
+        // Module identity is slash-normalized so the allowed set reads the same
+        // on every platform (Windows path.relative returns backslashes).
+        const rel = path.relative(libDir, p).split(path.sep).join("/");
+        if (src.includes("_executeToolRaw") && !allowed.has(rel)) {
+          offenders.push(rel);
         }
       }
     };

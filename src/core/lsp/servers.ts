@@ -95,8 +95,12 @@ function findUp(start: string, stop: string, dirName: string, name: string): str
   let current = path.resolve(start);
   const boundary = path.resolve(stop);
   while (true) {
-    const candidate = path.join(current, dirName, ...withWindowsExtensions(name));
-    if (isExecutableFile(candidate)) return candidate;
+    const candidate = path.join(current, dirName, name);
+    // Windows resolves `foo` to `foo.cmd`/`foo.exe` — the variants replace the
+    // extension, they are never extra path segments.
+    for (const variant of withWindowsExtensions(candidate)) {
+      if (isExecutableFile(variant)) return variant;
+    }
     if (current === boundary) return undefined;
     const parent = path.dirname(current);
     if (parent === current) return undefined;

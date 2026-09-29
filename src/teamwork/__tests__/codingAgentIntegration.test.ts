@@ -10,6 +10,7 @@ import { AgentHarness, AgentLoop, ChangeTracker } from "../../lib/harness";
 import { setSandboxMode } from "../../lib/permissions";
 import type { HarnessEvent } from "../../lib/harness/types";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 
@@ -19,7 +20,7 @@ describe.serial("Autonomous Coding Agent Integration", () => {
 
   beforeEach(() => {
     setSandboxMode("full-access");
-    tmpDir = fs.mkdtempSync(path.join("/tmp", "toolnet-agent-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-agent-test-"));
     globalThis.fetch = originalFetch;
   });
 
@@ -151,6 +152,12 @@ describe.serial("Autonomous Coding Agent Integration", () => {
       currentCwd: tmpDir,
     });
 
+    // A canonical protected POSIX file; on Windows the equivalent is a path
+    // outside the workspace that must not be created by the denied call.
+    const outsideTarget = process.platform === "win32"
+      ? path.join(path.parse(tmpDir).root, `toolnet-outside-${process.pid}.txt`)
+      : "/etc/shadow";
+
     globalThis.fetch = createMockProvider([
       {
         tool_calls: [
@@ -159,7 +166,7 @@ describe.serial("Autonomous Coding Agent Integration", () => {
             type: "function",
             function: {
               name: "write_file",
-              arguments: JSON.stringify({ path: "/etc/shadow", content: "test" }),
+              arguments: JSON.stringify({ path: outsideTarget, content: "test" }),
             },
           },
         ],
@@ -167,13 +174,19 @@ describe.serial("Autonomous Coding Agent Integration", () => {
       { content: "Access denied." },
     ]);
 
-    const result = await harness.runHeadless("Write to /etc/shadow", {
+    const result = await harness.runHeadless(`Write to ${outsideTarget}`, {
       model: "test-model",
       maxTurns: 3,
     });
 
-    // The tool call should fail or be denied
-    expect(fs.existsSync("/etc/shadow")).toBe(true); // unchanged
+    // The tool call must have been denied: the target is untouched (POSIX) or
+    // simply never created (Windows).
+    if (outsideTarget === "/etc/shadow") {
+      expect(fs.readFileSync(outsideTarget, "utf8")).not.toContain("test");
+    } else {
+      expect(fs.existsSync(outsideTarget)).toBe(false);
+    }
+    expect(result.toolCallsCount).toBeGreaterThanOrEqual(0);
   });
 
   // TEST 4 — Code-only request does not mutate workspace
@@ -260,7 +273,11 @@ describe.serial("Autonomous Coding Agent Integration", () => {
             type: "function",
             function: {
               name: "bash",
-              arguments: JSON.stringify({ command: `printf "Hello from bash" > ${outFile}` }),
+              arguments: JSON.stringify({
+                // Quoted, slash-normalized target so the same command works on
+                // POSIX and on Windows shells (backslashes are bash escapes).
+                command: `printf "Hello from bash" > '${outFile.replace(/\\/g, "/")}'`,
+              }),
             },
           },
         ],

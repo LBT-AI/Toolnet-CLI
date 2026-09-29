@@ -17,6 +17,7 @@ import { resetAppConfigCache } from "../../../lib/appConfig";
 import { CredentialResolver } from "../resolver";
 import { AuthProfileRegistry } from "../registry";
 import { CredentialStore } from "../credentialStore";
+import { clearSessionAuthOverrides } from "../context";
 
 let dir: string;
 let previousConfigDir: string | undefined;
@@ -25,6 +26,9 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "tn-auth-live-"));
   previousConfigDir = process.env.TOOLNETCLI_CONFIG_DIR;
   process.env.TOOLNETCLI_CONFIG_DIR = dir;
+  // Session profile pinning is process-wide state: clear it so "nothing is
+  // configured" really means nothing, in any suite order.
+  clearSessionAuthOverrides();
   resetAppConfigCache();
 });
 

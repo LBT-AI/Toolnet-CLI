@@ -465,7 +465,8 @@ describe("Hook E2E — ordering, error routing and blocking", () => {
   });
 
   test("withdrawing a plugin's hooks stops its policy from applying", async () => {
-    const marker = path.join(workspace, "after-removal.txt");
+    // Shell arguments use `/` separators: backslashes are escapes in bash.
+    const marker = path.join(workspace, "after-removal.txt").replace(/\\/g, "/");
     hookRegistry.register({
       name: "tool.before",
       owner: "plugin:temporary",

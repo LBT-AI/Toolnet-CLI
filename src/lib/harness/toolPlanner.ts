@@ -12,6 +12,17 @@
 
 import { canonicalizeJson } from "../security/auditLogger";
 
+/**
+ * Paths reach the cache as tool arguments, so the same file can appear as
+ * `src/a.ts`, `src\\a.ts` or `SRC\\A.TS` depending on the caller and platform.
+ * Cache invalidation compares normalized forms: separators unified everywhere,
+ * case folded on Windows (where paths are case-insensitive).
+ */
+function normalizePathForCompare(p: string): string {
+  const unified = p.replace(/\\/g, "/");
+  return process.platform === "win32" ? unified.toLowerCase() : unified;
+}
+
 // ─── Read-only tool set ──────────────────────────────────────────────────────
 
 const READ_ONLY_TOOLS = new Set([
@@ -109,10 +120,10 @@ export class ToolCache {
 
   /** Invalidate cache entries for a given file path. Called on write/edit/patch. */
   invalidateByPath(filePath: string): void {
-    const normalized = filePath.replace(/\\/g, "/");
+    const normalized = normalizePathForCompare(filePath);
     const keysToInvalidate: string[] = [];
     for (const [key] of this.cache) {
-      if (key.includes(normalized)) {
+      if (normalizePathForCompare(key).includes(normalized)) {
         keysToInvalidate.push(key);
       }
     }

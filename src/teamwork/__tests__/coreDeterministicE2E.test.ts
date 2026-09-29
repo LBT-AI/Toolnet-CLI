@@ -19,6 +19,7 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { AgentEngine } from "../../core/agent/agentEngine";
 import { setSandboxMode } from "../../lib/permissions";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 describe.serial("CORE E2E — deterministic repair loop", () => {
@@ -27,7 +28,7 @@ describe.serial("CORE E2E — deterministic repair loop", () => {
 
   beforeEach(() => {
     setSandboxMode("full-access");
-    tmpDir = fs.mkdtempSync(path.join("/tmp", "toolnet-core-e2e-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-core-e2e-"));
     globalThis.fetch = originalFetch;
   });
 
@@ -81,7 +82,10 @@ describe.serial("CORE E2E — deterministic repair loop", () => {
   test("write → fail → stderr → edit → rerun → exit 0 → verified", async () => {
     const engine = new AgentEngine();
     const target = path.join(tmpDir, "hello.js");
-    const runtime = process.execPath; // the running JS runtime (bun/node)
+    // The running JS runtime (bun/node). Quoted and slash-normalized so the
+    // shell can execute a Windows path (backslashes are bash escapes and the
+    // path usually contains spaces).
+    const runtime = `"${process.execPath.replace(/\\/g, "/")}"`;
 
     // Scripted model: the first write is intentionally broken, then repaired
     // after the model reads the real stderr from the failed execution.

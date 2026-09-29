@@ -393,14 +393,18 @@ describe("P2 — Package metadata (single CLI command)", () => {
     expect(Object.keys(pkg.bin)).toEqual(["toolnet"]);
   });
 
-  it("launcher file exists and is executable", () => {
+  it("launcher file exists and carries a node shebang", () => {
     const launcher = path.join(__dirname, "../../../bin/toolnet.js");
     expect(fs.existsSync(launcher)).toBe(true);
-    const stat = fs.statSync(launcher);
-    expect(stat.mode & 0o111).toBeTruthy();
     const shebang = fs.readFileSync(launcher, "utf8").split("\n")[0];
     expect(shebang).toContain("#!");
     expect(shebang).toContain("env node");
+  });
+
+  // POSIX execute bits do not exist on Windows (git checkout drops them).
+  it.skipIf(process.platform === "win32")("launcher file is executable (POSIX)", () => {
+    const launcher = path.join(__dirname, "../../../bin/toolnet.js");
+    expect(fs.statSync(launcher).mode & 0o111).toBeTruthy();
   });
 
   it("package version is valid semver", () => {
@@ -482,20 +486,19 @@ describe("P2 — Installer path fallback", () => {
 // ---------------------------------------------------------------------------
 
 describe("P2 — Release manifest generation", () => {
-  it("update-formula-checksums.sh exists and is executable", () => {
-    const scriptPath = path.join(__dirname, "../../../scripts/update-formula-checksums.sh");
-    expect(fs.existsSync(scriptPath)).toBe(true);
-    // Check if executable (stat mode check)
-    const stat = fs.statSync(scriptPath);
-    expect(stat.mode & 0o111).toBeTruthy(); // at least one execute bit
-  });
+  const generateScripts = ["update-formula-checksums.sh", "update-scoop-manifest.sh"];
 
-  it("update-scoop-manifest.sh exists and is executable", () => {
-    const scriptPath = path.join(__dirname, "../../../scripts/update-scoop-manifest.sh");
-    expect(fs.existsSync(scriptPath)).toBe(true);
-    const stat = fs.statSync(scriptPath);
-    expect(stat.mode & 0o111).toBeTruthy();
-  });
+  for (const script of generateScripts) {
+    it(`${script} exists`, () => {
+      expect(fs.existsSync(path.join(__dirname, "../../../scripts", script))).toBe(true);
+    });
+
+    // POSIX execute bits do not exist on Windows (git checkout drops them).
+    it.skipIf(process.platform === "win32")(`${script} is executable (POSIX)`, () => {
+      const stat = fs.statSync(path.join(__dirname, "../../../scripts", script));
+      expect(stat.mode & 0o111).toBeTruthy(); // at least one execute bit
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ import { AgentHarness } from "../../lib/harness";
 import { setSandboxMode } from "../../lib/permissions";
 import { setModelCapabilities } from "../../lib/reasoning";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 describe.serial("Agent Runtime Critical Scenarios (C/E/G)", () => {
@@ -26,7 +27,7 @@ describe.serial("Agent Runtime Critical Scenarios (C/E/G)", () => {
 
   beforeEach(() => {
     setSandboxMode("full-access");
-    tmpDir = fs.mkdtempSync(path.join("/tmp", "toolnet-critical-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-critical-"));
     globalThis.fetch = originalFetch;
   });
 

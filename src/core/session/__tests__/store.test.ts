@@ -173,7 +173,8 @@ describe("SessionStore — corruption and versioning", () => {
       const loaded = store.load(legacyId)!;
       expect(loaded.version).toBe(SESSION_SCHEMA_VERSION);
       expect(loaded.messages[0].content).toBe("old");
-      expect(loaded.workspace.path).toBe(fs.realpathSync(legacyDir));
+      // Compare canonical forms: macOS temp dirs are symlinked (/var → /private/var).
+      expect(fs.realpathSync(loaded.workspace.path)).toBe(fs.realpathSync(legacyDir));
       expect(loaded.model).toBe("m");
       // Non-destructive: the on-disk file is still the original shape.
       const raw = JSON.parse(fs.readFileSync(path.join(tmpDir, `${legacyId}.json`), "utf8"));

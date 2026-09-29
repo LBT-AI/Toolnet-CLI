@@ -63,6 +63,26 @@ export interface SessionPaths {
 }
 
 /**
+ * File-name segment for a valid session id.
+ *
+ * Namespaced ids (`sub:parent:explore:1`, `external:codex:abc`) are legal
+ * identities everywhere, but `:` is not a legal file-name character on
+ * Windows, so there the segment is escaped reversibly (`%` is not a session-id
+ * character, so the mapping cannot collide). POSIX file names stay exactly as
+ * they have always been, so existing session directories remain readable.
+ */
+export function sessionFileSegment(sessionId: string): string {
+  if (process.platform !== "win32") return sessionId;
+  return sessionId.replace(/:/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+/** Inverse of `sessionFileSegment` — used when enumerating session files. */
+export function sessionIdFromFileSegment(segment: string): string {
+  if (process.platform !== "win32") return segment;
+  return segment.replace(/%([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+/**
  * Every path a session owns. The final `path.relative` guard is defence in
  * depth: even if id validation were loosened later, a resolved path can never
  * escape the sessions directory.
@@ -70,7 +90,7 @@ export interface SessionPaths {
 export function sessionPathsFor(sessionId: string, sessionsDir = resolveSessionsDir()): SessionPaths {
   assertValidSessionId(sessionId);
   const dir = path.resolve(sessionsDir);
-  const base = path.join(dir, sessionId);
+  const base = path.join(dir, sessionFileSegment(sessionId));
   const ensureInside = (candidate: string): string => {
     const rel = path.relative(dir, candidate);
     if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {

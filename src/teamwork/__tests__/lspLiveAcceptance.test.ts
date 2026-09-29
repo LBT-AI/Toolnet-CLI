@@ -13,6 +13,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { LspManager, resetLspManagers, setLspManagerForTesting } from "../../core/lsp/manager";
 import { resolveServerBinary, selectServerForFile } from "../../core/lsp/servers";
@@ -20,7 +21,7 @@ import { spawnStdioServer } from "../../core/lsp/transport";
 import { runLspOperation } from "../../core/lsp/tool";
 import type { DiagnosticItem, LspServerSpec, SpawnedServer } from "../../core/lsp/types";
 
-const workspace = process.env.TOOLNET_LSP_LIVE_WORKSPACE || "/tmp/toolnet-lsp-live";
+const workspace = process.env.TOOLNET_LSP_LIVE_WORKSPACE || path.join(os.tmpdir(), "toolnet-lsp-live");
 const probeFile = path.join(workspace, "src", "service.ts");
 
 /** Canonical fixture sources — rewritten before the suite so an aborted run
@@ -344,7 +345,7 @@ function instrumentedSpawn(spec: LspServerSpec, root: string): SpawnedServer | u
 // Runs regardless of whether a language server is installed.
 describe("74.11 fallback regression — no language server available", () => {
   test("reports unavailability with a clear reason and never throws", async () => {
-    const bare = fs.mkdtempSync(path.join("/tmp", "toolnet-lsp-nolsp-"));
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-lsp-nolsp-"));
     fs.writeFileSync(path.join(bare, "a.ts"), "export const a = 1;\n");
 
     try {

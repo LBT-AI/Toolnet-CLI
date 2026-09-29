@@ -11,6 +11,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   AgentRegistry,
@@ -161,7 +162,7 @@ describe("AgentRegistry.loadCustomAgents", () => {
   let root: string;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join("/tmp", "toolnet-agents-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-agents-"));
     fs.mkdirSync(path.join(root, ".toolnet"), { recursive: true });
   });
 

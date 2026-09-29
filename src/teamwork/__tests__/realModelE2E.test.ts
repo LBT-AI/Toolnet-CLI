@@ -24,6 +24,7 @@ import { AgentEngine } from "../../core/agent/agentEngine";
 import type { AgentEvent } from "../../core/contracts";
 import { setSandboxMode } from "../../lib/permissions";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const ENABLED = process.env.TOOLNET_REAL_MODEL_E2E === "1";
@@ -46,7 +47,7 @@ describe.serial("REAL MODEL E2E — compliance classification", () => {
 
   beforeEach(() => {
     setSandboxMode("full-access");
-    tmpDir = fs.mkdtempSync(path.join("/tmp", "toolnet-real-e2e-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-real-e2e-"));
   });
 
   afterEach(() => {

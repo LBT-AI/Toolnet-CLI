@@ -58,7 +58,8 @@ function spawnIgnorantChild(): ChildProcess {
   });
 }
 
-describe("process leaks", () => {
+// Process-tree inspection reads /proc, so it only has meaning on Linux.
+describe.skipIf(process.platform !== "linux")("process leaks", () => {
   it("a SIGTERM-ignoring child is force-cleaned when its tree is killed", async () => {
     const child = spawnIgnorantChild();
     await new Promise((resolve) => setTimeout(resolve, 400));

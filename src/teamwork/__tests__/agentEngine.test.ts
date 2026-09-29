@@ -16,6 +16,7 @@ import type { AgentEvent } from "../../core/contracts";
 import type { HarnessEvent } from "../../lib/harness/types";
 import { setSandboxMode } from "../../lib/permissions";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 // ── toToolResult ────────────────────────────────────────────────────────────
@@ -99,7 +100,7 @@ describe.serial("AgentEngine.run — real execution path", () => {
 
   beforeEach(() => {
     setSandboxMode("full-access");
-    tmpDir = fs.mkdtempSync(path.join("/tmp", "toolnet-engine-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-engine-"));
     globalThis.fetch = originalFetch;
   });
 

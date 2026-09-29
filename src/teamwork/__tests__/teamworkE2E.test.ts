@@ -16,6 +16,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { AgentEngine } from "../../core/agent/agentEngine";
 import { BackgroundJobService } from "../../core/background";
@@ -135,7 +136,7 @@ describe.serial("teamwork E2E", () => {
   beforeEach(() => {
     setSandboxMode("full-access");
     subagentSessions.clear();
-    workspace = fs.mkdtempSync(path.join("/tmp", "toolnet-team-e2e-"));
+    workspace = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-team-e2e-"));
     fs.mkdirSync(path.join(workspace, "src"), { recursive: true });
     // The bug the plan is meant to find and fix.
     fs.writeFileSync(path.join(workspace, "src/math.ts"), "export const add = (a: number, b: number) => a * b;\n");

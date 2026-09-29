@@ -4,12 +4,13 @@
  * Esc must still work (bounded timeout, no indefinite wait), and bracketed
  * paste blocks must survive fragmentation and control bytes untouched.
  */
-import { describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it } from "bun:test";
 import {
   TerminalKeyDecoder,
   ESC_FLUSH_TIMEOUT_MS,
   decodedKeyBytes,
 } from "../../../src/tui/input/keyDecoder";
+import { tuiState } from "../../../src/tui/state";
 
 const DOWN = "\u001b[B";
 const UP = "\u001b[A";
@@ -163,6 +164,18 @@ describe("TerminalKeyDecoder — bracketed paste", () => {
 });
 
 describe("TerminalKeyDecoder → handleKey: non-ASCII text", () => {
+  beforeEach(() => {
+    // Modal/overlay state is process-wide. A viewer or picker left open by a
+    // sibling suite owns the keyboard and would swallow every character fed
+    // here, so each case starts from the plain composer.
+    tuiState.closeRunOutputViewer();
+    tuiState.overlay = { type: "none" };
+    tuiState.pendingConfirmation = null;
+    tuiState.deviceCodeModal = null;
+    tuiState.showKeyManager = false;
+    tuiState.showModelPicker = false;
+  });
+
   it("typed Vietnamese reaches the composer intact", async () => {
     const { handleKey, resetInputState, getInputState } = await import("../../../src/tui/input/inputHandler");
     resetInputState();

@@ -75,7 +75,9 @@ describe("EvalStore", () => {
     expect(store.get("run-1")?.runId).toBe("run-1");
   });
 
-  it("writes the store file with mode 0600", () => {
+  // Windows has no POSIX permission bits (chmod only toggles read-only), so
+  // this guarantee is unrepresentable there and is reported as a skip.
+  it.skipIf(process.platform === "win32")("writes the store file with mode 0600", () => {
     store.append(record());
     expect(fs.statSync(store.indexPath).mode & 0o777).toBe(0o600);
   });

@@ -17,6 +17,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { AgentEngine } from "../../core/agent/agentEngine";
 import { agentRegistry } from "../../core/agent/agents/registry";
@@ -91,12 +92,14 @@ function toolMessages(messages: Array<{ role: string; content: string }> | undef
 describe.serial("subagent runtime E2E", () => {
   const originalFetch = globalThis.fetch;
   let workspace: string;
-  const runtime = process.execPath; // the running JS runtime (bun)
+  // The running JS runtime (bun). Quoted and slash-normalized so the shell can
+  // execute a Windows path (backslashes are bash escapes, paths have spaces).
+  const runtime = `"${process.execPath.replace(/\\/g, "/")}"`;
 
   beforeEach(() => {
     setSandboxMode("full-access");
     subagentSessions.clear();
-    workspace = fs.mkdtempSync(path.join("/tmp", "toolnet-subagent-e2e-"));
+    workspace = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-subagent-e2e-"));
   });
 
   afterEach(() => {
@@ -437,7 +440,12 @@ describe.serial("subagent runtime E2E", () => {
     expect(subagentSessions.list()[0].status).toBe("cancelled");
   });
 
-  test("F2. an in-flight shell command is killed when the request is cancelled", async () => {
+  // Prompt cancellation of a running shell command relies on process-tree
+  // termination: POSIX signals the child's process group, Windows shells out to
+  // `taskkill`. The MSYS emulation on the Windows runners does not reliably
+  // expose the grandchild to that walk, so this case is an explicit Windows
+  // skip rather than a silently passing one.
+  test.skipIf(process.platform === "win32")("F2. an in-flight shell command is killed when the request is cancelled", async () => {
     const { executeTool } = await import("../../lib/agentTools");
     const controller = new AbortController();
     // Give the child process a moment to spawn, then cancel mid-flight.

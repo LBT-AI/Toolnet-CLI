@@ -24,6 +24,9 @@ describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
   const tmpDir = path.join(os.tmpdir(), `toolnet-phase4-${Date.now()}`);
   const outsideDir = path.join(os.tmpdir(), `toolnet-outside-phase4-${Date.now()}`);
 
+  /** Shell arguments must use `/` separators: backslashes are escapes in bash. */
+  const shellPath = (p: string) => p.replace(/\\/g, "/");
+
   beforeEach(() => {
     fs.mkdirSync(tmpDir, { recursive: true });
     fs.mkdirSync(outsideDir, { recursive: true });
@@ -100,7 +103,9 @@ describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
     test("toolBash executes pwd in workspace", async () => {
       const res = await toolBash("pwd");
       expect(res.success).toBe(true);
-      expect(res.data).toContain(tmpDir);
+      // The shell renders the cwd in its own notation (MSYS maps the Windows
+      // temp dir to /tmp), so assert the workspace name it must contain.
+      expect(res.data).toContain(path.basename(tmpDir));
     });
 
     test("toolBash executes ls in workspace", async () => {
@@ -109,7 +114,7 @@ describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
     });
 
     test("toolBash creates file in workspace", async () => {
-      const res = await toolBash(`echo "hello" > ${path.join(tmpDir, "test.txt")}`);
+      const res = await toolBash(`echo "hello" > ${shellPath(path.join(tmpDir, "test.txt"))}`);
       expect(res.success).toBe(true);
       expect(fs.existsSync(path.join(tmpDir, "test.txt"))).toBe(true);
     });
@@ -117,7 +122,9 @@ describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
     test("toolBash edits file in workspace", async () => {
       const testFile = path.join(tmpDir, "edit.txt");
       fs.writeFileSync(testFile, "original");
-      const res = await toolBash(`sed -i 's/original/modified/' ${testFile}`);
+      // Rewrite through the shell without GNU-only flags (`sed -i` has no
+      // portable form: BSD/macOS needs `-i ''`, and Windows paths need `/`).
+      const res = await toolBash(`printf 'modified' > '${shellPath(testFile)}'`);
       expect(res.success).toBe(true);
       expect(fs.readFileSync(testFile, "utf8").trim()).toBe("modified");
     });
@@ -125,7 +132,7 @@ describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
     test("toolBash deletes file in workspace", async () => {
       const testFile = path.join(tmpDir, "delete.txt");
       fs.writeFileSync(testFile, "to delete");
-      const res = await toolBash(`rm ${testFile}`);
+      const res = await toolBash(`rm '${shellPath(testFile)}'`);
       expect(res.success).toBe(true);
       expect(fs.existsSync(testFile)).toBe(false);
     });
@@ -152,7 +159,7 @@ test("basic", () => { expect(1 + 1).toBe(2); });`);
       if (!fs.existsSync(sshDir)) {
         fs.mkdirSync(sshDir, { recursive: true });
       }
-      const res = await toolBash(`echo 'malicious' > ${path.join(sshDir, "test_malicious")}`);
+      const res = await toolBash(`echo 'malicious' > '${shellPath(path.join(sshDir, "test_malicious"))}'`);
       expect(res.success).toBe(false);
     });
 

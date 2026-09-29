@@ -7,16 +7,23 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { AgentHarness } from "../../../lib/harness/agentHarness";
 import { agentRegistry } from "../agents/registry";
 import { permissionScopeFromAgent } from "../agents/permissions";
 import { planPathForSession } from "../agents/planWriteTool";
 
+// A real workspace: the harness resolves and realpath-checks its cwd, so a
+// hardcoded path that does not exist denies even read-only tools.
+const planWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-plan-"));
+
 function planHarness(): AgentHarness {
   const plan = agentRegistry.resolve("plan");
   const harness = new AgentHarness({
-    workspaceRoot: "/tmp/toolnet-plan-test",
-    currentCwd: "/tmp/toolnet-plan-test",
+    workspaceRoot: planWorkspace,
+    currentCwd: planWorkspace,
     sessionId: "plan-sec-session",
     sandboxMode: "workspace",
   });
@@ -49,7 +56,7 @@ describe("plan runtime — harness hard gate (scenario C)", () => {
   test("plan_write targets the exact per-session plan path", () => {
     // The only sanctioned write class is pinned server-side; the tool derives
     // the path from workspaceRoot + session, never from tool input.
-    const p = planPathForSession("/tmp/toolnet-plan-test", "plan-sec-session");
-    expect(p).toBe("/tmp/toolnet-plan-test/.toolnet/plans/plan-sec-session.md");
+    const p = planPathForSession(planWorkspace, "plan-sec-session");
+    expect(p).toBe(path.join(planWorkspace, ".toolnet", "plans", "plan-sec-session.md"));
   });
 });

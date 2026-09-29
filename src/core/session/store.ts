@@ -36,6 +36,7 @@ import {
   lastSessionPointerPath,
   normalizeSessionId,
   resolveSessionsDir,
+  sessionIdFromFileSegment,
   sessionIndexPath,
   sessionPathsFor,
   type SessionPaths,
@@ -404,7 +405,9 @@ export class SessionStore {
     }
     return entries
       .filter((entry) => entry.isFile() && entry.name.endsWith(".json") && !entry.name.startsWith("."))
-      .map((entry) => entry.name.slice(0, -5));
+      // File names are the id's file-name segment: on Windows a namespaced id
+      // is escaped there, so it is decoded back before the record is loaded.
+      .map((entry) => sessionIdFromFileSegment(entry.name.slice(0, -5)));
   }
 
   private rebuildIndex(): SessionIndex {

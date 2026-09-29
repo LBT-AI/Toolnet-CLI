@@ -50,7 +50,8 @@ describe("session titles — a new session is untitled", () => {
     const record = store.create({ workspace: ws() });
     const raw = JSON.parse(fs.readFileSync(path.join(tmpDir, `${record.id}.json`), "utf8"));
     expect(raw.title).toBeUndefined();
-    expect(record.workspace.path).toBe(tmpDir); // display fallback lives here only
+    // Canonical compare: macOS temp dirs are symlinked (/var → /private/var).
+    expect(fs.realpathSync(record.workspace.path)).toBe(fs.realpathSync(tmpDir)); // display fallback lives here only
   });
 });
 

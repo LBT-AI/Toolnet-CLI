@@ -37,19 +37,29 @@ describe("codingAgent Cross-Workspace Filesystem & Workspace Tracking", () => {
   });
 
   test("toolBash tracks shell CWD changes while starting in workspaceRoot", async () => {
-    // Navigate to external dir
-    const res1 = await toolBash(`cd ${extDir}`);
+    // Navigate to external dir. Shell arguments always use `/` separators:
+    // backslashes are escapes in bash (including Git Bash on Windows).
+    const shellPath = (p: string) => p.replace(/\\/g, "/");
+    const res1 = await toolBash(`cd '${shellPath(extDir)}'`);
     expect(res1.success).toBe(true);
     
+    // Compare canonical paths: the shell reports its own notation and macOS
+    // temp dirs are symlinked, so neither side can be compared as raw text.
+    const canonical = (p: string) => {
+      const real = fs.realpathSync(p);
+      return process.platform === "win32" ? real.toLowerCase() : real;
+    };
+
     // Check if shell CWD state is updated in currentCwd
     const { currentCwd: newCwd, workspaceRoot } = getCwdInfo();
-    expect(newCwd).toBe(extDir);
+    expect(canonical(newCwd)).toBe(canonical(extDir));
     expect(workspaceRoot).toBe(testRoot);
 
-    // Shell tool execution starts with cwd = workspaceRoot
-    const res2 = await toolBash(`pwd`);
+    // Shell tool execution starts with cwd = workspaceRoot — proved by where a
+    // relative file lands, not by the shell's rendering of the path.
+    const res2 = await toolBash(`touch cwd-proof.txt`);
     expect(res2.success).toBe(true);
-    expect(res2.stdout?.trim()).toBe(testRoot);
+    expect(fs.existsSync(path.join(testRoot, "cwd-proof.txt"))).toBe(true);
   });
 
   test("Filesystem tools resolve absolute paths bypassing default workspaceRoot", () => {

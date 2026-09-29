@@ -614,9 +614,16 @@ describe("PHASE3 MIGRATION", () => {
       migrateLegacyToolnetState();
       const token = getToolnetHome() + "/auth_token";
       expect(fs.existsSync(token)).toBe(true);
-      const mode = fs.statSync(token).mode & 0o777;
-      expect(mode & 0o077).toBe(0); // no group/other bits
-      expect(fs.statSync(getToolnetHome()).mode & 0o777).toBe(0o700);
+      if (process.platform === "win32") {
+        // Windows has no POSIX mode bits: the hardened-mode guarantee is
+        // unrepresentable there, so the portable part (migrated + present) is
+        // asserted and the mode checks run on POSIX only.
+        expect(fs.existsSync(token)).toBe(true);
+      } else {
+        const mode = fs.statSync(token).mode & 0o777;
+        expect(mode & 0o077).toBe(0); // no group/other bits
+        expect(fs.statSync(getToolnetHome()).mode & 0o777).toBe(0o700);
+      }
     } finally {
       if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
       if (prevConfigDir === undefined) delete process.env.TOOLNETCLI_CONFIG_DIR; else process.env.TOOLNETCLI_CONFIG_DIR = prevConfigDir;
@@ -724,8 +731,8 @@ describe("PHASE3 AUDIT", () => {
         cwd: process.cwd(),
       } as any);
       const logPath = logger.getLogPath();
-      expect(logPath.startsWith(getToolnetHome())).toBe(true);
-      expect(logPath).toContain("/audit/");
+      expect(path.resolve(logPath).startsWith(path.resolve(getToolnetHome()))).toBe(true);
+      expect(logPath.split(path.sep).join("/")).toContain("/audit/");
       expect(fs.existsSync(logPath)).toBe(true);
     });
   });

@@ -15,6 +15,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { AgentEngine } from "../../core/agent/agentEngine";
 import { subagentSessions } from "../../core/agent/agents/sessions";
@@ -122,7 +123,7 @@ describe.serial("background task E2E", () => {
     setSandboxMode("full-access");
     subagentSessions.clear();
     sessionInbox.clear();
-    workspace = fs.mkdtempSync(path.join("/tmp", "toolnet-bg-e2e-"));
+    workspace = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-bg-e2e-"));
   });
 
   afterEach(() => {

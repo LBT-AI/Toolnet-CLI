@@ -43,16 +43,21 @@ function model(providerId: string, apiModelId: string): ModelDefinition {
 }
 
 describe("persistent model cache", () => {
-  it("round-trips providers atomically and writes mode 0600", () => {
+  it("round-trips providers atomically", () => {
     const file = tempFile();
     expect(setCachedProviderModels("alpha", [model("alpha", "a1")], { filePath: file })).toBe(true);
 
     const read = readCatalogCache(file);
     expect(read.ok).toBe(true);
     expect(read.file?.providers.alpha.models).toHaveLength(1);
+  });
 
-    const mode = fs.statSync(file).mode & 0o777;
-    expect(mode).toBe(0o600);
+  // Windows has no POSIX permission bits (chmod only toggles read-only), so
+  // this guarantee is unrepresentable there and is reported as a skip.
+  it.skipIf(process.platform === "win32")("writes mode 0600", () => {
+    const file = tempFile();
+    setCachedProviderModels("alpha", [model("alpha", "a1")], { filePath: file });
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
 
   it("isolates providers so refreshing one never drops another", () => {
