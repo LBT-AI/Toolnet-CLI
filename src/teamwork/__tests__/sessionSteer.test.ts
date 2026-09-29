@@ -366,15 +366,27 @@ describe("AgentHarness — steer promotion at the safe provider-turn boundary", 
 
   test("one session never issues two concurrent provider requests", async () => {
     const sessionId = "steer-e2e-concurrency";
+    // Unique prompt so this test counts ONLY its own session's turns. The mock
+    // owns globalThis.fetch for the whole process, so any other request in
+    // flight — a model/catalog probe, or a task another suite left pending on a
+    // slow runner — would otherwise be miscounted as a concurrent turn here.
+    const marker = "CONCURRENCY_MARKER check workspace root";
     const harness = new AgentHarness({ sessionId, model: "openai/gpt-4o", sandboxMode: "workspace" });
     let inFlight = 0;
     let maxInFlight = 0;
     let call = 0;
+    const overlaps: string[] = [];
 
-    globalThis.fetch = (mock as any)().mockImplementation(async () => {
-      inFlight++;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      call++;
+    globalThis.fetch = (mock as any)().mockImplementation(async (url: string, init: RequestInit) => {
+      const ownTurn = bodyMessages(init).includes(marker);
+      if (ownTurn) {
+        inFlight++;
+        if (inFlight > 1) {
+          overlaps.push(`overlap #${inFlight} on ${String(url)}\n${new Error("overlap").stack ?? ""}`);
+        }
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        call++;
+      }
       await new Promise((r) => setTimeout(r, 5));
       const reply =
         call === 1
@@ -384,12 +396,14 @@ describe("AgentHarness — steer promotion at the safe provider-turn boundary", 
               tool_calls: [{ id: "tc_1", type: "function", function: { name: "get_cwd", arguments: "{}" } }],
             })
           : openAiReply({ role: "assistant", content: "ok" });
-      inFlight--;
+      if (ownTurn) inFlight--;
       return reply;
     });
 
-    await harness.runHeadless("Check workspace root");
-    expect(maxInFlight).toBe(1);
+    await harness.runHeadless(marker);
+    // Both turns must actually be seen, or the counter above proved nothing.
+    expect(call).toBeGreaterThanOrEqual(2);
+    expect(maxInFlight, overlaps.join("\n")).toBe(1);
   });
 
   test("a promoted steer is never promoted twice within a run", async () => {
