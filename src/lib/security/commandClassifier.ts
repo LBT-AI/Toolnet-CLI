@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { RiskLevel } from "./types";
 import {
@@ -26,6 +28,22 @@ const CRITICAL_EXECUTABLES = new Set([
   "systemctl", "service", "iptables", "ufw", "nft", "insmod", "rmmod", "modprobe"
 ]);
 const SENSITIVE_SYSTEM_PREFIXES = ["/etc", "/var", "/usr", "/bin", "/sbin", "/root", "/proc", "/sys", "/dev"];
+
+/**
+ * OS temp locations that userspace policy may write to even outside the
+ * workspace. Matching the literal `/tmp` only works on Linux: macOS puts
+ * TMPDIR under `/var/folders/...` (realpath `/private/var/folders/...`), so
+ * resolve the platform temp dir instead of hardcoding one path.
+ */
+function isOsTempPath(candidate: string): boolean {
+  for (const root of ["/tmp", os.tmpdir()]) {
+    try {
+      const realRoot = fs.realpathSync(root);
+      if (candidate === realRoot || candidate.startsWith(realRoot + path.sep)) return true;
+    } catch {}
+  }
+  return false;
+}
 
 /**
  * Semantic file sinks that are harmless by construction. Writing to them
@@ -231,6 +249,15 @@ export function classifyShellCommand(
   // Real filesystem targets keep full protection (TN-R0-007C stays correct:
   // `2>&1` never appears here because its target is fd "1").
   for (const target of filesystemRedirectTargets(ast)) {
+    // Containment is decided FIRST: a target that resolves inside the active
+    // workspace is legitimate even when the workspace itself sits under a
+    // protected prefix. macOS puts its temp dir under `/var/folders/...`, and
+    // CI checkouts commonly live under `/root` or `/var`; vetoing a redirect
+    // into the workspace's own temp directory would make 'workspace' mode
+    // unusable on those hosts. This mirrors the argument-path rule in step 7.
+    const pathCheck = workspaceRoot ? isPathInsideWorkspace(target, workspaceRoot, cwd) : null;
+    const insideWorkspace = pathCheck?.isInside === true;
+
     // Credential directories are protected independently of the host username
     // (/root, /home/runner, etc.); this must remain portable across CI/users.
     const sensitiveTarget = isSensitiveFile(target);
@@ -246,25 +273,24 @@ export function classifyShellCommand(
       };
     }
 
-    for (const sysPrefix of SENSITIVE_SYSTEM_PREFIXES) {
-      if (target === sysPrefix || target.startsWith(sysPrefix + "/")) {
-        return {
-          riskLevel: "CRITICAL_DENY",
-          isDangerous: true,
-          isCritical: true,
-          category: "SYSTEM_TAMPERING",
-          reason: `Output redirection targets protected system directory '${target}'`,
-          suggestedAction: "Permanently blocked by security policy.",
-          ast,
-        };
+    if (!insideWorkspace) {
+      for (const sysPrefix of SENSITIVE_SYSTEM_PREFIXES) {
+        if (target === sysPrefix || target.startsWith(sysPrefix + "/")) {
+          return {
+            riskLevel: "CRITICAL_DENY",
+            isDangerous: true,
+            isCritical: true,
+            category: "SYSTEM_TAMPERING",
+            reason: `Output redirection targets protected system directory '${target}'`,
+            suggestedAction: "Permanently blocked by security policy.",
+            ast,
+          };
+        }
       }
-    }
 
-    if (workspaceRoot) {
-      const pathCheck = isPathInsideWorkspace(target, workspaceRoot, cwd);
-      if (!pathCheck.isInside) {
+      if (pathCheck && !pathCheck.isInside) {
         const realTarget = pathCheck.resolvedPath || target;
-        if (!realTarget.startsWith("/tmp/") && realTarget !== "/tmp") {
+        if (!isOsTempPath(realTarget)) {
           return {
             riskLevel: "DANGEROUS",
             isDangerous: true,

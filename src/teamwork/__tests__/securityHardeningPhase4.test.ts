@@ -27,6 +27,23 @@ describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
   /** Shell arguments must use `/` separators: backslashes are escapes in bash. */
   const shellPath = (p: string) => p.replace(/\\/g, "/");
 
+  /**
+   * Renders why a tool call did not succeed. A bare `expected true, received
+   * false` hides whether the command was denied by policy, blocked by the OS
+   * sandbox, or simply failed in the shell — which is exactly the detail a
+   * platform-specific failure needs.
+   */
+  const why = (res: { error?: unknown; exitCode?: unknown; stderr?: unknown }) =>
+    JSON.stringify({
+      backend: detectSandboxCapability().backend,
+      sandboxMode: getSandboxMode(),
+      workspaceRoot: tmpDir,
+      cwd: process.cwd(),
+      error: res?.error,
+      exitCode: res?.exitCode,
+      stderr: String(res?.stderr ?? "").slice(0, 300),
+    });
+
   beforeEach(() => {
     fs.mkdirSync(tmpDir, { recursive: true });
     fs.mkdirSync(outsideDir, { recursive: true });
@@ -115,7 +132,7 @@ describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
 
     test("toolBash creates file in workspace", async () => {
       const res = await toolBash(`echo "hello" > ${shellPath(path.join(tmpDir, "test.txt"))}`);
-      expect(res.success).toBe(true);
+      expect(res.success, why(res)).toBe(true);
       expect(fs.existsSync(path.join(tmpDir, "test.txt"))).toBe(true);
     });
 
@@ -125,7 +142,7 @@ describe("Security Hardening Runtime Isolation & Dynamic Execution", () => {
       // Rewrite through the shell without GNU-only flags (`sed -i` has no
       // portable form: BSD/macOS needs `-i ''`, and Windows paths need `/`).
       const res = await toolBash(`printf 'modified' > '${shellPath(testFile)}'`);
-      expect(res.success).toBe(true);
+      expect(res.success, why(res)).toBe(true);
       expect(fs.readFileSync(testFile, "utf8").trim()).toBe("modified");
     });
 

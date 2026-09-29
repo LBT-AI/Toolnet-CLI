@@ -1,4 +1,7 @@
 import { test, expect } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { classifyShellCommand, assessRedirection, filesystemRedirectTargets } from "../commandClassifier";
 import { securityEngine } from "../securityEngine";
 import { parseShellCommand } from "../shellParser";
@@ -84,4 +87,51 @@ test("Control case: a discard sink does not launder a protected write", () => {
 test("Control case: /dev/null as an argument is not an out-of-workspace path", () => {
   const cmd = "cat /dev/null";
   expect(securityEngine.evaluate("shell", { command: cmd }, "workspace", process.cwd(), process.cwd()).decision).toBe("ALLOW");
+});
+
+// ── Platform temp dirs ────────────────────────────────────────────────────
+// `/var` is a protected system prefix, but on macOS the OS temp dir IS
+// `/var/folders/...` (realpath `/private/var/folders/...`). Containment has to
+// win over the prefix veto, otherwise a workspace that lives in the platform
+// temp dir — the normal case for tests and for macOS TMPDIR in general — could
+// never write its own files in 'workspace' mode.
+
+test("a workspace under a protected prefix may still redirect into itself", () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-redirect-ws-"));
+  try {
+    const cmd = `echo hello > ${ws}/nested.txt`;
+    const analysis = classifyShellCommand(cmd, ws, ws);
+    expect(analysis.category).not.toBe("SYSTEM_TAMPERING");
+    expect(analysis.isDangerous).toBe(false);
+
+    const result = securityEngine.evaluate("shell", { command: cmd }, "workspace", ws, ws);
+    expect(result.decision).toBe("ALLOW");
+    expect(result.allowed).toBe(true);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("a redirect into the platform temp dir outside the workspace is not system tampering", () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-redirect-outside-"));
+  const sink = path.join(os.tmpdir(), `toolnet-redirect-sink-${process.pid}.txt`);
+  try {
+    const analysis = classifyShellCommand(`echo hello > ${sink}`, ws, ws);
+    expect(analysis.category).not.toBe("SYSTEM_TAMPERING");
+    expect(analysis.category).not.toBe("WORKSPACE_ESCAPE");
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("an out-of-workspace redirect outside temp dirs stays gated", () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "toolnet-redirect-escape-"));
+  try {
+    const outside = path.join(os.homedir(), "toolnet-outside-write.txt");
+    const analysis = classifyShellCommand(`echo hello > ${outside}`, ws, ws);
+    expect(analysis.isDangerous).toBe(true);
+    expect(["WORKSPACE_ESCAPE", "SYSTEM_TAMPERING", "SENSITIVE_FILE_ACCESS"]).toContain(analysis.category);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
 });
